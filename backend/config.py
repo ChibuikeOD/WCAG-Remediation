@@ -56,7 +56,16 @@ _allow_all = str(getattr(settings, "CORS_ALLOW_ALL", os.getenv("CORS_ALLOW_ALL",
 if _allow_all:
     settings.CORS_ORIGINS = ["*"]
 
-# Ensure directories exist
+# Vercel (and many serverless platforms) mount the code package read-only.
+# Use /tmp for runtime writeable directories.
+_is_serverless = any(
+    os.getenv(k) for k in ("VERCEL", "AWS_LAMBDA_FUNCTION_NAME", "FUNCTIONS_WORKER_RUNTIME")
+)
+if _is_serverless:
+    settings.UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/uploads"))
+    settings.OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/tmp/output"))
+
+# Ensure runtime directories exist (must be writeable).
 settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

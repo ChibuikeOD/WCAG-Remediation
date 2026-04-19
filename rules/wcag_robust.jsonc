@@ -1,0 +1,225 @@
+{
+  // WCAG 2.2 Principle 4: Robust
+  // Content must be robust enough to be interpreted by a wide variety of user agents, including assistive technologies.
+  "principle": "Robust",
+  "principle_number": 4,
+  "rules": [
+    // Guideline 4.1 - Compatible
+    {
+      "id": "4.1.1",
+      "name": "Parsing",
+      "wcag_level": "A",
+      "description": "In content using markup languages, elements have complete start and end tags, are nested correctly, contain no duplicate attributes, and IDs are unique. (Note: Obsolete in WCAG 2.2 for HTML/XML)",
+      "automatable": true,
+      "automation_notes": "Can validate HTML structure and detect duplicate IDs. Note: This criterion is obsolete for HTML as browsers now handle parsing consistently.",
+      "selector_checks": [
+        {
+          "selector": "[id]",
+          "error": "Verify ID is unique on the page",
+          "fix": "Ensure each ID value is used only once per page",
+          "check_type": "duplicate_id"
+        }
+      ],
+      "manual_review_required": false,
+      "manual_review_notes": "HTML validation can catch most parsing issues.",
+      "tags": ["parsing", "html", "validation"],
+      "deprecated": true,
+      "deprecation_note": "Obsolete in WCAG 2.2 - browsers now consistently handle parsing errors"
+    },
+    {
+      "id": "4.1.2",
+      "name": "Name, Role, Value",
+      "wcag_level": "A",
+      "description": "For all UI components, the name and role can be programmatically determined; states and values can be set programmatically; and notification of changes is available to user agents.",
+      "automatable": true,
+      "automation_notes": "Can detect missing ARIA attributes and improper role usage.",
+      "selector_checks": [
+        {
+          "selector": "button:not([aria-label]):not([aria-labelledby]):empty",
+          "error": "Button has no accessible name",
+          "fix": "Add text content, aria-label, or aria-labelledby"
+        },
+        {
+          "selector": "a[href]:not([aria-label]):not([aria-labelledby]):empty",
+          "error": "Link has no accessible name",
+          "fix": "Add text content, aria-label, or aria-labelledby"
+        },
+        {
+          "selector": "[role='button']:not([aria-label]):not([aria-labelledby]):empty",
+          "error": "Custom button has no accessible name",
+          "fix": "Add text content, aria-label, or aria-labelledby"
+        },
+        {
+          "selector": "[role='link']:not([aria-label]):not([aria-labelledby]):empty",
+          "error": "Custom link has no accessible name",
+          "fix": "Add text content, aria-label, or aria-labelledby"
+        },
+        {
+          "selector": "[role='checkbox']:not([aria-checked])",
+          "error": "Checkbox role missing aria-checked state",
+          "fix": "Add aria-checked='true' or 'false' to indicate state"
+        },
+        {
+          "selector": "[role='radio']:not([aria-checked])",
+          "error": "Radio role missing aria-checked state",
+          "fix": "Add aria-checked='true' or 'false' to indicate state"
+        },
+        {
+          "selector": "[role='switch']:not([aria-checked])",
+          "error": "Switch role missing aria-checked state",
+          "fix": "Add aria-checked='true' or 'false' to indicate state"
+        },
+        {
+          "selector": "[role='combobox']:not([aria-expanded])",
+          "error": "Combobox missing aria-expanded state",
+          "fix": "Add aria-expanded='true' or 'false'"
+        },
+        {
+          "selector": "[role='listbox']:not([aria-label]):not([aria-labelledby])",
+          "error": "Listbox missing accessible name",
+          "fix": "Add aria-label or aria-labelledby"
+        },
+        {
+          "selector": "[role='menu']:not([aria-label]):not([aria-labelledby])",
+          "error": "Menu missing accessible name",
+          "fix": "Add aria-label or aria-labelledby"
+        },
+        {
+          "selector": "[role='menubar']:not([aria-label]):not([aria-labelledby])",
+          "error": "Menubar missing accessible name",
+          "fix": "Add aria-label or aria-labelledby"
+        },
+        {
+          "selector": "[role='tablist']:not([aria-label]):not([aria-labelledby])",
+          "error": "Tablist missing accessible name",
+          "fix": "Add aria-label or aria-labelledby"
+        },
+        {
+          "selector": "[role='tab']:not([aria-selected])",
+          "error": "Tab missing aria-selected state",
+          "fix": "Add aria-selected='true' or 'false'"
+        },
+        {
+          "selector": "[role='tabpanel']:not([aria-labelledby]):not([aria-label])",
+          "error": "Tabpanel missing accessible name",
+          "fix": "Add aria-labelledby pointing to associated tab"
+        },
+        {
+          "selector": "[role='slider']:not([aria-valuenow])",
+          "error": "Slider missing aria-valuenow",
+          "fix": "Add aria-valuenow, aria-valuemin, and aria-valuemax"
+        },
+        {
+          "selector": "[role='spinbutton']:not([aria-valuenow])",
+          "error": "Spinbutton missing aria-valuenow",
+          "fix": "Add aria-valuenow, aria-valuemin, and aria-valuemax"
+        },
+        {
+          "selector": "[role='progressbar']:not([aria-valuenow]):not([aria-valuetext])",
+          "error": "Progressbar missing value information",
+          "fix": "Add aria-valuenow or aria-valuetext"
+        },
+        {
+          "selector": "[role='tree']:not([aria-label]):not([aria-labelledby])",
+          "error": "Tree missing accessible name",
+          "fix": "Add aria-label or aria-labelledby"
+        },
+        {
+          "selector": "[role='treeitem']:not([aria-selected])",
+          "error": "Treeitem should have aria-selected state",
+          "fix": "Add aria-selected for selectable tree items",
+          "severity": "warning"
+        },
+        {
+          "selector": "[aria-haspopup]:not([aria-expanded])",
+          "error": "Element with popup missing expanded state",
+          "fix": "Add aria-expanded='true' or 'false'"
+        },
+        {
+          "selector": "[role='dialog']:not([aria-label]):not([aria-labelledby])",
+          "error": "Dialog missing accessible name",
+          "fix": "Add aria-label or aria-labelledby pointing to dialog title"
+        },
+        {
+          "selector": "[role='alertdialog']:not([aria-label]):not([aria-labelledby])",
+          "error": "Alert dialog missing accessible name",
+          "fix": "Add aria-label or aria-labelledby"
+        },
+        {
+          "selector": "iframe:not([title]):not([aria-label]):not([aria-labelledby])",
+          "error": "iframe missing accessible name",
+          "fix": "Add title attribute describing the iframe content"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test with screen reader to verify names, roles, and states are announced correctly.",
+      "tags": ["aria", "roles", "states", "accessibility-api"]
+    },
+    {
+      "id": "4.1.3",
+      "name": "Status Messages",
+      "wcag_level": "AA",
+      "description": "Status messages can be programmatically determined through role or properties so they can be presented to the user without receiving focus.",
+      "automatable": true,
+      "automation_notes": "Can detect live regions and appropriate ARIA roles for status messages.",
+      "selector_checks": [
+        {
+          "selector": "[class*='toast']:not([role='status']):not([role='alert']):not([aria-live])",
+          "error": "Toast notification may not be announced to screen readers",
+          "fix": "Add role='status' or aria-live='polite' for non-critical, role='alert' for critical"
+        },
+        {
+          "selector": "[class*='notification']:not([role='status']):not([role='alert']):not([aria-live])",
+          "error": "Notification may not be announced to screen readers",
+          "fix": "Add appropriate role or aria-live attribute"
+        },
+        {
+          "selector": "[class*='error-message']:not([role='alert']):not([aria-live])",
+          "error": "Error message may not be announced to screen readers",
+          "fix": "Add role='alert' for important error messages"
+        },
+        {
+          "selector": "[class*='success-message']:not([role='status']):not([aria-live])",
+          "error": "Success message may not be announced to screen readers",
+          "fix": "Add role='status' or aria-live='polite'"
+        },
+        {
+          "selector": "[class*='loading']:not([role='status']):not([aria-live]):not([aria-busy])",
+          "error": "Loading indicator may not be announced",
+          "fix": "Add role='status' with aria-live='polite' or use aria-busy"
+        },
+        {
+          "selector": "[class*='progress']:not([role='progressbar']):not([role='status']):not([aria-live])",
+          "error": "Progress indicator may not be announced",
+          "fix": "Add role='progressbar' with proper value attributes or role='status'"
+        },
+        {
+          "selector": "[class*='alert']:not([role='alert']):not([role='alertdialog'])",
+          "error": "Alert may not be announced to screen readers",
+          "fix": "Add role='alert' for important messages that need immediate attention",
+          "severity": "warning"
+        },
+        {
+          "selector": "[class*='counter']:not([aria-live]):not([role='status'])",
+          "error": "Counter/badge may not announce updates",
+          "fix": "Add aria-live='polite' for non-critical updates",
+          "severity": "warning"
+        },
+        {
+          "selector": "[role='log']:not([aria-live])",
+          "error": "Log role should have aria-live for dynamic updates",
+          "fix": "Add aria-live='polite' to log regions"
+        },
+        {
+          "selector": "[role='timer']:not([aria-live])",
+          "error": "Timer should announce updates appropriately",
+          "fix": "Add aria-live='off' or 'polite' depending on importance",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test dynamic content updates with screen reader to verify announcements.",
+      "tags": ["aria", "live-regions", "status", "notifications"]
+    }
+  ]
+}

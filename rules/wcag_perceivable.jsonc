@@ -1,0 +1,733 @@
+{
+  // WCAG 2.2 Principle 1: Perceivable
+  // Information and user interface components must be presentable to users in ways they can perceive.
+  "principle": "Perceivable",
+  "principle_number": 1,
+  "rules": [
+    // Guideline 1.1 - Text Alternatives
+    {
+      "id": "1.1.1",
+      "name": "Non-text Content",
+      "wcag_level": "A",
+      "description": "All non-text content that is presented to the user has a text alternative that serves the equivalent purpose.",
+      "automatable": true,
+      "automation_notes": "Can detect missing alt attributes on images, empty alt on decorative images, missing labels on form controls. Cannot fully assess alt text quality.",
+      "selector_checks": [
+        {
+          "selector": "img:not([alt])",
+          "error": "Image is missing alt attribute",
+          "fix": "Add alt attribute describing the image content, or alt=\"\" for decorative images"
+        },
+        {
+          "selector": "img[alt='']",
+          "error": "Image has empty alt attribute - verify it is decorative",
+          "fix": "If image conveys meaning, add descriptive alt text. Empty alt is correct for decorative images.",
+          "severity": "warning"
+        },
+        {
+          "selector": "input[type='image']:not([alt])",
+          "error": "Image input is missing alt attribute",
+          "fix": "Add alt attribute describing the button action"
+        },
+        {
+          "selector": "area:not([alt])",
+          "error": "Image map area is missing alt attribute",
+          "fix": "Add alt attribute describing the linked content or action"
+        },
+        {
+          "selector": "svg:not([aria-label]):not([aria-labelledby]):not([role='presentation']):not([role='none'])",
+          "error": "SVG may be missing accessible name",
+          "fix": "Add aria-label, aria-labelledby, or role='presentation' for decorative SVGs",
+          "severity": "warning"
+        },
+        {
+          "selector": "canvas:not([aria-label]):not([aria-labelledby])",
+          "error": "Canvas element is missing accessible name",
+          "fix": "Add aria-label or aria-labelledby to describe canvas content"
+        },
+        {
+          "selector": "object:not([aria-label]):not([aria-labelledby]):not([title])",
+          "error": "Object element may be missing accessible name",
+          "fix": "Add aria-label, aria-labelledby, or title attribute",
+          "severity": "warning"
+        },
+        {
+          "selector": "embed:not([aria-label]):not([aria-labelledby]):not([title])",
+          "error": "Embed element may be missing accessible name",
+          "fix": "Add aria-label, aria-labelledby, or title attribute",
+          "severity": "warning"
+        },
+        {
+          "selector": "audio:not([aria-label]):not([aria-labelledby]):not([title])",
+          "error": "Audio element may be missing accessible name",
+          "fix": "Add aria-label or aria-labelledby describing the audio content",
+          "severity": "warning"
+        },
+        {
+          "selector": "video:not([aria-label]):not([aria-labelledby]):not([title])",
+          "error": "Video element may be missing accessible name",
+          "fix": "Add aria-label or aria-labelledby describing the video content",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify alt text accurately describes image content and purpose. Check that complex images have extended descriptions.",
+      "tags": ["images", "text-alternatives", "forms", "multimedia"]
+    },
+
+    // Guideline 1.2 - Time-based Media
+    {
+      "id": "1.2.1",
+      "name": "Audio-only and Video-only (Prerecorded)",
+      "wcag_level": "A",
+      "description": "For prerecorded audio-only and video-only media, alternatives are provided.",
+      "automatable": false,
+      "automation_notes": "Can detect presence of audio/video elements but cannot verify transcript or description availability.",
+      "selector_checks": [
+        {
+          "selector": "audio[src], audio source",
+          "error": "Audio content detected - verify transcript is available",
+          "fix": "Provide a text transcript of the audio content",
+          "severity": "warning"
+        },
+        {
+          "selector": "video:not([controls]) source",
+          "error": "Video without controls detected - may be background video or needs review",
+          "fix": "If video conveys information, provide audio description or text alternative",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify that transcripts are provided for audio content and text/audio descriptions for video content.",
+      "tags": ["multimedia", "audio", "video", "transcripts"]
+    },
+    {
+      "id": "1.2.2",
+      "name": "Captions (Prerecorded)",
+      "wcag_level": "A",
+      "description": "Captions are provided for all prerecorded audio content in synchronized media.",
+      "automatable": true,
+      "automation_notes": "Can detect presence of track elements with kind='captions'. Cannot verify caption quality or synchronization.",
+      "selector_checks": [
+        {
+          "selector": "video:not(:has(track[kind='captions'])):not(:has(track[kind='subtitles']))",
+          "error": "Video may be missing captions",
+          "fix": "Add <track kind='captions'> element with synchronized caption file",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify captions are accurate, synchronized, and include all spoken content and relevant sound effects.",
+      "tags": ["multimedia", "video", "captions"]
+    },
+    {
+      "id": "1.2.3",
+      "name": "Audio Description or Media Alternative (Prerecorded)",
+      "wcag_level": "A",
+      "description": "An alternative for time-based media or audio description is provided for prerecorded video content.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect audio descriptions or media alternatives.",
+      "selector_checks": [
+        {
+          "selector": "video",
+          "error": "Video detected - verify audio description or transcript is available",
+          "fix": "Provide audio description track or full text transcript including visual information",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify that video content has audio description or a complete media alternative.",
+      "tags": ["multimedia", "video", "audio-description"]
+    },
+    {
+      "id": "1.2.4",
+      "name": "Captions (Live)",
+      "wcag_level": "AA",
+      "description": "Captions are provided for all live audio content in synchronized media.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect live content or live captioning services.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "For live audio/video content, verify real-time captions are provided.",
+      "tags": ["multimedia", "live", "captions"]
+    },
+    {
+      "id": "1.2.5",
+      "name": "Audio Description (Prerecorded)",
+      "wcag_level": "AA",
+      "description": "Audio description is provided for all prerecorded video content.",
+      "automatable": true,
+      "automation_notes": "Can detect presence of track elements with kind='descriptions'.",
+      "selector_checks": [
+        {
+          "selector": "video:not(:has(track[kind='descriptions']))",
+          "error": "Video may be missing audio description track",
+          "fix": "Add <track kind='descriptions'> element with audio description file",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify audio descriptions adequately describe important visual content.",
+      "tags": ["multimedia", "video", "audio-description"]
+    },
+    {
+      "id": "1.2.6",
+      "name": "Sign Language (Prerecorded)",
+      "wcag_level": "AAA",
+      "description": "Sign language interpretation is provided for all prerecorded audio content.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect sign language interpretation.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify sign language interpretation is available for deaf users who prefer sign language.",
+      "tags": ["multimedia", "sign-language"]
+    },
+    {
+      "id": "1.2.7",
+      "name": "Extended Audio Description (Prerecorded)",
+      "wcag_level": "AAA",
+      "description": "Extended audio description is provided where pauses are insufficient for standard audio description.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically assess need for extended audio description.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Review videos with complex visual content to determine if extended audio description is needed.",
+      "tags": ["multimedia", "audio-description"]
+    },
+    {
+      "id": "1.2.8",
+      "name": "Media Alternative (Prerecorded)",
+      "wcag_level": "AAA",
+      "description": "A full text alternative is provided for all prerecorded synchronized media.",
+      "automatable": false,
+      "automation_notes": "Cannot verify presence or quality of full media alternatives.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify that a complete text alternative including all visual and audio information is available.",
+      "tags": ["multimedia", "text-alternatives"]
+    },
+    {
+      "id": "1.2.9",
+      "name": "Audio-only (Live)",
+      "wcag_level": "AAA",
+      "description": "A text alternative is provided for live audio-only content.",
+      "automatable": false,
+      "automation_notes": "Cannot detect live audio content or real-time transcription.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify live audio content has real-time text alternatives.",
+      "tags": ["multimedia", "live", "transcripts"]
+    },
+
+    // Guideline 1.3 - Adaptable
+    {
+      "id": "1.3.1",
+      "name": "Info and Relationships",
+      "wcag_level": "A",
+      "description": "Information, structure, and relationships conveyed through presentation can be programmatically determined.",
+      "automatable": true,
+      "automation_notes": "Can detect many structural issues including missing table headers, improper heading hierarchy, missing form labels.",
+      "selector_checks": [
+        {
+          "selector": "table:not(:has(th)):not(:has([role='columnheader'])):not(:has([role='rowheader']))",
+          "error": "Data table may be missing header cells",
+          "fix": "Use <th> elements for table headers with appropriate scope attributes"
+        },
+        {
+          "selector": "table:not(:has(caption)):not([aria-label]):not([aria-labelledby])",
+          "error": "Table may be missing accessible name",
+          "fix": "Add <caption> element or aria-label/aria-labelledby to describe the table",
+          "severity": "warning"
+        },
+        {
+          "selector": "input:not([type='hidden']):not([type='submit']):not([type='reset']):not([type='button']):not([type='image']):not([aria-label]):not([aria-labelledby]):not([id])",
+          "error": "Form input may be missing associated label",
+          "fix": "Add <label for='inputId'> or aria-label/aria-labelledby"
+        },
+        {
+          "selector": "select:not([aria-label]):not([aria-labelledby]):not([id])",
+          "error": "Select element may be missing associated label",
+          "fix": "Add <label for='selectId'> or aria-label/aria-labelledby"
+        },
+        {
+          "selector": "textarea:not([aria-label]):not([aria-labelledby]):not([id])",
+          "error": "Textarea may be missing associated label",
+          "fix": "Add <label for='textareaId'> or aria-label/aria-labelledby"
+        },
+        {
+          "selector": "fieldset:not(:has(legend))",
+          "error": "Fieldset is missing legend element",
+          "fix": "Add <legend> element to describe the group of form controls"
+        },
+        {
+          "selector": "[role='group']:not([aria-label]):not([aria-labelledby])",
+          "error": "Group role is missing accessible name",
+          "fix": "Add aria-label or aria-labelledby to the group"
+        },
+        {
+          "selector": "dl:not(:has(dt)), dl:not(:has(dd))",
+          "error": "Definition list may be malformed",
+          "fix": "Ensure definition list has both <dt> and <dd> elements",
+          "severity": "warning"
+        },
+        {
+          "selector": "ul:not(:has(li)), ol:not(:has(li))",
+          "error": "List element has no list items",
+          "fix": "Add <li> elements or use appropriate non-list markup"
+        },
+        {
+          "selector": "li:not(ul li):not(ol li):not(menu li)",
+          "error": "List item is not inside a list element",
+          "fix": "Wrap <li> elements in <ul>, <ol>, or <menu>"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify visual relationships are properly conveyed in markup. Check heading hierarchy and landmark regions.",
+      "tags": ["structure", "semantics", "tables", "forms", "headings"]
+    },
+    {
+      "id": "1.3.2",
+      "name": "Meaningful Sequence",
+      "wcag_level": "A",
+      "description": "When the sequence affects meaning, the correct reading sequence can be programmatically determined.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically determine if visual order matches DOM order or if sequence affects meaning.",
+      "selector_checks": [
+        {
+          "selector": "[style*='position: absolute'], [style*='position: fixed']",
+          "error": "Positioned content detected - verify reading order matches visual order",
+          "fix": "Ensure DOM order reflects the intended reading sequence",
+          "severity": "warning"
+        },
+        {
+          "selector": "[style*='flex'][style*='order'], [style*='grid'][style*='order']",
+          "error": "CSS order property used - verify DOM order matches visual order",
+          "fix": "Restructure DOM to match visual presentation or verify order is not meaningful",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify that reading order in the DOM matches the visual presentation order when linearized.",
+      "tags": ["structure", "reading-order", "layout"]
+    },
+    {
+      "id": "1.3.3",
+      "name": "Sensory Characteristics",
+      "wcag_level": "A",
+      "description": "Instructions do not rely solely on sensory characteristics such as shape, color, size, location, or sound.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect instructions that rely solely on sensory characteristics.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Review instructions and ensure they don't rely solely on shape, color, size, visual location, or sound.",
+      "tags": ["sensory", "instructions", "color"]
+    },
+    {
+      "id": "1.3.4",
+      "name": "Orientation",
+      "wcag_level": "AA",
+      "description": "Content does not restrict its view and operation to a single display orientation unless essential.",
+      "automatable": true,
+      "automation_notes": "Can detect CSS that locks orientation, but cannot determine if restriction is essential.",
+      "selector_checks": [
+        {
+          "selector": "[style*='orientation']",
+          "error": "Element may have orientation restrictions",
+          "fix": "Remove orientation locks unless absolutely essential to the content",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test content in both portrait and landscape orientations. Verify any restrictions are essential.",
+      "tags": ["orientation", "mobile", "responsive"]
+    },
+    {
+      "id": "1.3.5",
+      "name": "Identify Input Purpose",
+      "wcag_level": "AA",
+      "description": "The purpose of input fields collecting user information can be programmatically determined.",
+      "automatable": true,
+      "automation_notes": "Can detect missing autocomplete attributes on common personal information fields.",
+      "selector_checks": [
+        {
+          "selector": "input[type='text'][name*='name']:not([autocomplete]), input[type='text'][id*='name']:not([autocomplete])",
+          "error": "Name input field may be missing autocomplete attribute",
+          "fix": "Add autocomplete='name' or more specific value like 'given-name', 'family-name'"
+        },
+        {
+          "selector": "input[type='email']:not([autocomplete])",
+          "error": "Email input field is missing autocomplete attribute",
+          "fix": "Add autocomplete='email'"
+        },
+        {
+          "selector": "input[type='tel']:not([autocomplete])",
+          "error": "Phone input field is missing autocomplete attribute",
+          "fix": "Add autocomplete='tel'"
+        },
+        {
+          "selector": "input[type='text'][name*='address']:not([autocomplete]), input[type='text'][id*='address']:not([autocomplete])",
+          "error": "Address input field may be missing autocomplete attribute",
+          "fix": "Add appropriate autocomplete value like 'street-address', 'address-line1'"
+        },
+        {
+          "selector": "input[type='text'][name*='city']:not([autocomplete])",
+          "error": "City input field may be missing autocomplete attribute",
+          "fix": "Add autocomplete='address-level2'"
+        },
+        {
+          "selector": "input[type='text'][name*='zip']:not([autocomplete]), input[type='text'][name*='postal']:not([autocomplete])",
+          "error": "Postal code input field may be missing autocomplete attribute",
+          "fix": "Add autocomplete='postal-code'"
+        },
+        {
+          "selector": "input[type='text'][name*='country']:not([autocomplete])",
+          "error": "Country input field may be missing autocomplete attribute",
+          "fix": "Add autocomplete='country' or 'country-name'"
+        },
+        {
+          "selector": "input[type='password']:not([autocomplete])",
+          "error": "Password input field may be missing autocomplete attribute",
+          "fix": "Add autocomplete='current-password' or 'new-password'"
+        },
+        {
+          "selector": "input[name*='cc-']:not([autocomplete]), input[id*='credit']:not([autocomplete])",
+          "error": "Credit card field may be missing autocomplete attribute",
+          "fix": "Add appropriate autocomplete value like 'cc-number', 'cc-exp', 'cc-csc'"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all personal information inputs have appropriate autocomplete values per HTML specification.",
+      "tags": ["forms", "autocomplete", "input-purpose"]
+    },
+    {
+      "id": "1.3.6",
+      "name": "Identify Purpose",
+      "wcag_level": "AAA",
+      "description": "The purpose of UI components, icons, and regions can be programmatically determined.",
+      "automatable": true,
+      "automation_notes": "Can detect missing landmark roles and ARIA labels on common UI patterns.",
+      "selector_checks": [
+        {
+          "selector": "header:not([role='banner']):not(article header):not(section header)",
+          "error": "Main header should have banner role for assistive technology",
+          "fix": "The header element already implies role='banner' when not nested; verify it's the main header",
+          "severity": "info"
+        },
+        {
+          "selector": "nav:not([aria-label]):not([aria-labelledby])",
+          "error": "Navigation without label - distinguish multiple nav elements",
+          "fix": "Add aria-label to distinguish navigation regions",
+          "severity": "warning"
+        },
+        {
+          "selector": "main:not(:only-of-type)",
+          "error": "Multiple main elements detected",
+          "fix": "Ensure only one main element per page"
+        },
+        {
+          "selector": "footer:not([role='contentinfo']):not(article footer):not(section footer)",
+          "error": "Main footer should convey contentinfo role",
+          "fix": "The footer element already implies role='contentinfo' when not nested",
+          "severity": "info"
+        },
+        {
+          "selector": "aside:not([aria-label]):not([aria-labelledby])",
+          "error": "Aside without label - consider adding descriptive label",
+          "fix": "Add aria-label to describe the complementary content",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify icons have accessible names and UI regions are properly identified.",
+      "tags": ["semantics", "landmarks", "icons", "regions"]
+    },
+
+    // Guideline 1.4 - Distinguishable
+    {
+      "id": "1.4.1",
+      "name": "Use of Color",
+      "wcag_level": "A",
+      "description": "Color is not used as the only visual means of conveying information.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically determine if color is the only means of conveying information.",
+      "selector_checks": [
+        {
+          "selector": "a:not([class*='underline']):not([style*='underline'])",
+          "error": "Link may only be distinguished by color",
+          "fix": "Add underline or other non-color indicator for links",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all information conveyed by color is also available through text, patterns, or other means.",
+      "tags": ["color", "visual-design"]
+    },
+    {
+      "id": "1.4.2",
+      "name": "Audio Control",
+      "wcag_level": "A",
+      "description": "Mechanism to pause, stop, or control volume of audio that plays automatically for more than 3 seconds.",
+      "automatable": true,
+      "automation_notes": "Can detect autoplay attributes but cannot measure audio duration.",
+      "selector_checks": [
+        {
+          "selector": "audio[autoplay]:not([controls])",
+          "error": "Audio autoplays without visible controls",
+          "fix": "Add controls attribute or provide mechanism to pause/stop audio"
+        },
+        {
+          "selector": "video[autoplay]:not([muted]):not([controls])",
+          "error": "Video with audio autoplays without controls",
+          "fix": "Add controls attribute, mute audio, or provide pause mechanism"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test for any audio that plays automatically and verify pause/stop controls are available.",
+      "tags": ["audio", "autoplay", "controls"]
+    },
+    {
+      "id": "1.4.3",
+      "name": "Contrast (Minimum)",
+      "wcag_level": "AA",
+      "description": "Text has contrast ratio of at least 4.5:1 (3:1 for large text).",
+      "automatable": true,
+      "automation_notes": "Can compute contrast ratios using computed styles. Large text is 18pt+ or 14pt+ bold.",
+      "selector_checks": [
+        {
+          "selector": "*",
+          "error": "Text contrast ratio is below 4.5:1 (or 3:1 for large text)",
+          "fix": "Increase contrast between text and background colors",
+          "check_type": "contrast",
+          "min_ratio": 4.5,
+          "large_text_ratio": 3.0
+        }
+      ],
+      "manual_review_required": false,
+      "manual_review_notes": "Automated tools can reliably check contrast for most text content.",
+      "tags": ["color", "contrast", "visual-design"]
+    },
+    {
+      "id": "1.4.4",
+      "name": "Resize Text",
+      "wcag_level": "AA",
+      "description": "Text can be resized up to 200% without loss of content or functionality.",
+      "automatable": true,
+      "automation_notes": "Can detect fixed font sizes but cannot fully verify layout at 200% zoom.",
+      "selector_checks": [
+        {
+          "selector": "[style*='font-size'][style*='px']",
+          "error": "Fixed pixel font size may prevent proper text resizing",
+          "fix": "Use relative units (rem, em, %) for font sizes",
+          "severity": "warning"
+        },
+        {
+          "selector": "meta[name='viewport'][content*='maximum-scale']",
+          "error": "Viewport may restrict user scaling",
+          "fix": "Remove maximum-scale or set to at least 2.0"
+        },
+        {
+          "selector": "meta[name='viewport'][content*='user-scalable=no'], meta[name='viewport'][content*='user-scalable=0']",
+          "error": "Viewport disables user scaling",
+          "fix": "Remove user-scalable=no to allow text resizing"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test at 200% browser zoom to verify all content remains visible and functional.",
+      "tags": ["text", "zoom", "responsive"]
+    },
+    {
+      "id": "1.4.5",
+      "name": "Images of Text",
+      "wcag_level": "AA",
+      "description": "Text is used to convey information rather than images of text.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect images containing text. ML-based OCR could assist.",
+      "selector_checks": [
+        {
+          "selector": "img[src*='logo']",
+          "error": "Logo image - verify it doesn't contain essential text beyond brand name",
+          "fix": "Use CSS text styling instead of images of text where possible",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Identify images containing text and verify text presentation is not achievable with CSS.",
+      "tags": ["images", "text"]
+    },
+    {
+      "id": "1.4.6",
+      "name": "Contrast (Enhanced)",
+      "wcag_level": "AAA",
+      "description": "Text has contrast ratio of at least 7:1 (4.5:1 for large text).",
+      "automatable": true,
+      "automation_notes": "Can compute enhanced contrast ratios using computed styles.",
+      "selector_checks": [
+        {
+          "selector": "*",
+          "error": "Text contrast ratio is below 7:1 (or 4.5:1 for large text)",
+          "fix": "Increase contrast between text and background colors for enhanced accessibility",
+          "check_type": "contrast",
+          "min_ratio": 7.0,
+          "large_text_ratio": 4.5
+        }
+      ],
+      "manual_review_required": false,
+      "tags": ["color", "contrast", "visual-design"]
+    },
+    {
+      "id": "1.4.7",
+      "name": "Low or No Background Audio",
+      "wcag_level": "AAA",
+      "description": "Background sounds in audio can be turned off or are at least 20dB lower than foreground speech.",
+      "automatable": false,
+      "automation_notes": "Cannot analyze audio levels automatically.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Test audio content for background sound levels relative to speech.",
+      "tags": ["audio", "speech"]
+    },
+    {
+      "id": "1.4.8",
+      "name": "Visual Presentation",
+      "wcag_level": "AAA",
+      "description": "Text blocks allow color, width, line spacing, and alignment customization.",
+      "automatable": true,
+      "automation_notes": "Can detect some text presentation issues but cannot fully verify customization options.",
+      "selector_checks": [
+        {
+          "selector": "[style*='width'][style*='px']:not(img):not(video):not(canvas)",
+          "error": "Fixed width may prevent text reflow",
+          "fix": "Use max-width with relative units to allow text reflow",
+          "severity": "warning"
+        },
+        {
+          "selector": "[style*='text-align: justify']",
+          "error": "Justified text can create uneven spacing issues",
+          "fix": "Avoid text-align: justify for better readability",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify users can customize text presentation (colors, spacing, width, alignment).",
+      "tags": ["text", "customization", "visual-design"]
+    },
+    {
+      "id": "1.4.9",
+      "name": "Images of Text (No Exception)",
+      "wcag_level": "AAA",
+      "description": "Images of text are only used for pure decoration or where essential.",
+      "automatable": false,
+      "automation_notes": "Requires visual inspection or ML-based text detection in images.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Identify all images containing text and verify they are decorative or essential.",
+      "tags": ["images", "text"]
+    },
+    {
+      "id": "1.4.10",
+      "name": "Reflow",
+      "wcag_level": "AA",
+      "description": "Content reflows without horizontal scrolling at 320px width (400% zoom equivalent).",
+      "automatable": true,
+      "automation_notes": "Can test at narrow widths but cannot fully assess content loss or functionality.",
+      "selector_checks": [
+        {
+          "selector": "meta[name='viewport']:not([content*='width=device-width'])",
+          "error": "Viewport may not support proper reflow",
+          "fix": "Use width=device-width in viewport meta tag"
+        },
+        {
+          "selector": "[style*='overflow-x: scroll'], [style*='overflow-x:scroll']",
+          "error": "Horizontal scroll forced - may violate reflow requirement",
+          "fix": "Allow content to reflow naturally; reserve horizontal scroll for specific content types",
+          "severity": "warning"
+        },
+        {
+          "selector": "table:not([role='presentation'])",
+          "error": "Data tables may require horizontal scrolling at narrow widths",
+          "fix": "Consider responsive table patterns for narrow viewports",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test at 320px viewport width to verify content reflows without horizontal scrolling.",
+      "tags": ["responsive", "reflow", "zoom"]
+    },
+    {
+      "id": "1.4.11",
+      "name": "Non-text Contrast",
+      "wcag_level": "AA",
+      "description": "UI components and graphical objects have contrast ratio of at least 3:1.",
+      "automatable": true,
+      "automation_notes": "Can compute contrast for borders, icons, and UI elements against backgrounds.",
+      "selector_checks": [
+        {
+          "selector": "input, select, textarea, button",
+          "error": "Form control may have insufficient border/focus contrast",
+          "fix": "Ensure form control boundaries have at least 3:1 contrast",
+          "check_type": "non_text_contrast",
+          "min_ratio": 3.0
+        },
+        {
+          "selector": "svg, [class*='icon'], [class*='Icon']",
+          "error": "Icon may have insufficient contrast",
+          "fix": "Ensure icons have at least 3:1 contrast against background",
+          "check_type": "non_text_contrast",
+          "min_ratio": 3.0,
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all meaningful graphical elements have sufficient contrast.",
+      "tags": ["color", "contrast", "ui-components", "graphics"]
+    },
+    {
+      "id": "1.4.12",
+      "name": "Text Spacing",
+      "wcag_level": "AA",
+      "description": "Content adapts to user-set text spacing without loss of functionality.",
+      "automatable": true,
+      "automation_notes": "Can test with modified spacing but cannot fully verify no content is clipped.",
+      "selector_checks": [
+        {
+          "selector": "[style*='line-height'][style*='!important']",
+          "error": "Line height with !important may prevent user customization",
+          "fix": "Remove !important from line-height declarations"
+        },
+        {
+          "selector": "[style*='letter-spacing'][style*='!important']",
+          "error": "Letter spacing with !important may prevent user customization",
+          "fix": "Remove !important from letter-spacing declarations"
+        },
+        {
+          "selector": "[style*='overflow: hidden'][style*='height']",
+          "error": "Fixed height with overflow hidden may clip text when spacing is increased",
+          "fix": "Use min-height instead of height, or allow overflow",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test with increased line height (1.5x), paragraph spacing (2x), letter spacing (0.12em), and word spacing (0.16em).",
+      "tags": ["text", "spacing", "customization"]
+    },
+    {
+      "id": "1.4.13",
+      "name": "Content on Hover or Focus",
+      "wcag_level": "AA",
+      "description": "Hover/focus triggered content is dismissible, hoverable, and persistent.",
+      "automatable": false,
+      "automation_notes": "Can detect hover/focus pseudo-classes but cannot verify dismissibility or persistence behavior.",
+      "selector_checks": [
+        {
+          "selector": "[title]",
+          "error": "Title attribute may not meet hover content requirements",
+          "fix": "Consider custom tooltip implementation that is dismissible and hoverable",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test all hover/focus triggered content for dismissibility (Escape), hoverability, and persistence.",
+      "tags": ["hover", "focus", "tooltips", "interactive"]
+    }
+  ]
+}

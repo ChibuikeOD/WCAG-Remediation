@@ -1,0 +1,72 @@
+{
+  "file name": "fixture.pdf",
+  "number of pages": 2,
+  "kids": [
+    {
+      "type": "heading",
+      "id": 1,
+      "page number": 1,
+      "bounding box": [20, 320, 180, 380],
+      "heading level": 3,
+      "content": "Quarterly Results"
+    },
+    {
+      "type": "paragraph",
+      "id": 2,
+      "page number": 1,
+      "bounding box": [20, 100, 180, 140],
+      "content": "Revenue increased year over year."
+    },
+    {
+      "type": "list",
+      "id": 3,
+      "page number": 1,
+      "bounding box": [20, 40, 180, 90],
+      "list items": [
+        { "content": "North America" },
+        { "content": "Europe" }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 4,
+      "page number": 2,
+      "bounding box": [30, 250, 270, 500],
+      "rows": [
+        {
+          "cells": [
+            { "content": "Region" },
+            { "content": "Revenue" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "image",
+      "id": 5,
+      "page number": 2,
+      "bounding box": [30, 120, 120, 220]
+    },
+    {
+      "type": "caption",
+      "id": 6,
+      "page number": 2,
+      "bounding box": [130, 120, 270, 160],
+      "content": "Figure 1. Revenue by region."
+    },
+    {
+      "type": "header",
+      "id": 7,
+      "page number": 2,
+      "bounding box": [30, 540, 270, 585],
+      "content": "Quarterly Results"
+    },
+    {
+      "type": "footer",
+      "id": 8,
+      "page number": 2,
+      "bounding box": [120, 10, 180, 35],
+      "content": "2"
+    }
+  ]
+}

@@ -1,0 +1,433 @@
+{
+  // WCAG 2.2 Principle 3: Understandable
+  // Information and the operation of user interface must be understandable.
+  "principle": "Understandable",
+  "principle_number": 3,
+  "rules": [
+    // Guideline 3.1 - Readable
+    {
+      "id": "3.1.1",
+      "name": "Language of Page",
+      "wcag_level": "A",
+      "description": "The default human language of each page can be programmatically determined.",
+      "automatable": true,
+      "automation_notes": "Can detect presence of lang attribute on html element.",
+      "selector_checks": [
+        {
+          "selector": "html:not([lang])",
+          "error": "Page is missing lang attribute",
+          "fix": "Add lang attribute to <html> element (e.g., lang='en')"
+        },
+        {
+          "selector": "html[lang='']",
+          "error": "Page has empty lang attribute",
+          "fix": "Set valid language code (e.g., lang='en', lang='es', lang='fr')"
+        }
+      ],
+      "manual_review_required": false,
+      "tags": ["language", "internationalization"]
+    },
+    {
+      "id": "3.1.2",
+      "name": "Language of Parts",
+      "wcag_level": "AA",
+      "description": "Language of passages or phrases can be programmatically determined.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect language changes in content.",
+      "selector_checks": [
+        {
+          "selector": "[lang]",
+          "error": "Language change detected - verify correct language code",
+          "fix": "Ensure lang attribute accurately reflects content language",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Identify content in different languages and verify appropriate lang attributes.",
+      "tags": ["language", "internationalization"]
+    },
+    {
+      "id": "3.1.3",
+      "name": "Unusual Words",
+      "wcag_level": "AAA",
+      "description": "Mechanism for identifying definitions of unusual words or phrases.",
+      "automatable": false,
+      "automation_notes": "Cannot detect unusual words or jargon automatically.",
+      "selector_checks": [
+        {
+          "selector": "dfn, abbr, [role='definition']",
+          "error": "Definition element detected - verify it's properly linked",
+          "fix": "Ensure definitions are accessible and linked to terms",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Review for jargon, idioms, and technical terms that need definitions.",
+      "tags": ["language", "definitions", "glossary"]
+    },
+    {
+      "id": "3.1.4",
+      "name": "Abbreviations",
+      "wcag_level": "AAA",
+      "description": "Mechanism for identifying the expanded form of abbreviations.",
+      "automatable": true,
+      "automation_notes": "Can detect abbr elements and title attributes.",
+      "selector_checks": [
+        {
+          "selector": "abbr:not([title])",
+          "error": "Abbreviation is missing title with expansion",
+          "fix": "Add title attribute with full expansion of abbreviation"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all abbreviations and acronyms have expansions provided.",
+      "tags": ["abbreviations", "definitions"]
+    },
+    {
+      "id": "3.1.5",
+      "name": "Reading Level",
+      "wcag_level": "AAA",
+      "description": "Supplemental content or version for lower secondary education reading level.",
+      "automatable": false,
+      "automation_notes": "Reading level analysis requires NLP/text complexity tools.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Analyze text complexity and provide simplified versions where needed.",
+      "tags": ["reading-level", "plain-language"]
+    },
+    {
+      "id": "3.1.6",
+      "name": "Pronunciation",
+      "wcag_level": "AAA",
+      "description": "Mechanism for identifying pronunciation of words where meaning is ambiguous.",
+      "automatable": false,
+      "automation_notes": "Cannot detect ambiguous pronunciations automatically.",
+      "selector_checks": [
+        {
+          "selector": "ruby",
+          "error": "Ruby annotation detected - verify pronunciation is correct",
+          "fix": "Ensure ruby elements accurately indicate pronunciation",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Identify words with ambiguous pronunciation and provide guidance.",
+      "tags": ["pronunciation", "language"]
+    },
+
+    // Guideline 3.2 - Predictable
+    {
+      "id": "3.2.1",
+      "name": "On Focus",
+      "wcag_level": "A",
+      "description": "Receiving focus does not initiate a change of context.",
+      "automatable": false,
+      "automation_notes": "Cannot detect context changes triggered by focus events.",
+      "selector_checks": [
+        {
+          "selector": "[onfocus]:not([onfocus*='style']):not([onfocus*='class'])",
+          "error": "Focus event handler detected - verify no context change occurs",
+          "fix": "Do not trigger page navigation, form submission, or major changes on focus",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Tab through page and verify focus never causes unexpected navigation or changes.",
+      "tags": ["focus", "context-change", "predictable"]
+    },
+    {
+      "id": "3.2.2",
+      "name": "On Input",
+      "wcag_level": "A",
+      "description": "Changing the setting of any UI component does not cause a context change without warning.",
+      "automatable": false,
+      "automation_notes": "Cannot detect context changes from input without JavaScript analysis.",
+      "selector_checks": [
+        {
+          "selector": "select[onchange]",
+          "error": "Select with onchange - verify no unexpected context change",
+          "fix": "Use submit button for navigation instead of automatic onchange redirect"
+        },
+        {
+          "selector": "input[type='checkbox'][onchange], input[type='radio'][onchange]",
+          "error": "Input change handler - verify no unexpected context change",
+          "fix": "Avoid automatic form submission or navigation on checkbox/radio change",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test all form inputs to verify no unexpected navigation or major changes occur.",
+      "tags": ["input", "context-change", "predictable", "forms"]
+    },
+    {
+      "id": "3.2.3",
+      "name": "Consistent Navigation",
+      "wcag_level": "AA",
+      "description": "Navigational mechanisms repeated on pages occur in the same relative order.",
+      "automatable": false,
+      "automation_notes": "Requires comparison across multiple pages to verify consistency.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Compare navigation across multiple pages to verify consistent ordering.",
+      "tags": ["navigation", "consistency"]
+    },
+    {
+      "id": "3.2.4",
+      "name": "Consistent Identification",
+      "wcag_level": "AA",
+      "description": "Components with the same functionality are identified consistently.",
+      "automatable": false,
+      "automation_notes": "Requires comparison across pages to verify consistent labeling.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify same functionality uses consistent labels and icons across site.",
+      "tags": ["consistency", "labels", "icons"]
+    },
+    {
+      "id": "3.2.5",
+      "name": "Change on Request",
+      "wcag_level": "AAA",
+      "description": "Changes of context are initiated only by user request.",
+      "automatable": true,
+      "automation_notes": "Can detect auto-refresh and auto-redirect patterns.",
+      "selector_checks": [
+        {
+          "selector": "meta[http-equiv='refresh']",
+          "error": "Auto-refresh may cause unexpected context change",
+          "fix": "Remove auto-refresh or provide user control"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all context changes are user-initiated or provide mechanism to disable.",
+      "tags": ["context-change", "user-control"]
+    },
+    {
+      "id": "3.2.6",
+      "name": "Consistent Help",
+      "wcag_level": "A",
+      "description": "Help mechanisms are located in the same relative order across pages.",
+      "automatable": false,
+      "automation_notes": "Requires comparison across pages to verify help location consistency.",
+      "selector_checks": [
+        {
+          "selector": "a[href*='help'], a[href*='support'], a[href*='contact'], [aria-label*='help'], [aria-label*='Help']",
+          "error": "Help link detected - verify consistent location across pages",
+          "fix": "Place help mechanisms in consistent location on all pages",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify help links and contact information appear in same location on all pages.",
+      "tags": ["help", "consistency", "navigation"]
+    },
+
+    // Guideline 3.3 - Input Assistance
+    {
+      "id": "3.3.1",
+      "name": "Error Identification",
+      "wcag_level": "A",
+      "description": "Input errors are automatically detected and described to the user in text.",
+      "automatable": true,
+      "automation_notes": "Can detect error message patterns and ARIA error attributes.",
+      "selector_checks": [
+        {
+          "selector": "input[required]:not([aria-describedby]):not([aria-errormessage])",
+          "error": "Required input may lack error message association",
+          "fix": "Add aria-describedby or aria-errormessage to link error messages",
+          "severity": "warning"
+        },
+        {
+          "selector": "[aria-invalid='true']:not([aria-describedby]):not([aria-errormessage])",
+          "error": "Invalid input lacks error description",
+          "fix": "Add aria-describedby or aria-errormessage pointing to error text"
+        },
+        {
+          "selector": "input:invalid:not([aria-invalid])",
+          "error": "Invalid input may need aria-invalid attribute",
+          "fix": "Add aria-invalid='true' when input fails validation",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test form validation to verify errors are clearly identified in text.",
+      "tags": ["forms", "errors", "validation"]
+    },
+    {
+      "id": "3.3.2",
+      "name": "Labels or Instructions",
+      "wcag_level": "A",
+      "description": "Labels or instructions are provided when content requires user input.",
+      "automatable": true,
+      "automation_notes": "Can detect missing labels and form instructions.",
+      "selector_checks": [
+        {
+          "selector": "input:not([type='hidden']):not([type='submit']):not([type='reset']):not([type='button']):not([type='image']):not(:has(+ label)):not([aria-label]):not([aria-labelledby]):not([id])",
+          "error": "Form input is missing label",
+          "fix": "Add associated <label> element or aria-label"
+        },
+        {
+          "selector": "input[id]:not(:has(~label[for])):not([aria-label]):not([aria-labelledby])",
+          "error": "Input has ID but no associated label",
+          "fix": "Add <label for='inputId'> to associate label with input",
+          "severity": "warning"
+        },
+        {
+          "selector": "input[pattern]:not([title]):not([aria-describedby])",
+          "error": "Input with pattern lacks format instructions",
+          "fix": "Add title or aria-describedby to explain expected format"
+        },
+        {
+          "selector": "input[required]:not([aria-required='true'])",
+          "error": "Required input may need aria-required for screen readers",
+          "fix": "Add aria-required='true' to reinforce requirement",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all inputs have clear labels and necessary instructions.",
+      "tags": ["forms", "labels", "instructions"]
+    },
+    {
+      "id": "3.3.3",
+      "name": "Error Suggestion",
+      "wcag_level": "AA",
+      "description": "Suggestions for correcting input errors are provided when known.",
+      "automatable": false,
+      "automation_notes": "Cannot assess error message quality or suggestion appropriateness.",
+      "selector_checks": [
+        {
+          "selector": "[aria-errormessage]",
+          "error": "Error message container detected - verify suggestions are provided",
+          "fix": "Include suggestions for correction in error messages",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test error messages to verify they include helpful suggestions for correction.",
+      "tags": ["forms", "errors", "suggestions"]
+    },
+    {
+      "id": "3.3.4",
+      "name": "Error Prevention (Legal, Financial, Data)",
+      "wcag_level": "AA",
+      "description": "Submissions with legal, financial, or data implications are reversible, checked, or confirmed.",
+      "automatable": false,
+      "automation_notes": "Cannot detect submission type or confirmation mechanisms automatically.",
+      "selector_checks": [
+        {
+          "selector": "form[action*='payment'], form[action*='checkout'], form[action*='purchase']",
+          "error": "Payment form detected - verify confirmation step exists",
+          "fix": "Add review/confirmation step before final submission",
+          "severity": "warning"
+        },
+        {
+          "selector": "form[action*='delete'], form[action*='remove']",
+          "error": "Deletion form detected - verify confirmation mechanism",
+          "fix": "Add confirmation dialog before irreversible deletions",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify important transactions have review, confirmation, or undo capabilities.",
+      "tags": ["forms", "errors", "confirmation", "legal"]
+    },
+    {
+      "id": "3.3.5",
+      "name": "Help",
+      "wcag_level": "AAA",
+      "description": "Context-sensitive help is available.",
+      "automatable": false,
+      "automation_notes": "Cannot assess help content relevance or availability.",
+      "selector_checks": [
+        {
+          "selector": "[aria-describedby]",
+          "error": "Description reference detected - verify help is appropriate",
+          "fix": "Ensure descriptions provide helpful context-sensitive information",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify context-sensitive help is available for complex inputs and tasks.",
+      "tags": ["help", "forms", "instructions"]
+    },
+    {
+      "id": "3.3.6",
+      "name": "Error Prevention (All)",
+      "wcag_level": "AAA",
+      "description": "All user submissions are reversible, checked, or confirmed.",
+      "automatable": false,
+      "automation_notes": "Cannot detect confirmation mechanisms for all form submissions.",
+      "selector_checks": [
+        {
+          "selector": "form[method='post']",
+          "error": "POST form detected - verify confirmation or undo mechanism exists",
+          "fix": "Provide review step, confirmation, or ability to undo submissions",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify all submissions have review, confirmation, or reversal capabilities.",
+      "tags": ["forms", "errors", "confirmation"]
+    },
+    {
+      "id": "3.3.7",
+      "name": "Redundant Entry",
+      "wcag_level": "A",
+      "description": "Information previously entered is auto-populated or available for selection.",
+      "automatable": false,
+      "automation_notes": "Cannot detect if previously entered information is reused.",
+      "selector_checks": [
+        {
+          "selector": "input[autocomplete='off']",
+          "error": "Autocomplete disabled - may require redundant entry",
+          "fix": "Enable autocomplete unless there's a security reason to disable",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test multi-step forms to verify information is not requested redundantly.",
+      "tags": ["forms", "autocomplete", "user-experience"]
+    },
+    {
+      "id": "3.3.8",
+      "name": "Accessible Authentication (Minimum)",
+      "wcag_level": "AA",
+      "description": "Cognitive function test is not required for authentication unless alternatives exist.",
+      "automatable": true,
+      "automation_notes": "Can detect CAPTCHA and some authentication patterns.",
+      "selector_checks": [
+        {
+          "selector": "[class*='captcha'], [id*='captcha'], [class*='recaptcha']",
+          "error": "CAPTCHA detected - verify accessible alternative exists",
+          "fix": "Provide audio CAPTCHA, object recognition, or alternative verification method"
+        },
+        {
+          "selector": "input[type='password'][autocomplete='off']",
+          "error": "Password autocomplete disabled - may prevent password manager use",
+          "fix": "Allow autocomplete='current-password' or 'new-password'"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify authentication doesn't rely solely on cognitive tests or memory.",
+      "tags": ["authentication", "cognitive", "captcha"]
+    },
+    {
+      "id": "3.3.9",
+      "name": "Accessible Authentication (Enhanced)",
+      "wcag_level": "AAA",
+      "description": "No cognitive function test is required for authentication.",
+      "automatable": true,
+      "automation_notes": "Same detection as 3.3.8 but stricter requirements.",
+      "selector_checks": [
+        {
+          "selector": "[class*='captcha'], [id*='captcha']",
+          "error": "CAPTCHA violates enhanced authentication requirement",
+          "fix": "Remove CAPTCHA or provide fully accessible alternative"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify authentication uses no cognitive function tests whatsoever.",
+      "tags": ["authentication", "cognitive", "captcha"]
+    }
+  ]
+}

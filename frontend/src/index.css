@@ -1,0 +1,194 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-perceivable: #0891b2;
+  --color-operable: #7c3aed;
+  --color-understandable: #059669;
+  --color-robust: #dc2626;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-surface-950 text-zinc-100 antialiased;
+  font-feature-settings: 'ss01' on, 'cv01' on;
+}
+
+/* Focus styles for accessibility - WCAG 2.4.7 Focus Visible */
+:focus-visible {
+  @apply outline-2 outline-offset-2 outline-cyan-400;
+}
+
+/* Skip link - WCAG 2.4.1 Bypass Blocks */
+.skip-link {
+  @apply absolute -top-10 left-4 z-50 bg-cyan-600 text-white px-4 py-2 rounded-md transition-all;
+}
+
+.skip-link:focus {
+  @apply top-4;
+}
+
+/* Accessible button base */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
+  @apply focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-900;
+}
+
+.btn-primary {
+  @apply bg-cyan-600 text-white hover:bg-cyan-500 focus-visible:ring-cyan-400;
+}
+
+.btn-secondary {
+  @apply bg-zinc-700 text-zinc-100 hover:bg-zinc-600 focus-visible:ring-zinc-400;
+}
+
+.btn-ghost {
+  @apply bg-transparent text-zinc-300 hover:bg-zinc-800 focus-visible:ring-zinc-400;
+}
+
+/* Card styles */
+.card {
+  @apply bg-surface-900 border border-zinc-800 rounded-xl p-6;
+}
+
+/* Issue severity badges */
+.badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.badge-error {
+  @apply bg-red-500/20 text-red-400 ring-1 ring-red-500/30;
+}
+
+.badge-warning {
+  @apply bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/30;
+}
+
+.badge-info {
+  @apply bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30;
+}
+
+.badge-success {
+  @apply bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30;
+}
+
+/* WCAG Principle colors */
+.principle-perceivable {
+  @apply text-cyan-400 border-cyan-500/30 bg-cyan-500/10;
+}
+
+.principle-operable {
+  @apply text-violet-400 border-violet-500/30 bg-violet-500/10;
+}
+
+.principle-understandable {
+  @apply text-emerald-400 border-emerald-500/30 bg-emerald-500/10;
+}
+
+.principle-robust {
+  @apply text-red-400 border-red-500/30 bg-red-500/10;
+}
+
+/* Gradient text */
+.gradient-text {
+  @apply bg-gradient-to-r from-cyan-400 via-violet-400 to-emerald-400 bg-clip-text text-transparent;
+}
+
+/* Loading animation */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+.loading-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply h-2 bg-zinc-800 rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full transition-all duration-500 ease-out;
+}
+
+/* Table styles */
+.table-container {
+  @apply overflow-x-auto rounded-lg border border-zinc-800;
+}
+
+.table-container table {
+  @apply w-full text-sm;
+}
+
+.table-container th {
+  @apply px-4 py-3 text-left font-medium text-zinc-400 bg-surface-900 border-b border-zinc-800;
+}
+
+.table-container td {
+  @apply px-4 py-3 border-b border-zinc-800/50;
+}
+
+.table-container tr:last-child td {
+  @apply border-b-0;
+}
+
+.table-container tr:hover td {
+  @apply bg-zinc-800/30;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-surface-900;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-600;
+}
+
+/* Drop zone */
+.drop-zone {
+  @apply relative border-2 border-dashed border-zinc-700 rounded-xl p-8 transition-all duration-200;
+  @apply hover:border-cyan-500/50 hover:bg-cyan-500/5;
+}
+
+.drop-zone.drag-over {
+  @apply border-cyan-500 bg-cyan-500/10;
+}
+
+/* Animations */
+.animate-stagger > * {
+  opacity: 0;
+  animation: slideUp 0.5s ease-out forwards;
+}
+
+.animate-stagger > *:nth-child(1) { animation-delay: 0.1s; }
+.animate-stagger > *:nth-child(2) { animation-delay: 0.2s; }
+.animate-stagger > *:nth-child(3) { animation-delay: 0.3s; }
+.animate-stagger > *:nth-child(4) { animation-delay: 0.4s; }
+.animate-stagger > *:nth-child(5) { animation-delay: 0.5s; }
+
+
+
+
+

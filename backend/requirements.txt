@@ -1,0 +1,45 @@
+# FastAPI and server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# HTML/DOM parsing
+beautifulsoup4==4.12.3
+lxml==5.1.0
+html5lib==1.1
+cssselect==1.2.0
+
+# PDF processing
+PyMuPDF==1.23.8
+pikepdf==8.11.2
+pdfplumber==0.10.3
+
+# Browser automation for computed styles
+playwright==1.41.0
+
+# Color and contrast utilities
+colormath==3.0.0
+Pillow==10.2.0
+
+# Async support
+aiofiles==23.2.1
+httpx==0.26.0
+
+# JSON with comments
+json5==0.9.14
+commentjson==0.9.0
+
+# OpenDataLoader PDF extraction
+opendataloader-pdf==2.2.1
+
+# Testing
+pytest==8.0.0
+pytest-asyncio==0.23.3
+
+# OCR support (optional - requires Tesseract system install)
+pytesseract>=0.3.10
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.6.0
+pydantic-settings==2.1.0

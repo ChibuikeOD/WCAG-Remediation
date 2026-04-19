@@ -1,0 +1,766 @@
+{
+  // WCAG 2.2 Principle 2: Operable
+  // User interface components and navigation must be operable.
+  "principle": "Operable",
+  "principle_number": 2,
+  "rules": [
+    // Guideline 2.1 - Keyboard Accessible
+    {
+      "id": "2.1.1",
+      "name": "Keyboard",
+      "wcag_level": "A",
+      "description": "All functionality is operable through a keyboard interface without specific timing requirements.",
+      "automatable": true,
+      "automation_notes": "Can detect focusable elements and event handlers. Cannot fully verify all functionality is keyboard accessible.",
+      "selector_checks": [
+        {
+          "selector": "[onclick]:not(button):not(a):not(input):not([tabindex])",
+          "error": "Clickable element may not be keyboard accessible",
+          "fix": "Add tabindex='0' and keyboard event handlers, or use native interactive element"
+        },
+        {
+          "selector": "[onmousedown]:not(button):not(a):not(input):not([tabindex])",
+          "error": "Mouse-only interaction detected - may not be keyboard accessible",
+          "fix": "Add keyboard event handlers (onkeydown/onkeyup) for equivalent functionality"
+        },
+        {
+          "selector": "[onmouseover]:not([onfocus])",
+          "error": "Mouseover without focus equivalent",
+          "fix": "Add onfocus handler for keyboard users"
+        },
+        {
+          "selector": "[onmouseout]:not([onblur])",
+          "error": "Mouseout without blur equivalent",
+          "fix": "Add onblur handler for keyboard users"
+        },
+        {
+          "selector": "[ondblclick]",
+          "error": "Double-click interaction may not be keyboard accessible",
+          "fix": "Provide keyboard-accessible alternative for double-click actions",
+          "severity": "warning"
+        },
+        {
+          "selector": "div[role='button']:not([tabindex])",
+          "error": "Custom button missing tabindex",
+          "fix": "Add tabindex='0' to make element focusable"
+        },
+        {
+          "selector": "span[role='button']:not([tabindex])",
+          "error": "Custom button missing tabindex",
+          "fix": "Add tabindex='0' to make element focusable"
+        },
+        {
+          "selector": "[role='link']:not([tabindex]):not(a)",
+          "error": "Custom link missing tabindex",
+          "fix": "Add tabindex='0' to make element focusable"
+        },
+        {
+          "selector": "[draggable='true']:not([tabindex])",
+          "error": "Draggable element may not be keyboard accessible",
+          "fix": "Add tabindex and keyboard interaction for drag operations"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Navigate entire page using only keyboard to verify all functionality is accessible.",
+      "tags": ["keyboard", "focus", "interactive"]
+    },
+    {
+      "id": "2.1.2",
+      "name": "No Keyboard Trap",
+      "wcag_level": "A",
+      "description": "Keyboard focus can be moved away from any component using standard navigation.",
+      "automatable": false,
+      "automation_notes": "Can detect focus management code but cannot verify escape routes work correctly.",
+      "selector_checks": [
+        {
+          "selector": "[tabindex]:not([tabindex='-1']):not([tabindex='0'])",
+          "error": "Non-standard tabindex value may create focus issues",
+          "fix": "Use tabindex='0' for natural focus order or tabindex='-1' for programmatic focus only",
+          "severity": "warning"
+        },
+        {
+          "selector": "dialog:not([open])",
+          "error": "Closed dialog detected - verify focus is properly managed when opened",
+          "fix": "Ensure focus moves into dialog when opened and returns to trigger when closed",
+          "severity": "info"
+        },
+        {
+          "selector": "[role='dialog']:not([aria-modal])",
+          "error": "Dialog role without aria-modal may not properly trap focus",
+          "fix": "Add aria-modal='true' for modal dialogs that should trap focus",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Tab through all interactive elements to verify focus never gets trapped.",
+      "tags": ["keyboard", "focus", "traps"]
+    },
+    {
+      "id": "2.1.3",
+      "name": "Keyboard (No Exception)",
+      "wcag_level": "AAA",
+      "description": "All functionality is operable through keyboard without any exceptions.",
+      "automatable": false,
+      "automation_notes": "Same as 2.1.1 but with stricter requirements. Path-dependent input still requires alternatives.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify absolutely all functionality works with keyboard only.",
+      "tags": ["keyboard"]
+    },
+    {
+      "id": "2.1.4",
+      "name": "Character Key Shortcuts",
+      "wcag_level": "A",
+      "description": "Single character key shortcuts can be turned off, remapped, or only active on focus.",
+      "automatable": false,
+      "automation_notes": "Cannot detect JavaScript keyboard shortcut implementations.",
+      "selector_checks": [
+        {
+          "selector": "[accesskey]",
+          "error": "Accesskey may conflict with assistive technology shortcuts",
+          "fix": "Ensure accesskey can be remapped or disabled; document the shortcut",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test for single character keyboard shortcuts and verify they can be disabled or remapped.",
+      "tags": ["keyboard", "shortcuts"]
+    },
+
+    // Guideline 2.2 - Enough Time
+    {
+      "id": "2.2.1",
+      "name": "Timing Adjustable",
+      "wcag_level": "A",
+      "description": "Time limits can be turned off, adjusted, or extended.",
+      "automatable": false,
+      "automation_notes": "Cannot detect time limits in JavaScript or server-side logic.",
+      "selector_checks": [
+        {
+          "selector": "meta[http-equiv='refresh']",
+          "error": "Meta refresh may cause timing issues",
+          "fix": "Avoid automatic page refresh or provide user control"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Identify any time limits and verify users can adjust or extend them.",
+      "tags": ["timing", "sessions"]
+    },
+    {
+      "id": "2.2.2",
+      "name": "Pause, Stop, Hide",
+      "wcag_level": "A",
+      "description": "Moving, blinking, or auto-updating content can be paused, stopped, or hidden.",
+      "automatable": true,
+      "automation_notes": "Can detect animated elements but cannot verify pause controls exist.",
+      "selector_checks": [
+        {
+          "selector": "[class*='carousel']:not(:has(button[aria-label*='pause'])):not(:has(button[aria-label*='stop']))",
+          "error": "Carousel may be missing pause control",
+          "fix": "Add visible pause/stop button for auto-rotating content",
+          "severity": "warning"
+        },
+        {
+          "selector": "[class*='slider'][class*='auto']:not(:has(button[aria-label*='pause']))",
+          "error": "Auto-playing slider may be missing pause control",
+          "fix": "Add visible pause/stop button",
+          "severity": "warning"
+        },
+        {
+          "selector": "marquee",
+          "error": "Marquee element creates moving content without pause control",
+          "fix": "Replace marquee with static content or provide pause mechanism"
+        },
+        {
+          "selector": "blink",
+          "error": "Blink element creates blinking content - deprecated and inaccessible",
+          "fix": "Remove blink element entirely"
+        },
+        {
+          "selector": "[style*='animation']:not([style*='animation-play-state'])",
+          "error": "CSS animation may lack pause mechanism",
+          "fix": "Provide control to pause animations",
+          "severity": "warning"
+        },
+        {
+          "selector": "video[autoplay]:not([controls])",
+          "error": "Auto-playing video without controls",
+          "fix": "Add controls attribute to allow pause"
+        },
+        {
+          "selector": "img[src*='.gif']",
+          "error": "Animated GIF may need pause mechanism",
+          "fix": "Provide control to stop animated GIFs or use static alternative",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test all moving, blinking, or auto-updating content for pause/stop controls.",
+      "tags": ["animation", "motion", "autoplay"]
+    },
+    {
+      "id": "2.2.3",
+      "name": "No Timing",
+      "wcag_level": "AAA",
+      "description": "Timing is not an essential part of the activity.",
+      "automatable": false,
+      "automation_notes": "Cannot assess whether timing is essential to the activity.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Review if any timing requirements exist and whether they are truly essential.",
+      "tags": ["timing"]
+    },
+    {
+      "id": "2.2.4",
+      "name": "Interruptions",
+      "wcag_level": "AAA",
+      "description": "Interruptions can be postponed or suppressed except for emergencies.",
+      "automatable": false,
+      "automation_notes": "Cannot detect notification/alert implementations in JavaScript.",
+      "selector_checks": [
+        {
+          "selector": "[role='alert']",
+          "error": "Alert role detected - verify it's not used for non-emergency content",
+          "fix": "Use role='alert' only for important, time-sensitive information",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test for any automatic interruptions and verify they can be suppressed.",
+      "tags": ["notifications", "interruptions"]
+    },
+    {
+      "id": "2.2.5",
+      "name": "Re-authenticating",
+      "wcag_level": "AAA",
+      "description": "Data is preserved when session expires and user re-authenticates.",
+      "automatable": false,
+      "automation_notes": "Cannot test session expiration behavior automatically.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Test session timeout behavior to verify data is preserved after re-authentication.",
+      "tags": ["sessions", "authentication"]
+    },
+    {
+      "id": "2.2.6",
+      "name": "Timeouts",
+      "wcag_level": "AAA",
+      "description": "Users are warned of inactivity timeout that could cause data loss.",
+      "automatable": false,
+      "automation_notes": "Cannot detect timeout warnings or data persistence in client-side code.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify users are warned about timeouts and data is preserved when possible.",
+      "tags": ["timing", "sessions", "data-loss"]
+    },
+
+    // Guideline 2.3 - Seizures and Physical Reactions
+    {
+      "id": "2.3.1",
+      "name": "Three Flashes or Below Threshold",
+      "wcag_level": "A",
+      "description": "Content does not flash more than three times per second, or flash is below thresholds.",
+      "automatable": false,
+      "automation_notes": "Requires video analysis to detect flash rates. Cannot analyze with CSS/DOM inspection.",
+      "selector_checks": [
+        {
+          "selector": "[style*='animation'][style*='background']",
+          "error": "Background animation may create flashing - verify flash rate",
+          "fix": "Ensure animations don't flash more than 3 times per second",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test any flashing content with photosensitive epilepsy analysis tool (PEAT).",
+      "tags": ["seizures", "flashing", "animation"]
+    },
+    {
+      "id": "2.3.2",
+      "name": "Three Flashes",
+      "wcag_level": "AAA",
+      "description": "Content does not flash more than three times per second.",
+      "automatable": false,
+      "automation_notes": "Same as 2.3.1 but with no threshold exception.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Ensure no content flashes more than 3 times per second under any conditions.",
+      "tags": ["seizures", "flashing"]
+    },
+    {
+      "id": "2.3.3",
+      "name": "Animation from Interactions",
+      "wcag_level": "AAA",
+      "description": "Motion animation triggered by interaction can be disabled unless essential.",
+      "automatable": true,
+      "automation_notes": "Can detect prefers-reduced-motion media query usage.",
+      "selector_checks": [
+        {
+          "selector": "[style*='transition']:not([style*='prefers-reduced-motion'])",
+          "error": "Transition may not respect reduced motion preference",
+          "fix": "Use @media (prefers-reduced-motion: reduce) to disable transitions",
+          "severity": "info"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify site respects prefers-reduced-motion and provides option to disable animations.",
+      "tags": ["animation", "motion", "vestibular"]
+    },
+
+    // Guideline 2.4 - Navigable
+    {
+      "id": "2.4.1",
+      "name": "Bypass Blocks",
+      "wcag_level": "A",
+      "description": "A mechanism is available to bypass blocks of content repeated on multiple pages.",
+      "automatable": true,
+      "automation_notes": "Can detect skip links and landmark regions.",
+      "selector_checks": [
+        {
+          "selector": "body:not(:has(a[href='#main'])):not(:has(a[href='#content'])):not(:has(a[href*='skip'])):not(:has(main)):not(:has([role='main']))",
+          "error": "Page may be missing skip link or main landmark",
+          "fix": "Add skip link at start of page and/or use <main> element"
+        },
+        {
+          "selector": "body:not(:has(main)):not(:has([role='main']))",
+          "error": "Page is missing main landmark",
+          "fix": "Add <main> element to identify primary content area"
+        },
+        {
+          "selector": "body:not(:has(nav)):not(:has([role='navigation']))",
+          "error": "Page may be missing navigation landmark",
+          "fix": "Wrap navigation in <nav> element",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify skip links work and landmark regions are properly defined.",
+      "tags": ["navigation", "skip-links", "landmarks"]
+    },
+    {
+      "id": "2.4.2",
+      "name": "Page Titled",
+      "wcag_level": "A",
+      "description": "Web pages have titles that describe topic or purpose.",
+      "automatable": true,
+      "automation_notes": "Can check for title element existence but not title quality.",
+      "selector_checks": [
+        {
+          "selector": "html:not(:has(head title))",
+          "error": "Page is missing title element",
+          "fix": "Add descriptive <title> element in <head>"
+        },
+        {
+          "selector": "head title:empty",
+          "error": "Page title is empty",
+          "fix": "Add descriptive text to <title> element"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify title is descriptive and unique for the page content.",
+      "tags": ["page-title", "navigation"]
+    },
+    {
+      "id": "2.4.3",
+      "name": "Focus Order",
+      "wcag_level": "A",
+      "description": "Focusable components receive focus in order that preserves meaning and operability.",
+      "automatable": false,
+      "automation_notes": "Can detect tabindex values but cannot verify logical focus order.",
+      "selector_checks": [
+        {
+          "selector": "[tabindex]:not([tabindex='0']):not([tabindex='-1'])",
+          "error": "Positive tabindex may disrupt natural focus order",
+          "fix": "Use tabindex='0' for natural order; rearrange DOM if different order needed"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Tab through page to verify focus order is logical and matches visual layout.",
+      "tags": ["keyboard", "focus", "navigation"]
+    },
+    {
+      "id": "2.4.4",
+      "name": "Link Purpose (In Context)",
+      "wcag_level": "A",
+      "description": "Purpose of each link can be determined from link text or programmatic context.",
+      "automatable": true,
+      "automation_notes": "Can detect generic link text but cannot assess context quality.",
+      "selector_checks": [
+        {
+          "selector": "a:not([aria-label]):not([aria-labelledby])",
+          "error": "Link text should be descriptive - check if context is sufficient",
+          "fix": "Use descriptive link text or add aria-label for more context",
+          "check_type": "link_text_quality"
+        },
+        {
+          "selector": "a[href]:empty:not([aria-label]):not([aria-labelledby])",
+          "error": "Empty link has no accessible name",
+          "fix": "Add link text or aria-label"
+        },
+        {
+          "selector": "a:has(img:only-child:not([alt]))",
+          "error": "Image-only link is missing alt text",
+          "fix": "Add alt attribute to image describing link destination"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Review links with generic text (click here, read more) to verify context is sufficient.",
+      "tags": ["links", "navigation"]
+    },
+    {
+      "id": "2.4.5",
+      "name": "Multiple Ways",
+      "wcag_level": "AA",
+      "description": "More than one way is available to locate a page within a set of pages.",
+      "automatable": true,
+      "automation_notes": "Can detect navigation, search, and sitemap elements.",
+      "selector_checks": [
+        {
+          "selector": "body:not(:has(nav)):not(:has([role='search'])):not(:has(a[href*='sitemap']))",
+          "error": "Page may lack multiple navigation methods",
+          "fix": "Provide navigation menu, search function, and/or sitemap",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify multiple navigation methods exist (menu, search, sitemap, related links).",
+      "tags": ["navigation", "search", "sitemap"]
+    },
+    {
+      "id": "2.4.6",
+      "name": "Headings and Labels",
+      "wcag_level": "AA",
+      "description": "Headings and labels describe topic or purpose.",
+      "automatable": true,
+      "automation_notes": "Can detect empty headings/labels but cannot assess quality.",
+      "selector_checks": [
+        {
+          "selector": "h1:empty, h2:empty, h3:empty, h4:empty, h5:empty, h6:empty",
+          "error": "Empty heading element",
+          "fix": "Add descriptive text to heading or remove empty element"
+        },
+        {
+          "selector": "label:empty",
+          "error": "Empty label element",
+          "fix": "Add descriptive text to label"
+        },
+        {
+          "selector": "[aria-label='']",
+          "error": "Empty aria-label attribute",
+          "fix": "Add descriptive text to aria-label or remove attribute"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify headings and labels are descriptive and accurately describe their content.",
+      "tags": ["headings", "labels", "forms"]
+    },
+    {
+      "id": "2.4.7",
+      "name": "Focus Visible",
+      "wcag_level": "AA",
+      "description": "Any keyboard operable interface has a visible focus indicator.",
+      "automatable": true,
+      "automation_notes": "Can detect outline:none but cannot fully verify focus visibility.",
+      "selector_checks": [
+        {
+          "selector": "[style*='outline: none'], [style*='outline:none'], [style*='outline: 0'], [style*='outline:0']",
+          "error": "Focus outline removed - may make focus invisible",
+          "fix": "Provide alternative visible focus indicator if removing outline"
+        },
+        {
+          "selector": "*:focus",
+          "error": "Verify focus indicator is visible",
+          "fix": "Ensure focus state is clearly visible with outline, border, or background change",
+          "check_type": "focus_visible",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Tab through page and verify every focusable element has visible focus indicator.",
+      "tags": ["keyboard", "focus", "visual-design"]
+    },
+    {
+      "id": "2.4.8",
+      "name": "Location",
+      "wcag_level": "AAA",
+      "description": "Information about user's location within a set of pages is available.",
+      "automatable": true,
+      "automation_notes": "Can detect breadcrumbs and current page indicators.",
+      "selector_checks": [
+        {
+          "selector": "nav[aria-label*='breadcrumb'], nav[aria-label*='Breadcrumb'], [class*='breadcrumb']",
+          "error": "Breadcrumb detected - verify it accurately shows location",
+          "fix": "Ensure breadcrumb reflects current page location",
+          "severity": "info"
+        },
+        {
+          "selector": "nav:not(:has([aria-current])):not(:has(.active)):not(:has([class*='current']))",
+          "error": "Navigation may not indicate current page",
+          "fix": "Add aria-current='page' to indicate current page in navigation",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify users can determine their location within site structure.",
+      "tags": ["navigation", "breadcrumbs", "location"]
+    },
+    {
+      "id": "2.4.9",
+      "name": "Link Purpose (Link Only)",
+      "wcag_level": "AAA",
+      "description": "Purpose of each link can be determined from link text alone.",
+      "automatable": true,
+      "automation_notes": "Can flag generic link text patterns.",
+      "selector_checks": [
+        {
+          "selector": "a",
+          "error": "Link text should be descriptive on its own",
+          "fix": "Use descriptive link text that makes sense out of context",
+          "check_type": "link_text_standalone",
+          "patterns_to_flag": ["click here", "here", "read more", "more", "learn more", "continue", "details"]
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Review all links to verify text is meaningful without surrounding context.",
+      "tags": ["links", "navigation"]
+    },
+    {
+      "id": "2.4.10",
+      "name": "Section Headings",
+      "wcag_level": "AAA",
+      "description": "Section headings are used to organize content.",
+      "automatable": true,
+      "automation_notes": "Can detect heading structure and section elements.",
+      "selector_checks": [
+        {
+          "selector": "section:not(:has(h1, h2, h3, h4, h5, h6)):not(:has([role='heading']))",
+          "error": "Section element without heading",
+          "fix": "Add heading at start of section to describe its content"
+        },
+        {
+          "selector": "article:not(:has(h1, h2, h3, h4, h5, h6))",
+          "error": "Article element without heading",
+          "fix": "Add heading to describe article content"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify content is organized with appropriate heading structure.",
+      "tags": ["headings", "structure"]
+    },
+    {
+      "id": "2.4.11",
+      "name": "Focus Not Obscured (Minimum)",
+      "wcag_level": "AA",
+      "description": "When a component receives focus, it is not entirely hidden by author-created content.",
+      "automatable": false,
+      "automation_notes": "Cannot automatically detect if focused elements are obscured by overlays.",
+      "selector_checks": [
+        {
+          "selector": "[style*='position: fixed'], [style*='position: sticky']",
+          "error": "Fixed/sticky element may obscure focused content",
+          "fix": "Ensure fixed elements don't cover focused interactive elements",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Tab through page to verify focused elements are never completely hidden.",
+      "tags": ["focus", "visibility", "overlays"]
+    },
+    {
+      "id": "2.4.12",
+      "name": "Focus Not Obscured (Enhanced)",
+      "wcag_level": "AAA",
+      "description": "When a component receives focus, no part of it is hidden by author-created content.",
+      "automatable": false,
+      "automation_notes": "Same as 2.4.11 but stricter - no partial obscuring allowed.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify focused elements are completely visible with no overlap from fixed content.",
+      "tags": ["focus", "visibility", "overlays"]
+    },
+    {
+      "id": "2.4.13",
+      "name": "Focus Appearance",
+      "wcag_level": "AAA",
+      "description": "Focus indicator has sufficient size and contrast.",
+      "automatable": true,
+      "automation_notes": "Can measure focus indicator size and contrast with computed styles.",
+      "selector_checks": [
+        {
+          "selector": "*:focus",
+          "error": "Focus indicator should have minimum 2px thickness and 3:1 contrast",
+          "fix": "Use visible focus indicator at least 2px thick with 3:1 contrast against background",
+          "check_type": "focus_appearance"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify focus indicators are clearly visible and meet size/contrast requirements.",
+      "tags": ["focus", "contrast", "visual-design"]
+    },
+
+    // Guideline 2.5 - Input Modalities
+    {
+      "id": "2.5.1",
+      "name": "Pointer Gestures",
+      "wcag_level": "A",
+      "description": "Multipoint or path-based gestures have single-pointer alternatives.",
+      "automatable": false,
+      "automation_notes": "Cannot detect gesture-based interactions in JavaScript.",
+      "selector_checks": [
+        {
+          "selector": "[class*='pinch'], [class*='swipe'], [class*='gesture']",
+          "error": "Gesture-based functionality detected - verify single-pointer alternative exists",
+          "fix": "Provide button or single-click alternatives for gesture-based actions",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test for multipoint gestures and verify single-pointer alternatives exist.",
+      "tags": ["gestures", "pointer", "touch"]
+    },
+    {
+      "id": "2.5.2",
+      "name": "Pointer Cancellation",
+      "wcag_level": "A",
+      "description": "Functions using single pointer can be cancelled or undone.",
+      "automatable": false,
+      "automation_notes": "Cannot verify pointer down/up behavior in event handlers.",
+      "selector_checks": [
+        {
+          "selector": "[onmousedown]:not([onmouseup])",
+          "error": "Mouse down without mouse up - action may trigger too early",
+          "fix": "Use click event or mouseup for activation; allow cancellation by moving pointer away",
+          "severity": "warning"
+        },
+        {
+          "selector": "[ontouchstart]:not([ontouchend])",
+          "error": "Touch start without touch end - action may trigger too early",
+          "fix": "Use touchend for activation to allow cancellation",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test click/tap interactions - verify actions can be cancelled by moving pointer before release.",
+      "tags": ["pointer", "touch", "cancellation"]
+    },
+    {
+      "id": "2.5.3",
+      "name": "Label in Name",
+      "wcag_level": "A",
+      "description": "Visible label text is included in the accessible name.",
+      "automatable": true,
+      "automation_notes": "Can compare visible text with aria-label/aria-labelledby values.",
+      "selector_checks": [
+        {
+          "selector": "button[aria-label]",
+          "error": "Button aria-label should include visible text",
+          "fix": "Ensure aria-label contains the visible button text",
+          "check_type": "label_in_name"
+        },
+        {
+          "selector": "a[aria-label]",
+          "error": "Link aria-label should include visible text",
+          "fix": "Ensure aria-label contains the visible link text",
+          "check_type": "label_in_name"
+        },
+        {
+          "selector": "input[aria-label]",
+          "error": "Input aria-label should include visible label text",
+          "fix": "Ensure aria-label contains any visible label text",
+          "check_type": "label_in_name"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify accessible names include all visible label text for voice control users.",
+      "tags": ["labels", "accessible-name", "voice-control"]
+    },
+    {
+      "id": "2.5.4",
+      "name": "Motion Actuation",
+      "wcag_level": "A",
+      "description": "Functions triggered by device motion can be disabled and have UI alternatives.",
+      "automatable": false,
+      "automation_notes": "Cannot detect device motion event handlers without JavaScript analysis.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Test for shake/tilt functionality and verify it can be disabled with UI alternatives.",
+      "tags": ["motion", "device-motion", "alternatives"]
+    },
+    {
+      "id": "2.5.5",
+      "name": "Target Size (Enhanced)",
+      "wcag_level": "AAA",
+      "description": "Target size for pointer inputs is at least 44x44 CSS pixels.",
+      "automatable": true,
+      "automation_notes": "Can measure element dimensions with computed styles.",
+      "selector_checks": [
+        {
+          "selector": "a, button, input, select, textarea, [role='button'], [role='link'], [tabindex='0']",
+          "error": "Interactive element may be smaller than 44x44 pixels",
+          "fix": "Ensure target size is at least 44x44 CSS pixels",
+          "check_type": "target_size",
+          "min_size": 44
+        }
+      ],
+      "manual_review_required": false,
+      "manual_review_notes": "Automated measurement can verify target sizes.",
+      "tags": ["target-size", "touch", "motor"]
+    },
+    {
+      "id": "2.5.6",
+      "name": "Concurrent Input Mechanisms",
+      "wcag_level": "AAA",
+      "description": "Content does not restrict input modalities except where essential.",
+      "automatable": false,
+      "automation_notes": "Cannot detect input modality restrictions in JavaScript.",
+      "selector_checks": [],
+      "manual_review_required": true,
+      "manual_review_notes": "Test with multiple input methods (touch, mouse, keyboard) simultaneously.",
+      "tags": ["input", "modalities", "alternatives"]
+    },
+    {
+      "id": "2.5.7",
+      "name": "Dragging Movements",
+      "wcag_level": "AA",
+      "description": "Functionality requiring dragging has single-pointer alternative without dragging.",
+      "automatable": false,
+      "automation_notes": "Cannot detect drag functionality in JavaScript event handlers.",
+      "selector_checks": [
+        {
+          "selector": "[draggable='true']",
+          "error": "Draggable element detected - verify single-pointer alternative exists",
+          "fix": "Provide click-based or keyboard alternative for drag operations",
+          "severity": "warning"
+        },
+        {
+          "selector": "[class*='sortable'], [class*='draggable'], [class*='drag-and-drop']",
+          "error": "Drag functionality may exist - verify alternative input method",
+          "fix": "Provide buttons or other controls as alternative to dragging",
+          "severity": "warning"
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Test all drag-based functionality for single-pointer alternatives.",
+      "tags": ["dragging", "pointer", "alternatives"]
+    },
+    {
+      "id": "2.5.8",
+      "name": "Target Size (Minimum)",
+      "wcag_level": "AA",
+      "description": "Target size for pointer inputs is at least 24x24 CSS pixels with spacing exceptions.",
+      "automatable": true,
+      "automation_notes": "Can measure element dimensions and spacing with computed styles.",
+      "selector_checks": [
+        {
+          "selector": "a, button, input:not([type='hidden']), select, textarea, [role='button'], [role='link'], [tabindex='0']",
+          "error": "Interactive element may be smaller than 24x24 pixels",
+          "fix": "Ensure target size is at least 24x24 CSS pixels or has sufficient spacing",
+          "check_type": "target_size",
+          "min_size": 24
+        }
+      ],
+      "manual_review_required": true,
+      "manual_review_notes": "Verify small targets have adequate spacing or are not the primary means of activation.",
+      "tags": ["target-size", "touch", "motor"]
+    }
+  ]
+}

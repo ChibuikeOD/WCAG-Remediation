@@ -58,9 +58,26 @@ if _allow_all:
 
 # Vercel (and many serverless platforms) mount the code package read-only.
 # Use /tmp for runtime writeable directories.
-_is_serverless = any(
-    os.getenv(k) for k in ("VERCEL", "AWS_LAMBDA_FUNCTION_NAME", "FUNCTIONS_WORKER_RUNTIME")
+#
+# Note: Vercel's env surface differs between runtimes, so we use multiple
+# signals + a read-only `/var/task` fallback.
+_vercel_signals = (
+    "VERCEL",
+    "VERCEL_ENV",
+    "VERCEL_REGION",
+    "VERCEL_URL",
+    "NOW_REGION",
 )
+_is_serverless = any(os.getenv(k) for k in _vercel_signals) or any(
+    os.getenv(k) for k in ("AWS_LAMBDA_FUNCTION_NAME", "AWS_EXECUTION_ENV", "FUNCTIONS_WORKER_RUNTIME")
+)
+
+try:
+    if Path("/var/task").exists() and not os.access("/var/task", os.W_OK):
+        _is_serverless = True
+except Exception:
+    # If the platform doesn't support this check, ignore it.
+    pass
 if _is_serverless:
     settings.UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/uploads"))
     settings.OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/tmp/output"))

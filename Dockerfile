@@ -16,7 +16,7 @@ WORKDIR /app
 
 # Install system dependencies (Java JRE, curl, and libs required for Chromium)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-17-jre-headless \
+    default-jre-headless \
     curl \
     ca-certificates \
     git \

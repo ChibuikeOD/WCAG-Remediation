@@ -936,6 +936,11 @@ class PDFRemediator:
                     with pdf.open_metadata() as meta:
                         meta['dc:title'] = title
                     self.changes.append({"type": "set_title", "value": title})
+                    
+                    if "/ViewerPreferences" not in pdf.Root:
+                        pdf.Root.ViewerPreferences = pikepdf.Dictionary()
+                    pdf.Root.ViewerPreferences["/DisplayDocTitle"] = True
+                    self.changes.append({"type": "set_display_doc_title", "value": True})
                 
                 # Set language
                 if language:
@@ -1020,26 +1025,33 @@ class PDFRemediator:
             toc = []
             
             for page_num, page in enumerate(doc):
-                blocks = page.get_text("dict")["blocks"]
+                blocks = page.get_text("dict", sort=True)["blocks"]
                 for block in blocks:
                     if "lines" in block:
                         for line in block["lines"]:
                             for span in line["spans"]:
                                 # Detect headings by font size
-                                if span["size"] > 14:  # Larger text likely heading
+                                if span["size"] >= 14:  # Larger text likely heading
                                     text = span["text"].strip()
                                     if text and len(text) > 2:
-                                        level = 1 if span["size"] > 18 else 2
-                                        toc.append([level, text[:50], page_num + 1])
+                                        level = 1 if span["size"] >= 18 else 2
+                                        # PyMuPDF requires the first item's hierarchy level to be 1
+                                        if len(toc) == 0:
+                                            level = 1
+                                        # Include explicit y-coordinate so viewers go to exact layout block rather than page top
+                                        toc.append([level, text[:50], page_num + 1, span["bbox"][1]])
             
             doc.close()
             
             if toc:
-                # Add bookmarks with pikepdf
+                # Add bookmarks with PyMuPDF cleanly to avoid incremental corruption
                 doc = fitz.open(str(self.file_path))
                 doc.set_toc(toc)
-                doc.save(str(self.file_path), incremental=True, encryption=0)
+                tmp_path = str(self.file_path) + ".tmp"
+                doc.save(tmp_path, encryption=0)
                 doc.close()
+                import shutil
+                shutil.move(tmp_path, str(self.file_path))
                 
                 self.changes.append({
                     "type": "add_bookmarks",

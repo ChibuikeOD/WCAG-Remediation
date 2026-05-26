@@ -9,16 +9,19 @@ Main application entry point providing endpoints for:
 All endpoints reference WCAG 2.2 success criteria as the source of truth.
 """
 import uuid
+import asyncio
 import aiofiles
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 import logging
+import json
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from .config import settings
 from .models import (
@@ -30,13 +33,156 @@ from .rules_engine import get_rules_engine
 from .parsers import HTMLParser, PDFParser
 from .remediator import HTMLRemediator, PDFRemediator
 
+# Database & Authentication Imports
+from .database import init_db, SessionLocal, UploadedFile, AccessibilityReport as DbReport
+from .retention_runner import clean_expired_documents
+from .auth import router as auth_router, require_user, User
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Storage for uploaded files and reports
-file_storage: dict = {}
-report_storage: dict = {}
+
+# =============================================================================
+# Database-Backed Storage Adapters
+# =============================================================================
+
+class DbFileStorage:
+    """Simulates a dictionary interface on top of SQLite for UploadedFile metadata."""
+    
+    def __contains__(self, file_id: str) -> bool:
+        db = SessionLocal()
+        try:
+            return db.query(UploadedFile).filter(UploadedFile.id == file_id).first() is not None
+        finally:
+            db.close()
+            
+    def __getitem__(self, file_id: str) -> dict:
+        db = SessionLocal()
+        try:
+            file_rec = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+            if not file_rec:
+                raise KeyError(file_id)
+            return {
+                "id": file_rec.id,
+                "original_filename": file_rec.filename,
+                "file_type": file_rec.file_type,
+                "file_path": file_rec.file_path,
+                "file_size": file_rec.file_size,
+                "uploaded_at": file_rec.uploaded_at.isoformat()
+            }
+        finally:
+            db.close()
+            
+    def __setitem__(self, file_id: str, value: dict):
+        db = SessionLocal()
+        try:
+            file_rec = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+            uploaded_at_val = value["uploaded_at"]
+            if isinstance(uploaded_at_val, str):
+                uploaded_at_val = datetime.fromisoformat(uploaded_at_val)
+                
+            if not file_rec:
+                file_rec = UploadedFile(
+                    id=file_id,
+                    filename=value["original_filename"],
+                    file_type=value["file_type"],
+                    file_path=value["file_path"],
+                    file_size=value["file_size"],
+                    uploaded_at=uploaded_at_val,
+                    owner_id=value.get("owner_id")
+                )
+                db.add(file_rec)
+            else:
+                file_rec.filename = value["original_filename"]
+                file_rec.file_type = value["file_type"]
+                file_rec.file_path = value["file_path"]
+                file_rec.file_size = value["file_size"]
+                if value.get("owner_id"):
+                    file_rec.owner_id = value["owner_id"]
+            db.commit()
+        finally:
+            db.close()
+            
+    def items(self) -> list:
+        db = SessionLocal()
+        try:
+            files = db.query(UploadedFile).all()
+            return [
+                (f.id, {
+                    "id": f.id,
+                    "original_filename": f.filename,
+                    "file_type": f.file_type,
+                    "file_path": f.file_path,
+                    "file_size": f.file_size,
+                    "uploaded_at": f.uploaded_at.isoformat()
+                })
+                for f in files
+            ]
+        finally:
+            db.close()
+            
+    def get(self, file_id: str, default=None) -> Optional[dict]:
+        try:
+            return self[file_id]
+        except KeyError:
+            return default
+
+
+class DbReportStorage:
+    """Simulates a dictionary interface on top of SQLite for AccessibilityReport models."""
+    
+    def __contains__(self, report_id: str) -> bool:
+        db = SessionLocal()
+        try:
+            return db.query(DbReport).filter(DbReport.id == report_id).first() is not None
+        finally:
+            db.close()
+            
+    def __getitem__(self, report_id: str) -> AccessibilityReport:
+        db = SessionLocal()
+        try:
+            report_rec = db.query(DbReport).filter(DbReport.id == report_id).first()
+            if not report_rec:
+                raise KeyError(report_id)
+            return AccessibilityReport.model_validate_json(report_rec.report_json)
+        finally:
+            db.close()
+            
+    def __setitem__(self, report_id: str, report_model: AccessibilityReport):
+        db = SessionLocal()
+        try:
+            report_rec = db.query(DbReport).filter(DbReport.id == report_id).first()
+            report_json_str = report_model.model_dump_json()
+            
+            # Find file_id if it matches the filename
+            file_rec = db.query(UploadedFile).filter(UploadedFile.filename == report_model.document.filename).first()
+            file_id = file_rec.id if file_rec else None
+            
+            if not report_rec:
+                report_rec = DbReport(
+                    id=report_id,
+                    file_id=file_id,
+                    report_json=report_json_str
+                )
+                db.add(report_rec)
+            else:
+                report_rec.file_id = file_id
+                report_rec.report_json = report_json_str
+            db.commit()
+        finally:
+            db.close()
+
+    def get(self, report_id: str, default=None) -> Optional[AccessibilityReport]:
+        try:
+            return self[report_id]
+        except KeyError:
+            return default
+
+
+# Storage instances
+file_storage = DbFileStorage()
+report_storage = DbReportStorage()
 
 
 @asynccontextmanager
@@ -46,9 +192,23 @@ async def lifespan(app: FastAPI):
     logger.info("Starting WCAG Accessibility Remediation Platform")
     logger.info(f"Loaded {len(get_rules_engine().get_all_rules())} WCAG rules")
     
+    # Initialize SQLite database schema
+    init_db()
+    logger.info("Database schema initialized.")
+    
+    # Start retention runner background worker
+    app.state.retention_task = asyncio.create_task(clean_expired_documents())
+    logger.info("Background retention runner task started.")
+    
     yield
     
     # Shutdown
+    logger.info("Stopping background retention runner...")
+    app.state.retention_task.cancel()
+    try:
+        await app.state.retention_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Shutting down WCAG Accessibility Remediation Platform")
 
 
@@ -72,6 +232,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Register SSO Session Middleware
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SECRET_KEY,
+    max_age=settings.RETENTION_PERIOD_HOURS * 3600  # Sync session timeout with document expiration
+)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -80,6 +247,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register Authentication endpoints
+app.include_router(auth_router)
 
 
 @app.get("/")
@@ -115,7 +285,7 @@ async def health_check():
 # =============================================================================
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), user: User = Depends(require_user)):
     """
     Upload an HTML or PDF file for accessibility analysis.
     
@@ -162,7 +332,8 @@ async def upload_file(file: UploadFile = File(...)):
         "file_type": file_type,
         "file_path": str(save_path),
         "file_size": len(content),
-        "uploaded_at": datetime.now().isoformat()
+        "uploaded_at": datetime.now().isoformat(),
+        "owner_id": user.id
     }
     
     logger.info(f"Uploaded file: {filename} ({size_mb:.2f}MB) -> {file_id}")
@@ -181,7 +352,7 @@ async def upload_file(file: UploadFile = File(...)):
 # =============================================================================
 
 @app.post("/analyze", response_model=AccessibilityReport)
-async def analyze_document(request: AnalyzeRequest):
+async def analyze_document(request: AnalyzeRequest, user: User = Depends(require_user)):
     """
     Analyze a document or URL for accessibility issues.
     
@@ -199,6 +370,15 @@ async def analyze_document(request: AnalyzeRequest):
             status_code=400,
             detail="Either file_id or url must be provided"
         )
+        
+    if request.file_id:
+        db_conn = SessionLocal()
+        try:
+            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == request.file_id).first()
+            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this file.")
+        finally:
+            db_conn.close()
     
     engine = get_rules_engine()
     
@@ -386,7 +566,8 @@ async def analyze_document(request: AnalyzeRequest):
 async def analyze_url_get(
     url: str = Query(..., description="URL to analyze"),
     target_level: WCAGLevel = Query(WCAGLevel.AA, description="Target WCAG level"),
-    include_aaa: bool = Query(False, description="Include AAA checks")
+    include_aaa: bool = Query(False, description="Include AAA checks"),
+    user: User = Depends(require_user)
 ):
     """
     Analyze a URL for accessibility issues (GET version).
@@ -394,7 +575,7 @@ async def analyze_url_get(
     Convenience endpoint for quick URL analysis.
     """
     request = AnalyzeRequest(url=url, target_level=target_level, include_aaa=include_aaa)
-    return await analyze_document(request)
+    return await analyze_document(request, user)
 
 
 # =============================================================================
@@ -402,7 +583,7 @@ async def analyze_url_get(
 # =============================================================================
 
 @app.post("/remediate", response_model=RemediationResponse)
-async def remediate_document(request: RemediationRequest):
+async def remediate_document(request: RemediationRequest, user: User = Depends(require_user)):
     """
     Apply automated fixes for accessibility issues.
     
@@ -416,6 +597,16 @@ async def remediate_document(request: RemediationRequest):
     """
     if request.report_id not in report_storage:
         raise HTTPException(status_code=404, detail="Report not found")
+        
+    db_conn = SessionLocal()
+    try:
+        report_rec = db_conn.query(DbReport).filter(DbReport.id == request.report_id).first()
+        if report_rec:
+            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this report.")
+    finally:
+        db_conn.close()
     
     report = report_storage[request.report_id]
     
@@ -517,12 +708,22 @@ async def remediate_document(request: RemediationRequest):
 
 
 @app.get("/remediate/download/{report_id}")
-async def download_remediated_file(report_id: str):
+async def download_remediated_file(report_id: str, user: User = Depends(require_user)):
     """
     Download the remediated file.
     """
     if report_id not in report_storage:
         raise HTTPException(status_code=404, detail="Report not found")
+        
+    db_conn = SessionLocal()
+    try:
+        report_rec = db_conn.query(DbReport).filter(DbReport.id == report_id).first()
+        if report_rec:
+            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this report.")
+    finally:
+        db_conn.close()
     
     report = report_storage[report_id]
     
@@ -545,7 +746,7 @@ async def download_remediated_file(report_id: str):
 # =============================================================================
 
 @app.post("/pdf/analyze")
-async def analyze_pdf_document(file_id: str):
+async def analyze_pdf_document(file_id: str, user: User = Depends(require_user)):
     """
     Detailed PDF accessibility analysis.
     
@@ -557,6 +758,14 @@ async def analyze_pdf_document(file_id: str):
     """
     if file_id not in file_storage:
         raise HTTPException(status_code=404, detail="File not found")
+        
+    db_conn = SessionLocal()
+    try:
+        file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+        if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this file.")
+    finally:
+        db_conn.close()
     
     file_info = file_storage[file_id]
     
@@ -590,7 +799,8 @@ async def remediate_pdf_document(
     language: Optional[str] = "en",
     add_bookmarks: bool = False,
     auto_tag: bool = False,
-    generate_report: bool = True
+    generate_report: bool = True,
+    user: User = Depends(require_user)
 ):
     """
     Apply automated fixes to a PDF document.
@@ -611,6 +821,14 @@ async def remediate_pdf_document(
     """
     if file_id not in file_storage:
         raise HTTPException(status_code=404, detail="File not found")
+        
+    db_conn = SessionLocal()
+    try:
+        file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+        if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this file.")
+    finally:
+        db_conn.close()
     
     file_info = file_storage[file_id]
     
@@ -705,10 +923,27 @@ async def remediate_pdf_document(
 
 
 @app.get("/pdf/report/{filename}")
-async def download_remediation_report(filename: str):
+async def download_remediation_report(filename: str, user: User = Depends(require_user)):
     """
     Download a remediation report.
     """
+    db_conn = SessionLocal()
+    try:
+        user_files = db_conn.query(UploadedFile).filter(UploadedFile.owner_id == user.id).all()
+        user_file_ids = [f.id for f in user_files]
+        reports = db_conn.query(DbReport).filter(DbReport.file_id.in_(user_file_ids)).all()
+        
+        has_permission = False
+        for r in reports:
+            if filename in r.report_json:
+                has_permission = True
+                break
+        
+        if not has_permission:
+            raise HTTPException(status_code=403, detail="Access denied to this report.")
+    finally:
+        db_conn.close()
+
     report_path = settings.OUTPUT_DIR / filename
     
     if not report_path.exists():
@@ -724,12 +959,20 @@ async def download_remediation_report(filename: str):
 
 
 @app.get("/pdf/download/{file_id}")
-async def download_pdf(file_id: str):
+async def download_pdf(file_id: str, user: User = Depends(require_user)):
     """
     Download the (remediated) PDF file.
     """
     if file_id not in file_storage:
         raise HTTPException(status_code=404, detail="File not found")
+        
+    db_conn = SessionLocal()
+    try:
+        file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+        if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this file.")
+    finally:
+        db_conn.close()
     
     file_info = file_storage[file_id]
     file_path = Path(file_info["file_path"])
@@ -753,20 +996,18 @@ from pydantic import BaseModel as _BaseModel
 class _OverlayRequest(_BaseModel):
     report_id: str
 
-@app.post("/pdf/debug/overlays")
-async def generate_layout_overlays(request: _OverlayRequest):
-    """
-    Generate block-level overlay images showing the extracted PDF structure.
 
-    Runs OpenDataLoader on the original uploaded PDF and produces a ZIP of
-    annotated page PNGs (tag + short text per block).
-    """
-    if request.report_id not in report_storage:
+class _CompareTaggingRequest(_BaseModel):
+    report_id: str
+    include_overlays: bool = False
+    confidence_threshold: float = 0.0
+
+
+def _resolve_pdf_path_from_report(report_id: str) -> Path:
+    if report_id not in report_storage:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    report = report_storage[request.report_id]
-
-    # Resolve report -> original file (same pattern as /remediate)
+    report = report_storage[report_id]
     file_id = None
     for fid, finfo in file_storage.items():
         if finfo["original_filename"] == report.document.filename:
@@ -778,9 +1019,58 @@ async def generate_layout_overlays(request: _OverlayRequest):
 
     file_info = file_storage[file_id]
     if file_info["file_type"] != "pdf":
-        raise HTTPException(status_code=400, detail="Overlays are only available for PDFs")
+        raise HTTPException(status_code=400, detail="Only PDF documents are supported")
 
-    file_path = Path(file_info["file_path"])
+    return Path(file_info["file_path"])
+
+
+@app.post("/pdf/debug/compare-tagging")
+async def compare_tagging_pipelines(request: _CompareTaggingRequest):
+    """
+    Run LayoutLM and OpenDataLoader on the same PDF and return a comparison report.
+    """
+    file_path = _resolve_pdf_path_from_report(request.report_id)
+
+    try:
+        from .tagging_compare import (
+            build_comparison_bundle,
+            run_tagging_comparison,
+            save_comparison_report,
+        )
+
+        report = run_tagging_comparison(
+            file_path,
+            confidence_threshold=request.confidence_threshold,
+        )
+        json_path = save_comparison_report(report, settings.OUTPUT_DIR)
+
+        if request.include_overlays:
+            zip_path = build_comparison_bundle(file_path, report, settings.OUTPUT_DIR)
+            return FileResponse(
+                path=str(zip_path),
+                filename=zip_path.name,
+                media_type="application/zip",
+            )
+
+        payload = {k: v for k, v in report.items() if not k.startswith("_")}
+        payload["report_path"] = str(json_path)
+        payload["report_filename"] = json_path.name
+        return payload
+
+    except Exception as e:
+        logger.error("Tagging comparison failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Tagging comparison failed: {str(e)}")
+
+
+@app.post("/pdf/debug/overlays")
+async def generate_layout_overlays(request: _OverlayRequest):
+    """
+    Generate block-level overlay images showing the extracted PDF structure.
+
+    Runs LayoutLMv3 layout analysis on the original uploaded PDF and produces a ZIP of
+    annotated page PNGs (tag + short text per block).
+    """
+    file_path = _resolve_pdf_path_from_report(request.report_id)
 
     try:
         from .layout_model import DocumentLayoutAnalyzer

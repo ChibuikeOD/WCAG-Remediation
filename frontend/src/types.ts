@@ -114,6 +114,33 @@ export interface WCAGRule {
   tags: string[];
 }
 
+export interface TaggingComparisonSummary {
+  pages: number;
+  layoutlm: { blocks: number; tag_counts: Record<string, number> };
+  opendataloader: { blocks: number; tag_counts: Record<string, number> };
+  matched_block_pairs: number;
+  tag_agreements: number;
+  tag_disagreements: number;
+  overall_agreement_rate: number | null;
+}
+
+export interface TaggingComparisonReport {
+  document: string;
+  generated_at: string;
+  pipelines: {
+    layoutlm: { success: boolean; error?: string | null; runtime?: string };
+    opendataloader: { success: boolean; error?: string | null; runtime?: string };
+  };
+  comparison?: {
+    summary: TaggingComparisonSummary;
+    tag_count_diff: Record<string, { layoutlm: number; opendataloader: number; delta: number }>;
+    pages: Array<Record<string, unknown>>;
+  } | null;
+  comparison_error?: string;
+  report_path?: string;
+  report_filename?: string;
+}
+
 
 
 

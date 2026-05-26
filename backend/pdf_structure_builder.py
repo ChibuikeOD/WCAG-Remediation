@@ -152,6 +152,7 @@ class PDFStructureBuilder:
                             "tag": block.tag,
                             "text": block.text,
                             "page_num": page_num,
+                            "raw_bbox": block.metadata.get("raw_bbox"),
                         }
                     )
 
@@ -178,6 +179,7 @@ class PDFStructureBuilder:
                 text = entry["text"]
                 page_num = entry["page_num"]
                 mcid = entry["mcid"]
+                raw_bbox = entry.get("raw_bbox")
 
                 struct_type_name = TAG_TO_PDF_NAME.get(tag, "/Span")
                 page_obj = pdf.pages[page_num].obj
@@ -191,6 +193,15 @@ class PDFStructureBuilder:
                         "/Pg": page_obj,
                     }
                 )
+
+                if raw_bbox and len(raw_bbox) == 4:
+                    left, bottom, right, top = raw_bbox
+                    bbox_array = pikepdf.Array([left, bottom, right, top])
+                    attr_dict = pikepdf.Dictionary({
+                        "/O": pikepdf.Name("/Layout"),
+                        "/BBox": bbox_array
+                    })
+                    se_dict["/A"] = attr_dict
 
                 if tag == "Figure":
                     se_dict["/Alt"] = pikepdf.String("[Image requires alt text]")
@@ -257,8 +268,7 @@ def build_tagged_pdf(
     """
     Convenience helper: analyze a PDF and produce a tagged copy.
 
-    The legacy arguments are accepted for compatibility and ignored by the
-    OpenDataLoader-backed analyzer.
+    Uses the fine-tuned LayoutLMv3 model in ``layoutLM_trained`` by default.
     """
     analyzer = DocumentLayoutAnalyzer(
         model_path=model_path,

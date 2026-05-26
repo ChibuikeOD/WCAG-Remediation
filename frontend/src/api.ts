@@ -4,11 +4,12 @@ import type {
   AccessibilityReport,
   UploadResponse,
   RemediationResponse,
+  TaggingComparisonReport,
   WCAGLevel,
   WCAGRule,
 } from './types';
 
-const API_BASE = '/api';
+const API_BASE = (import.meta.env.VITE_API_URL as string) || '/api';
 
 class APIError extends Error {
   constructor(public status: number, message: string) {
@@ -17,8 +18,18 @@ class APIError extends Error {
   }
 }
 
+// User representation returned by SSO /auth/me
+export interface UserSession {
+  authenticated: boolean;
+  id?: string;
+  name?: string;
+  email?: string;
+  created_at?: string;
+}
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
+    credentials: 'same-origin', // Ensure session cookies are sent for auth
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -34,6 +45,21 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 
+// Fetch active user session
+export async function getCurrentUser(): Promise<UserSession> {
+  return fetchJSON<UserSession>(`${API_BASE}/auth/me`);
+}
+
+// Get OIDC / SSO Login URL
+export function getLoginURL(redirect_to: string = '/'): string {
+  return `${API_BASE}/auth/login?redirect_to=${encodeURIComponent(redirect_to)}`;
+}
+
+// Get OIDC / SSO Logout URL
+export function getLogoutURL(): string {
+  return `${API_BASE}/auth/logout`;
+}
+
 // Upload a file for analysis
 export async function uploadFile(file: File): Promise<UploadResponse> {
   const formData = new FormData();
@@ -42,6 +68,7 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
   const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
     body: formData,
+    credentials: 'same-origin', // Ensure cookies are sent
   });
 
   if (!response.ok) {
@@ -146,6 +173,33 @@ export async function healthCheck(): Promise<{
 // Download remediated file
 export function getRemediatedFileURL(reportId: string): string {
   return `${API_BASE}/remediate/download/${reportId}`;
+}
+
+// Compare LayoutLM vs OpenDataLoader tagging (JSON report, or ZIP with overlays)
+export async function compareTaggingPipelines(
+  reportId: string,
+  options?: { includeOverlays?: boolean; confidenceThreshold?: number }
+): Promise<TaggingComparisonReport | Blob> {
+  const response = await fetch(`${API_BASE}/pdf/debug/compare-tagging`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      report_id: reportId,
+      include_overlays: options?.includeOverlays ?? false,
+      confidence_threshold: options?.confidenceThreshold ?? 0,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Tagging comparison failed' }));
+    throw new APIError(response.status, error.detail || 'Tagging comparison failed');
+  }
+
+  if (options?.includeOverlays) {
+    return response.blob();
+  }
+
+  return response.json();
 }
 
 // Generate model overlay debug images (returns a downloadable ZIP blob)

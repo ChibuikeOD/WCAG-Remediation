@@ -1,11 +1,12 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { UploadZone } from './components/UploadZone';
 import { Dashboard } from './components/Dashboard';
 import { IssueList } from './components/IssueList';
 import { RemediationPanel } from './components/RemediationPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
-import { uploadFile, analyzeDocument, analyzeURL } from './api';
+import { uploadFile, analyzeDocument, analyzeURL, getCurrentUser, getLoginURL, type UserSession } from './api';
+import { Eye, LogIn } from 'lucide-react';
 
 type View = 'upload' | 'dashboard';
 
@@ -17,6 +18,28 @@ function App() {
   const [targetLevel, setTargetLevel] = useState<WCAGLevel>('AA');
   const [selectedPrinciple, setSelectedPrinciple] = useState<string | null>(null);
   const [showRemediation, setShowRemediation] = useState(false);
+
+  // Authentication State
+  const [user, setUser] = useState<UserSession | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+
+  // Run SSO check on mount
+  useEffect(() => {
+    getCurrentUser()
+      .then((session) => {
+        if (session.authenticated) {
+          setUser(session);
+        } else {
+          setUser(null);
+        }
+      })
+      .catch(() => {
+        setUser(null);
+      })
+      .finally(() => {
+        setIsAuthChecking(false);
+      });
+  }, []);
 
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -72,6 +95,66 @@ function App() {
     setReport(updatedReport);
   }, []);
 
+  // Premium loading screen while checking SSO session
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-surface-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center animate-pulse shadow-lg shadow-cyan-500/25">
+            <Eye className="w-6 h-6 text-white animate-spin-slow" />
+          </div>
+          <p className="text-zinc-400 font-medium animate-pulse text-sm">Validating SSO credentials...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Premium SSO Login splash screen
+  if (!user || !user.authenticated) {
+    return (
+      <div className="min-h-screen bg-surface-950 flex items-center justify-center px-4 relative overflow-hidden">
+        {/* Decorative Background Gradients */}
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-violet-600/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="w-full max-w-md p-8 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-md relative z-10 shadow-2xl">
+          <div className="flex justify-center mb-6">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+              <Eye className="w-8 h-8 text-white" />
+            </div>
+          </div>
+          
+          <h1 className="text-2xl font-bold text-center text-zinc-100 mb-2">
+            WCAG 2.2 Remediation
+          </h1>
+          <p className="text-sm text-center text-zinc-500 mb-8 font-medium">
+            Enterprise Conformance Audit Platform
+          </p>
+          
+          <div className="p-4 bg-zinc-800/30 rounded-xl border border-zinc-800/80 mb-8">
+            <p className="text-xs text-zinc-400 leading-relaxed text-center">
+              Please sign in with your institution credential (UMass SSO or partner Enterprise account) to run audits and apply accessibility remediations.
+            </p>
+          </div>
+          
+          <button
+            onClick={() => { window.location.href = getLoginURL(); }}
+            className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-violet-600 hover:from-cyan-600 hover:to-violet-700 text-white font-semibold flex items-center justify-center gap-3 shadow-lg shadow-cyan-500/15 hover:shadow-cyan-500/25 transition-all transform hover:-translate-y-0.5 active:translate-y-0 duration-200"
+          >
+            <LogIn className="w-5 h-5" />
+            Sign In with Enterprise SSO
+          </button>
+          
+          <div className="mt-8 pt-6 border-t border-zinc-800/50 text-center">
+            <span className="text-[10px] text-zinc-600 font-semibold tracking-wider uppercase">
+              UMass System Partner Application
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-surface-950">
       {/* Skip Link - WCAG 2.4.1 Bypass Blocks */}
@@ -82,6 +165,7 @@ function App() {
       <Header 
         onNewAnalysis={handleNewAnalysis}
         showNewButton={view === 'dashboard'}
+        user={user}
       />
 
       <main id="main-content" className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">

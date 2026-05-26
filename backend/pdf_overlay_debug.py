@@ -12,7 +12,7 @@ import json
 import logging
 import zipfile
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ def generate_block_overlays_zip(
     pdf_path: Path,
     layouts: List[PageLayout],
     out_dir: Path,
+    zip_name: Optional[str] = None,
 ) -> Path:
     """
     Render overlay PNGs and bundle them into a ZIP.
@@ -95,8 +96,7 @@ def generate_block_overlays_zip(
         raise RuntimeError("Pillow is required for overlay generation")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    zip_name = f"layout_overlays_{pdf_path.stem}.zip"
-    zip_path = out_dir / zip_name
+    zip_path = out_dir / (zip_name or f"layout_overlays_{pdf_path.stem}.zip")
 
     doc = fitz.open(str(pdf_path))
     font = _get_font(11)

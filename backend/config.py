@@ -3,6 +3,7 @@ Configuration settings for the WCAG Accessibility Remediation Platform.
 """
 import os
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "WCAG Accessibility Remediation Platform"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
+    SECRET_KEY: str = "development_secret_key_change_me_to_something_secure"
     
     # Server
     HOST: str = "0.0.0.0"
@@ -25,6 +27,18 @@ class Settings(BaseSettings):
     UPLOAD_DIR: Path = BASE_DIR / "uploads"
     OUTPUT_DIR: Path = BASE_DIR / "output"
     OPENDATALOADER_ROOT: Path = BASE_DIR / "opendataloader-pdf-main"
+    LAYOUTLM_MODEL_DIR: Path = BASE_DIR / "layoutLM_trained"
+    
+    # Database
+    DATABASE_URL: str = "sqlite:///./wcag_platform.db"
+    
+    # Data Retention (in hours, clamped between 2 and 24 to support session resumption)
+    RETENTION_PERIOD_HOURS: int = Field(default=12, ge=2, le=24)
+    
+    # OpenID Connect (OIDC) Authentication
+    OIDC_CLIENT_ID: Optional[str] = None
+    OIDC_CLIENT_SECRET: Optional[str] = None
+    OIDC_DISCOVERY_URL: Optional[str] = None
     
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50
@@ -43,6 +57,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Allow configuring allowed origins via a comma-separated env variable
+_origins_env = os.getenv("CORS_ORIGINS_LIST")
+if _origins_env:
+    settings.CORS_ORIGINS = [o.strip() for o in _origins_env.split(",") if o.strip()]
 
 # In serverless demo deployments it's common to serve the frontend and API
 # from the same origin, but preview domains vary. Allow opting into permissive

@@ -1,5 +1,5 @@
 """
-Tests for the OpenDataLoader-backed PDF auto-tagging flow.
+Tests for LayoutLM-backed PDF auto-tagging flow.
 """
 from __future__ import annotations
 
@@ -9,7 +9,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from backend.layout_model import DocumentLayoutAnalyzer, PageLayout, StructureBlock
+from backend.layout_model import (
+    DocumentLayoutAnalyzer,
+    LABEL_TO_TAG,
+    PageLayout,
+    StructureBlock,
+    ensure_hf_model_layout,
+    resolve_layoutlm_model_dir,
+)
 from backend.pdf_auto_tagging import auto_tag_pdf
 from backend.pdf_overlay_debug import build_block_label
 from backend.pdf_structure_builder import TaggingResult
@@ -19,10 +26,36 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 REPO_ROOT = Path(__file__).parent.parent.parent
 
 
+def test_label_to_tag_mapping():
+    assert LABEL_TO_TAG["Title"] == "H1"
+    assert LABEL_TO_TAG["Section-header"] == "H2"
+    assert LABEL_TO_TAG["Picture"] == "Figure"
+    assert LABEL_TO_TAG["Page-header"] == "Artifact"
+
+
+def test_resolve_layoutlm_model_dir_defaults_to_repo_folder():
+    path = resolve_layoutlm_model_dir()
+    assert path.name == "layoutLM_trained"
+    assert path.parent == REPO_ROOT
+
+
+def test_ensure_hf_model_layout_accepts_aliased_filenames():
+    model_dir = REPO_ROOT / "layoutLM_trained"
+    if not model_dir.is_dir():
+        return
+
+    canonical = ensure_hf_model_layout(model_dir)
+    assert (canonical / "config.json").is_file()
+    assert (canonical / "tokenizer.json").is_file()
+    assert (canonical / "model.safetensors").is_file()
+
+
 def test_parse_opendataloader_json_with_sample_lorem():
     sample_path = REPO_ROOT / "opendataloader-pdf-main" / "samples" / "json" / "lorem.json"
-    data = json.loads(sample_path.read_text(encoding="utf-8"))
+    if not sample_path.is_file():
+        return
 
+    data = json.loads(sample_path.read_text(encoding="utf-8"))
     layouts = DocumentLayoutAnalyzer.parse_opendataloader_json(
         data,
         page_sizes=[(595.0, 842.0)],
@@ -59,27 +92,37 @@ def test_parse_opendataloader_json_maps_types_and_normalizes_coordinates():
     assert layouts[1].blocks[3].page_number == 1
 
 
-def test_auto_tag_pdf_reports_runtime_setup_errors(monkeypatch, tmp_path):
-    class FailingAnalyzer:
-        def _ensure_runtime(self):
-            raise RuntimeError("OpenDataLoader runtime not available")
+def test_auto_tag_pdf_reports_errors_on_failure(monkeypatch, tmp_path):
+    def failing_analyze(self, path):
+        raise RuntimeError("Layout analyzer failed")
 
-    monkeypatch.setattr("backend.pdf_auto_tagging.DocumentLayoutAnalyzer", FailingAnalyzer)
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        failing_analyze
+    )
 
-    result = auto_tag_pdf(tmp_path / "source.pdf")
+    monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: False)
+
+    source_path = tmp_path / "source.pdf"
+    source_path.touch()
+
+    result = auto_tag_pdf(source_path)
 
     assert result["success"] is False
-    assert "OpenDataLoader runtime not available" in result["error"]
+    assert "Layout analyzer failed" in result["error"]
 
 
 def test_auto_tag_pdf_skips_existing_tags_without_overwrite(monkeypatch, tmp_path):
-    class Analyzer:
-        def _ensure_runtime(self):
-            return None
-
-    monkeypatch.setattr("backend.pdf_auto_tagging.DocumentLayoutAnalyzer", Analyzer)
     monkeypatch.setattr("backend.pdf_auto_tagging.HAS_PIKEPDF", True)
     monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: True)
+
+    def should_not_run(self, path):
+        raise AssertionError("Layout analyzer should not run when skipping")
+
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        should_not_run
+    )
 
     result = auto_tag_pdf(tmp_path / "source.pdf", overwrite_tags=False)
 
@@ -89,48 +132,55 @@ def test_auto_tag_pdf_skips_existing_tags_without_overwrite(monkeypatch, tmp_pat
 
 
 def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
-    called = {}
-    layouts = [PageLayout(page_number=0, width=200, height=400, blocks=[StructureBlock(tag="P", page_number=0, content="Hello")])]
+    from backend.layout_model import PageLayout, StructureBlock
+    
+    mock_layouts = [
+        PageLayout(
+            page_number=0,
+            width=200,
+            height=400,
+            blocks=[
+                StructureBlock(
+                    tag="P",
+                    bbox=(100, 100, 200, 200),
+                    page_number=0,
+                    content="Hello",
+                    metadata={"raw_bbox": [10.0, 20.0, 30.0, 40.0]}
+                )
+            ],
+        )
+    ]
 
-    class Analyzer:
-        def _ensure_runtime(self):
-            return None
+    def fake_analyze(self, path):
+        return mock_layouts
 
-        def analyze_document(self, source_path):
-            called["analyze_document"] = source_path
-            return layouts
+    called_subprocess = []
+    def fake_run(cmd, **kwargs):
+        called_subprocess.append(cmd)
+        out_path = cmd[-1]
+        Path(out_path).touch()
+        import subprocess
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    class Builder:
-        def build_tagged_pdf(self, source_path, output_path, incoming_layouts, overwrite_existing_tags=False):
-            called["build"] = {
-                "source_path": source_path,
-                "output_path": output_path,
-                "layouts": incoming_layouts,
-                "overwrite_existing_tags": overwrite_existing_tags,
-            }
-            return TaggingResult(
-                success=True,
-                output_path=output_path,
-                total_pages=1,
-                total_tags_created=1,
-                tag_counts={"P": 1},
-            )
-
-    monkeypatch.setattr("backend.pdf_auto_tagging.DocumentLayoutAnalyzer", Analyzer)
-    monkeypatch.setattr("backend.pdf_auto_tagging.PDFStructureBuilder", Builder)
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        fake_analyze
+    )
+    monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr("backend.pdf_auto_tagging.HAS_PIKEPDF", True)
     monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: True)
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
+    source_path.touch()
+
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 
     assert result["success"] is True
     assert result["tags_created"] == 1
-    assert called["build"]["overwrite_existing_tags"] is True
-    assert called["build"]["layouts"] == layouts
-    assert called["build"]["source_path"] == source_path
-    assert called["build"]["output_path"] == output_path
+    assert len(called_subprocess) == 1
+    assert called_subprocess[0][1] == str(source_path)
+    assert called_subprocess[0][3] == str(output_path)
 
 
 def test_overlay_labels_use_tag_and_text_only():

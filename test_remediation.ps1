@@ -63,7 +63,7 @@ Write-Host "   - Setting language: $Language"
 Write-Host "   - Generating bookmarks: Yes"
 
 $encodedTitle = [System.Web.HttpUtility]::UrlEncode($Title)
-$remediateUrl = "$baseUrl/pdf/remediate?file_id=$fileId&title=$encodedTitle&language=$Language&add_bookmarks=true&generate_report=true"
+$remediateUrl = "$baseUrl/pdf/remediate?file_id=$fileId&title=$encodedTitle&language=$Language&add_bookmarks=true&auto_tag=true&generate_report=true"
 
 try {
     $remediateResponse = Invoke-RestMethod -Uri $remediateUrl -Method Post
@@ -99,7 +99,7 @@ if ($remediateResponse.report_filename) {
         
         # Open the report
         Write-Host "`nOpening report..." -ForegroundColor Yellow
-        Start-Process $localReportPath
+        # Start-Process $localReportPath
     } catch {
         Write-Host "   Download URL: $reportUrl" -ForegroundColor Gray
     }
@@ -107,7 +107,7 @@ if ($remediateResponse.report_filename) {
 
 # Download fixed PDF
 Write-Host "`nDOWNLOAD FIXED PDF:" -ForegroundColor White
-$fixedPdfPath = Join-Path (Get-Location) "output" "$($PdfFile -replace '\.pdf$', '_FIXED.pdf')"
+$fixedPdfPath = Join-Path (Join-Path (Get-Location) "output") "$($PdfFile -replace '\.pdf$', '_FIXED.pdf')"
 New-Item -ItemType Directory -Path (Split-Path $fixedPdfPath) -Force | Out-Null
 
 try {

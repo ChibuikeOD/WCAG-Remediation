@@ -447,10 +447,13 @@ class PDFRemediator:
                 if title:
                     with pdf.open_metadata() as meta:
                         meta['dc:title'] = title
+                    if "/ViewerPreferences" not in pdf.Root:
+                        pdf.Root.ViewerPreferences = pikepdf.Dictionary()
+                    pdf.Root.ViewerPreferences["/DisplayDocTitle"] = True
                     results.append(RemediationResult(
                         issue_id="pdf-title",
                         success=True,
-                        message=f"Added document title: {title}",
+                        message=f"Added document title: {title} (and enabled DisplayDocTitle)",
                         new_value=title
                     ))
                     self.changes.append({"type": "add_title", "title": title})
@@ -491,14 +494,14 @@ class PDFRemediator:
         overwrite_tags: bool = True,
     ) -> Dict[str, Any]:
         """
-        Automatically tag a PDF using OpenDataLoader layout extraction.
+        Automatically tag a PDF using the fine-tuned LayoutLMv3 model.
 
         WCAG 1.3.1 Info and Relationships (Level A)
 
         Args:
             output_path: Where to save the tagged PDF (defaults to self.file_path).
-            model_path: Legacy compatibility argument; ignored.
-            confidence_threshold: Legacy compatibility argument; ignored.
+            model_path: Optional path to model directory (defaults to layoutLM_trained).
+            confidence_threshold: Minimum per-token confidence to keep a label.
             overwrite_tags: Rebuild an existing structure tree when True.
 
         Returns:
@@ -513,6 +516,8 @@ class PDFRemediator:
                 self.file_path,
                 output_path=target,
                 overwrite_tags=overwrite_tags,
+                model_path=model_path,
+                confidence_threshold=confidence_threshold,
             )
 
             if result.get("success") and not result.get("skipped"):
@@ -575,10 +580,11 @@ class PDFRemediator:
         should_tag = not is_tagged or overwrite_tags
         if should_tag:
             reason = "overwrite requested" if is_tagged else "untagged"
-            logger.info("Running PDF structure tagging (%s)...", reason)
+            logger.info("Running LayoutLM PDF tagging (%s)...", reason)
             tag_result = self.auto_tag_document(
                 output_path=target,
                 overwrite_tags=overwrite_tags,
+                confidence_threshold=0.0,
             )
             if tag_result.get("success"):
                 results.append(RemediationResult(

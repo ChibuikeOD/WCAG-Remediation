@@ -1,11 +1,13 @@
-import { Eye, Plus } from 'lucide-react';
+import { Eye, Plus, LogOut } from 'lucide-react';
+import type { UserSession } from '../api';
 
 interface HeaderProps {
   onNewAnalysis: () => void;
   showNewButton: boolean;
+  user: UserSession | null;
 }
 
-export function Header({ onNewAnalysis, showNewButton }: HeaderProps) {
+export function Header({ onNewAnalysis, showNewButton, user }: HeaderProps) {
   return (
     <header className="border-b border-zinc-800 bg-surface-900/80 backdrop-blur-sm sticky top-0 z-40" role="banner">
       <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" aria-label="Main navigation">
@@ -30,6 +32,13 @@ export function Header({ onNewAnalysis, showNewButton }: HeaderProps) {
 
           {/* Actions */}
           <div className="flex items-center gap-4">
+            {user?.authenticated && (
+              <div className="hidden md:flex flex-col text-right">
+                <span className="text-sm text-zinc-300 font-medium">{user.name}</span>
+                <span className="text-xs text-zinc-500">{user.email}</span>
+              </div>
+            )}
+            
             {showNewButton && (
               <button
                 onClick={onNewAnalysis}
@@ -39,6 +48,17 @@ export function Header({ onNewAnalysis, showNewButton }: HeaderProps) {
                 <Plus className="w-4 h-4" aria-hidden="true" />
                 <span className="hidden sm:inline">Start over</span>
               </button>
+            )}
+
+            {user?.authenticated && (
+              <a
+                href="/api/auth/logout"
+                className="btn btn-secondary text-sm flex items-center gap-2 border border-zinc-700 hover:bg-zinc-800 text-zinc-300"
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Sign out</span>
+              </a>
             )}
 
             {/* External Links */}

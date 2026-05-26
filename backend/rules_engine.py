@@ -235,7 +235,7 @@ class RulesEngine:
         
         # Check if this is a special check_type that requires different handling
         check_type = getattr(check, 'check_type', None) or (
-            check.model_extra.get('check_type') if hasattr(check, 'model_extra') else None
+            check.model_extra.get('check_type') if getattr(check, 'model_extra', None) is not None else None
         )
         
         if check_type:
@@ -328,7 +328,7 @@ class RulesEngine:
         for rule in self.get_all_rules():
             for check in rule.selector_checks:
                 check_type = getattr(check, 'check_type', None) or (
-                    check.model_extra.get('check_type') if hasattr(check, 'model_extra') else None
+                    check.model_extra.get('check_type') if getattr(check, 'model_extra', None) is not None else None
                 )
                 if check_type in BROWSER_REQUIRED_CHECKS:
                     if check_type not in browser_checks:

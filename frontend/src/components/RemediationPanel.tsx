@@ -8,10 +8,21 @@ import {
   Loader2,
   AlertTriangle,
   FileCheck,
-  Layers
+  Layers,
+  GitCompare
 } from 'lucide-react';
-import type { AccessibilityReport, AccessibilityIssue, RemediationResult } from '../types';
-import { remediateDocument, getRemediatedFileURL, generateModelOverlays } from '../api';
+import type {
+  AccessibilityReport,
+  AccessibilityIssue,
+  RemediationResult,
+  TaggingComparisonReport,
+} from '../types';
+import {
+  remediateDocument,
+  getRemediatedFileURL,
+  generateModelOverlays,
+  compareTaggingPipelines,
+} from '../api';
 
 interface RemediationPanelProps {
   report: AccessibilityReport;
@@ -42,9 +53,37 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
   const [overlayLoading, setOverlayLoading] = useState(false);
   const [overlayDone, setOverlayDone] = useState(false);
   const [overwriteTags, setOverwriteTags] = useState(false);
+  const [compareTagging, setCompareTagging] = useState(false);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareResult, setCompareResult] = useState<TaggingComparisonReport | null>(null);
 
   const isPdf = report.document.file_type === 'pdf';
   const automatableIssues = report.all_issues.filter(i => i.automatable_fix && !i.fixed);
+
+  const handleCompareTagging = async () => {
+    setCompareLoading(true);
+    setError(null);
+    try {
+      if (compareTagging) {
+        const blob = await compareTaggingPipelines(report.id, { includeOverlays: true });
+        const url = URL.createObjectURL(blob as Blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tagging_compare_${report.document.filename.replace(/\.pdf$/i, '')}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        const data = (await compareTaggingPipelines(report.id)) as TaggingComparisonReport;
+        setCompareResult(data);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Tagging comparison failed');
+    } finally {
+      setCompareLoading(false);
+    }
+  };
 
   const handleDownloadOverlays = async () => {
     setOverlayLoading(true);
@@ -236,13 +275,11 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                       />
                       <div>
                         <span className="font-medium text-zinc-300">
-                          Overwrite existing tags (rebuild structure with OpenDataLoader)
+                          Overwrite existing tags (rebuild structure with LayoutLM)
                         </span>
                         <p className="text-xs text-amber-400/80 mt-1">
-                          Forces the OpenDataLoader layout engine to rebuild the PDF structure even
-                          if it already has a structure tree. Use this for "fake-tagged" PDFs where
-                          the existing tags are low-quality or incomplete. Existing tags will be
-                          replaced.
+                          Forces LayoutLM to re-tag the entire PDF even if it already has a
+                          structure tree. Use for "fake-tagged" PDFs with low-quality tags.
                         </p>
                       </div>
                     </label>
@@ -269,6 +306,69 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                       </div>
                     </label>
                   </div>
+                  <div className="p-4 bg-zinc-800/50 border border-zinc-700 rounded-lg space-y-3">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={compareTagging}
+                        onChange={(e) => setCompareTagging(e.target.checked)}
+                        className="mt-1 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+                      />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <GitCompare className="w-4 h-4 text-zinc-400" aria-hidden="true" />
+                          <span className="font-medium text-zinc-300">
+                            Include overlay images in comparison ZIP
+                          </span>
+                        </div>
+                        <p className="text-xs text-zinc-500 mt-1">
+                          Runs LayoutLM and OpenDataLoader on the same PDF and compares block tags.
+                        </p>
+                      </div>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleCompareTagging}
+                      disabled={compareLoading}
+                      className="btn btn-secondary w-full"
+                    >
+                      {compareLoading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                          Comparing pipelines...
+                        </>
+                      ) : (
+                        <>
+                          <GitCompare className="w-4 h-4" aria-hidden="true" />
+                          Compare LayoutLM vs OpenDataLoader
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {compareResult?.comparison?.summary && (
+                <div className="mb-6 p-4 bg-violet-500/10 border border-violet-500/30 rounded-lg text-sm text-violet-100 space-y-2">
+                  <p className="font-semibold text-violet-200">Tagging comparison summary</p>
+                  <p>
+                    LayoutLM blocks: {compareResult.comparison.summary.layoutlm.blocks}
+                    {' · '}
+                    OpenDataLoader blocks: {compareResult.comparison.summary.opendataloader.blocks}
+                  </p>
+                  <p>
+                    Matched pairs: {compareResult.comparison.summary.matched_block_pairs}
+                    {' · '}
+                    Tag agreement:{' '}
+                    {compareResult.comparison.summary.overall_agreement_rate != null
+                      ? `${Math.round(compareResult.comparison.summary.overall_agreement_rate * 100)}%`
+                      : 'n/a'}
+                  </p>
+                  {compareResult.report_filename && (
+                    <p className="text-xs text-violet-300/80">
+                      Full report saved as {compareResult.report_filename} on the server.
+                    </p>
+                  )}
                 </div>
               )}
 

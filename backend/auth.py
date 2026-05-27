@@ -47,6 +47,25 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> Optiona
     Dependency provider to retrieve the logged-in user from the session.
     Returns None if no user is authenticated.
     """
+    # ── Auth-bypass mode (testing/demo only) ──────────────────────
+    if settings.DISABLE_AUTH:
+        mock_id = "dev_user_001"
+        mock_email = "dev@accesspdf.local"
+        mock_name = "Dev User"
+        
+        user = db.query(User).filter(User.id == mock_id).first()
+        if not user:
+            try:
+                user = User(id=mock_id, email=mock_email, name=mock_name)
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Failed to create mock user in db: {e}")
+                return User(id=mock_id, email=mock_email, name=mock_name)
+        return user
+
     user_id = request.session.get("user_id")
     if not user_id:
         return None

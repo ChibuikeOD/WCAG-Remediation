@@ -6,6 +6,9 @@ import { IssueList } from './components/IssueList';
 import { RemediationPanel } from './components/RemediationPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
 import { uploadFile, analyzeDocument, getCurrentUser, getLoginURL, type UserSession } from './api';
+
+const DEMO_MODE = import.meta.env.VITE_DISABLE_AUTH === 'true';
+const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@accesspdf.com' };
 import { FileCheck, LogIn, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
 
 type View = 'upload' | 'dashboard';
@@ -20,11 +23,13 @@ function App() {
   const [showRemediation, setShowRemediation] = useState(false);
 
   // Authentication state
-  const [user, setUser] = useState<UserSession | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  // DEMO_MODE: skip the /auth/me call entirely and render straight into the app.
+  const [user, setUser] = useState<UserSession | null>(DEMO_MODE ? DEMO_USER : null);
+  const [isAuthChecking, setIsAuthChecking] = useState(!DEMO_MODE);
 
-  // SSO check on mount
+  // SSO check on mount (skipped when VITE_DISABLE_AUTH=true)
   useEffect(() => {
+    if (DEMO_MODE) return;
     getCurrentUser()
       .then((session) => {
         setUser(session.authenticated ? session : null);

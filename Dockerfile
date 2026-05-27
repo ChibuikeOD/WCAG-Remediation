@@ -19,8 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify installations
-RUN java -version && python -m playwright --version
+# Verify Java is available
+RUN java -version
 
 # Copy requirements file first to cache package dependencies
 COPY backend/requirements.txt /app/backend/requirements.txt

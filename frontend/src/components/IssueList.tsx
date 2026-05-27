@@ -1,17 +1,17 @@
 import { useState, useMemo } from 'react';
-import { 
-  AlertTriangle, 
-  AlertCircle, 
-  Info, 
-  ChevronDown, 
-  ChevronUp, 
+import {
+  AlertTriangle,
+  AlertCircle,
+  Info,
+  ChevronDown,
+  ChevronUp,
   X,
   Code,
   Lightbulb,
   ExternalLink,
   Filter,
   Search,
-  CheckCircle2
+  CheckCircle2,
 } from 'lucide-react';
 import type { AccessibilityIssue, Severity, WCAGLevel } from '../types';
 
@@ -22,59 +22,49 @@ interface IssueListProps {
 }
 
 const severityConfig: Record<Severity, { icon: typeof AlertCircle; label: string; class: string }> = {
-  error: { icon: AlertCircle, label: 'Error', class: 'badge-error' },
+  error:   { icon: AlertCircle,   label: 'Error',   class: 'badge-error'   },
   warning: { icon: AlertTriangle, label: 'Warning', class: 'badge-warning' },
-  info: { icon: Info, label: 'Info', class: 'badge-info' },
+  info:    { icon: Info,          label: 'Info',    class: 'badge-info'    },
 };
 
-const levelColors: Record<WCAGLevel, string> = {
-  A: 'bg-emerald-500/20 text-emerald-400',
-  AA: 'bg-amber-500/20 text-amber-400',
-  AAA: 'bg-violet-500/20 text-violet-400',
-};
+const levelStyle = 'badge badge-info';
 
 export function IssueList({ issues, principleFilter, onClearFilter }: IssueListProps) {
   const [expandedIssue, setExpandedIssue] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery]     = useState('');
   const [severityFilter, setSeverityFilter] = useState<Severity | 'all'>('all');
-  const [levelFilter, setLevelFilter] = useState<WCAGLevel | 'all'>('all');
+  const [levelFilter, setLevelFilter]     = useState<WCAGLevel | 'all'>('all');
 
   const filteredIssues = useMemo(() => {
-    return issues.filter(issue => {
-      // Search filter
+    return issues.filter((issue) => {
       if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const matchesSearch = 
-          issue.rule_id.toLowerCase().includes(query) ||
-          issue.rule_name.toLowerCase().includes(query) ||
-          issue.message.toLowerCase().includes(query);
-        if (!matchesSearch) return false;
+        const q = searchQuery.toLowerCase();
+        if (
+          !issue.rule_id.toLowerCase().includes(q) &&
+          !issue.rule_name.toLowerCase().includes(q) &&
+          !issue.message.toLowerCase().includes(q)
+        ) return false;
       }
-
-      // Severity filter
-      if (severityFilter !== 'all' && issue.severity !== severityFilter) {
-        return false;
-      }
-
-      // Level filter
-      if (levelFilter !== 'all' && issue.wcag_level !== levelFilter) {
-        return false;
-      }
-
+      if (severityFilter !== 'all' && issue.severity !== severityFilter) return false;
+      if (levelFilter    !== 'all' && issue.wcag_level !== levelFilter)   return false;
       return true;
     });
   }, [issues, searchQuery, severityFilter, levelFilter]);
 
-  const toggleExpand = (issueId: string) => {
-    setExpandedIssue(expandedIssue === issueId ? null : issueId);
-  };
+  const toggleExpand = (id: string) =>
+    setExpandedIssue(expandedIssue === id ? null : id);
 
   return (
     <section aria-labelledby="issues-heading">
-      {/* Header */}
+
+      {/* Header row */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
-          <h2 id="issues-heading" className="text-xl font-semibold text-zinc-100">
+          <h2
+            id="issues-heading"
+            className="text-base font-semibold"
+            style={{ color: '#e8edf4' }}
+          >
             Issues
           </h2>
           <span className="badge badge-info">
@@ -83,7 +73,7 @@ export function IssueList({ issues, principleFilter, onClearFilter }: IssueListP
           {principleFilter && (
             <button
               onClick={onClearFilter}
-              className="badge badge-warning flex items-center gap-1"
+              className="badge badge-warning flex items-center gap-1 cursor-pointer"
               aria-label={`Clear ${principleFilter} filter`}
             >
               {principleFilter}
@@ -96,24 +86,38 @@ export function IssueList({ issues, principleFilter, onClearFilter }: IssueListP
         <div className="flex flex-wrap items-center gap-3">
           {/* Search */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" aria-hidden="true" />
+            <Search
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+              style={{ color: '#4a607a' }}
+              aria-hidden="true"
+            />
             <input
               type="search"
-              placeholder="Search issues..."
+              placeholder="Search issues…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              className="pl-9 pr-4 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              style={{
+                background: '#111c2d',
+                border: '1px solid #1a2840',
+                color: '#e8edf4',
+              }}
               aria-label="Search issues"
             />
           </div>
 
-          {/* Severity Filter */}
+          {/* Severity filter */}
           <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-zinc-500" aria-hidden="true" />
+            <Filter className="w-4 h-4" style={{ color: '#4a607a' }} aria-hidden="true" />
             <select
               value={severityFilter}
               onChange={(e) => setSeverityFilter(e.target.value as Severity | 'all')}
-              className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              className="rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              style={{
+                background: '#111c2d',
+                border: '1px solid #1a2840',
+                color: '#e8edf4',
+              }}
               aria-label="Filter by severity"
             >
               <option value="all">All Severities</option>
@@ -123,11 +127,16 @@ export function IssueList({ issues, principleFilter, onClearFilter }: IssueListP
             </select>
           </div>
 
-          {/* Level Filter */}
+          {/* Level filter */}
           <select
             value={levelFilter}
             onChange={(e) => setLevelFilter(e.target.value as WCAGLevel | 'all')}
-            className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            className="rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            style={{
+              background: '#111c2d',
+              border: '1px solid #1a2840',
+              color: '#e8edf4',
+            }}
             aria-label="Filter by WCAG level"
           >
             <option value="all">All Levels</option>
@@ -138,13 +147,15 @@ export function IssueList({ issues, principleFilter, onClearFilter }: IssueListP
         </div>
       </div>
 
-      {/* Issues List */}
+      {/* Issues */}
       {filteredIssues.length === 0 ? (
-        <div className="card text-center py-12">
-          <p className="text-zinc-400">No issues match your filters</p>
+        <div className="card text-center py-14">
+          <p className="text-sm" style={{ color: '#4a607a' }}>
+            No issues match your current filters
+          </p>
         </div>
       ) : (
-        <ul className="space-y-3" role="list" aria-label="Accessibility issues">
+        <ul className="space-y-2" role="list" aria-label="Accessibility issues">
           {filteredIssues.map((issue) => (
             <IssueCard
               key={issue.id}
@@ -159,34 +170,48 @@ export function IssueList({ issues, principleFilter, onClearFilter }: IssueListP
   );
 }
 
-function IssueCard({ 
-  issue, 
-  isExpanded, 
-  onToggle 
-}: { 
-  issue: AccessibilityIssue; 
-  isExpanded: boolean; 
+/* ── Issue Card ─────────────────────────────────────────────── */
+function IssueCard({
+  issue,
+  isExpanded,
+  onToggle,
+}: {
+  issue: AccessibilityIssue;
+  isExpanded: boolean;
   onToggle: () => void;
 }) {
-  const severity = severityConfig[issue.severity];
+  const severity    = severityConfig[issue.severity];
   const SeverityIcon = severity.icon;
 
+  const severityIconColor = issue.fixed
+    ? '#86efac'
+    : issue.severity === 'error'
+    ? '#fca5a5'
+    : issue.severity === 'warning'
+    ? '#fcd34d'
+    : '#93c5fd';
+
   return (
-    <li className={`card !p-0 overflow-hidden ${issue.fixed ? 'opacity-60' : ''}`}>
-      {/* Issue Header */}
+    <li
+      className="rounded-xl overflow-hidden"
+      style={{
+        background: '#0d1420',
+        border: '1px solid #1a2840',
+        opacity: issue.fixed ? 0.55 : 1,
+      }}
+    >
+      {/* Row button */}
       <button
         onClick={onToggle}
-        className="w-full p-4 flex items-start gap-4 text-left hover:bg-zinc-800/50 transition-colors"
+        className="w-full p-4 sm:p-5 flex items-start gap-4 text-left transition-colors duration-100"
+        style={{ background: 'transparent' }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#111c2d')}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
         aria-expanded={isExpanded}
         aria-controls={`issue-details-${issue.id}`}
       >
-        {/* Severity / Fixed Icon */}
-        <div className={`flex-shrink-0 mt-0.5 ${
-          issue.fixed ? 'text-emerald-400' :
-          issue.severity === 'error' ? 'text-red-400' :
-          issue.severity === 'warning' ? 'text-amber-400' :
-          'text-blue-400'
-        }`}>
+        {/* Severity icon */}
+        <div className="flex-shrink-0 mt-0.5" style={{ color: severityIconColor }}>
           {issue.fixed ? (
             <CheckCircle2 className="w-5 h-5" aria-hidden="true" />
           ) : (
@@ -196,35 +221,28 @@ function IssueCard({
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            {/* WCAG ID */}
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            {/* WCAG rule link */}
             <a
               href={`https://www.w3.org/WAI/WCAG22/Understanding/${issue.rule_id.replace('.', '')}`}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
-              className="font-mono text-sm text-cyan-400 hover:underline"
+              className="font-mono text-xs font-medium hover:underline underline-offset-2"
+              style={{ color: '#60a5fa' }}
               aria-label={`WCAG ${issue.rule_id} ${issue.rule_name} (opens in new tab)`}
             >
               {issue.rule_id}
             </a>
 
-            {/* Level Badge */}
-            <span className={`badge ${levelColors[issue.wcag_level]}`}>
-              {issue.wcag_level}
-            </span>
+            {/* Level badge */}
+            <span className={levelStyle}>{issue.wcag_level}</span>
 
-            {/* Fixed Badge */}
             {issue.fixed ? (
-              <span className="badge bg-emerald-500/20 text-emerald-400">Fixed</span>
+              <span className="badge badge-success">Fixed</span>
             ) : (
               <>
-                {/* Severity Badge */}
-                <span className={`badge ${severity.class}`}>
-                  {severity.label}
-                </span>
-
-                {/* Automatable Badge */}
+                <span className={`badge ${severity.class}`}>{severity.label}</span>
                 {issue.automatable_fix && (
                   <span className="badge badge-success">Auto-fixable</span>
                 )}
@@ -232,50 +250,74 @@ function IssueCard({
             )}
           </div>
 
-          <h3 className={`font-medium mb-1 ${issue.fixed ? 'text-zinc-400 line-through' : 'text-zinc-100'}`}>
+          <h3
+            className="text-sm font-medium mb-0.5"
+            style={{ color: issue.fixed ? '#4a607a' : '#e8edf4' }}
+          >
             {issue.rule_name}
           </h3>
-          <p className="text-sm text-zinc-400 line-clamp-2">
+          <p
+            className="text-sm line-clamp-2"
+            style={{ color: '#7a90a8' }}
+          >
             {issue.fixed ? 'This issue has been remediated.' : issue.message}
           </p>
         </div>
 
-        {/* Expand Icon */}
-        <div className="flex-shrink-0 text-zinc-500">
+        {/* Expand chevron */}
+        <div className="flex-shrink-0" style={{ color: '#4a607a' }}>
           {isExpanded ? (
-            <ChevronUp className="w-5 h-5" aria-hidden="true" />
+            <ChevronUp className="w-4 h-4" aria-hidden="true" />
           ) : (
-            <ChevronDown className="w-5 h-5" aria-hidden="true" />
+            <ChevronDown className="w-4 h-4" aria-hidden="true" />
           )}
         </div>
       </button>
 
-      {/* Expanded Details */}
+      {/* Expanded detail panel */}
       {isExpanded && (
-        <div 
+        <div
           id={`issue-details-${issue.id}`}
-          className="border-t border-zinc-800 p-4 space-y-4 bg-zinc-900/50"
+          className="px-5 pb-5 pt-4 space-y-5"
+          style={{ borderTop: '1px solid #1a2840', background: '#080c14' }}
         >
-          {/* Fix Suggestion */}
+          {/* Fix suggestion */}
           <div className="flex gap-3">
-            <Lightbulb className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <Lightbulb
+              className="w-4 h-4 flex-shrink-0 mt-0.5"
+              style={{ color: '#fcd34d' }}
+              aria-hidden="true"
+            />
             <div>
-              <h4 className="text-sm font-medium text-zinc-300 mb-1">Suggested Fix</h4>
-              <p className="text-sm text-zinc-400">{issue.fix_suggestion}</p>
+              <h4 className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#7a90a8' }}>
+                Suggested Fix
+              </h4>
+              <p className="text-sm leading-relaxed" style={{ color: '#a0b4c8' }}>
+                {issue.fix_suggestion}
+              </p>
             </div>
           </div>
 
-          {/* Element Location */}
+          {/* Element location */}
           {issue.element_location?.html_snippet && (
             <div className="flex gap-3">
-              <Code className="w-5 h-5 text-cyan-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+              <Code
+                className="w-4 h-4 flex-shrink-0 mt-0.5"
+                style={{ color: '#60a5fa' }}
+                aria-hidden="true"
+              />
               <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-medium text-zinc-300 mb-1">Affected Element</h4>
-                <pre className="text-xs bg-zinc-800 p-3 rounded-lg overflow-x-auto text-zinc-300 font-mono">
+                <h4 className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#7a90a8' }}>
+                  Affected Element
+                </h4>
+                <pre
+                  className="text-xs p-3 rounded-lg overflow-x-auto font-mono"
+                  style={{ background: '#111c2d', color: '#a0b4c8' }}
+                >
                   {issue.element_location.html_snippet}
                 </pre>
                 {issue.element_location.selector && (
-                  <p className="text-xs text-zinc-500 mt-2 font-mono">
+                  <p className="text-xs mt-2 font-mono" style={{ color: '#4a607a' }}>
                     Selector: {issue.element_location.selector}
                   </p>
                 )}
@@ -286,14 +328,20 @@ function IssueCard({
           {/* Evidence */}
           {issue.evidence && Object.keys(issue.evidence).length > 0 && (
             <div className="flex gap-3">
-              <Info className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+              <Info
+                className="w-4 h-4 flex-shrink-0 mt-0.5"
+                style={{ color: '#93c5fd' }}
+                aria-hidden="true"
+              />
               <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-medium text-zinc-300 mb-1">Evidence</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wide mb-1.5" style={{ color: '#7a90a8' }}>
+                  Evidence
+                </h4>
                 <dl className="text-sm grid grid-cols-2 gap-x-4 gap-y-1">
                   {Object.entries(issue.evidence).map(([key, value]) => (
                     <div key={key} className="contents">
-                      <dt className="text-zinc-500">{key.replace(/_/g, ' ')}:</dt>
-                      <dd className="text-zinc-300 truncate">
+                      <dt style={{ color: '#4a607a' }}>{key.replace(/_/g, ' ')}:</dt>
+                      <dd className="truncate" style={{ color: '#a0b4c8' }}>
                         {typeof value === 'object' ? JSON.stringify(value) : String(value)}
                       </dd>
                     </div>
@@ -303,16 +351,17 @@ function IssueCard({
             </div>
           )}
 
-          {/* WCAG Reference Link */}
-          <div className="pt-2">
+          {/* WCAG reference */}
+          <div className="pt-1">
             <a
               href={`https://www.w3.org/WAI/WCAG22/Understanding/${issue.rule_id.replace('.', '')}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:underline"
+              className="inline-flex items-center gap-2 text-xs font-medium hover:underline underline-offset-2 transition-colors"
+              style={{ color: '#60a5fa' }}
             >
-              <ExternalLink className="w-4 h-4" aria-hidden="true" />
-              Read WCAG {issue.rule_id} Understanding Document
+              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+              WCAG {issue.rule_id} Understanding Document
               <span className="sr-only">(opens in new tab)</span>
             </a>
           </div>
@@ -321,8 +370,3 @@ function IssueCard({
     </li>
   );
 }
-
-
-
-
-

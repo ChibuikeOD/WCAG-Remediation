@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     OIDC_CLIENT_ID: Optional[str] = None
     OIDC_CLIENT_SECRET: Optional[str] = None
     OIDC_DISCOVERY_URL: Optional[str] = None
+
+    # Development / Testing
+    # Set DISABLE_AUTH=true to skip the login screen entirely.
+    # /auth/me will return a pre-authenticated mock user automatically.
+    # Never enable this in production.
+    DISABLE_AUTH: bool = False
     
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50

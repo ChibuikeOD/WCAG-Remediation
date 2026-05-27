@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: accesspdf-api
+    runtime: python
+    region: ohio          # pick the region closest to your users
+    plan: free            # change to "starter" or higher for production
+    rootDir: .
+    buildCommand: pip install -r api/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DISABLE_AUTH
+        value: "true"              # remove when you add real SSO
+      - key: SECRET_KEY
+        generateValue: true        # Render auto-generates a secure random value
+      - key: CORS_ALLOW_ALL
+        value: "true"              # allows your Vercel frontend to call this API
+      - key: DATABASE_URL
+        value: sqlite:////tmp/accesspdf.db   # ephemeral — swap for Postgres in production
+      - key: UPLOAD_DIR
+        value: /tmp/uploads
+      - key: OUTPUT_DIR
+        value: /tmp/output
+      # Uncomment and fill in when you have real SSO credentials:
+      # - key: OIDC_CLIENT_ID
+      #   sync: false
+      # - key: OIDC_CLIENT_SECRET
+      #   sync: false
+      # - key: OIDC_DISCOVERY_URL
+      #   sync: false

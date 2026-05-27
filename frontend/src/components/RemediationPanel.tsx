@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import { 
-  X, 
-  Wrench, 
-  CheckCircle, 
-  XCircle, 
+import {
+  X,
+  Wrench,
+  CheckCircle,
+  XCircle,
   Download,
   Loader2,
   AlertTriangle,
   FileCheck,
   Layers,
-  GitCompare
+  GitCompare,
 } from 'lucide-react';
 import type {
   AccessibilityReport,
@@ -31,44 +31,45 @@ interface RemediationPanelProps {
 }
 
 const PDF_ISSUE_ID_TO_RULE: Record<string, string> = {
-  'pdf-title': '2.4.2',
-  'pdf-lang': '3.1.1',
-  'pdf-auto-tag': '1.3.1',
-  'pdf-heading-hierarchy': '1.3.1',
-  'pdf-table-headers': '1.3.1',
-  'pdf-list-structure': '1.3.1',
-  'pdf-span-overuse': '1.3.1',
-  'pdf-reading-order': '1.3.2',
-  'pdf-untagged-urls': '2.4.4',
-  'pdf-bookmarks': '2.4.5',
-  'pdf-ocr': '1.4.5',
-  'pdf-form-labels': '3.3.2',
+  'pdf-title':            '2.4.2',
+  'pdf-lang':             '3.1.1',
+  'pdf-auto-tag':         '1.3.1',
+  'pdf-heading-hierarchy':'1.3.1',
+  'pdf-table-headers':    '1.3.1',
+  'pdf-list-structure':   '1.3.1',
+  'pdf-span-overuse':     '1.3.1',
+  'pdf-reading-order':    '1.3.2',
+  'pdf-untagged-urls':    '2.4.4',
+  'pdf-bookmarks':        '2.4.5',
+  'pdf-ocr':              '1.4.5',
+  'pdf-form-labels':      '3.3.2',
 };
 
 export function RemediationPanel({ report, onClose, onComplete }: RemediationPanelProps) {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [results, setResults] = useState<RemediationResult[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [debugOverlays, setDebugOverlays] = useState(false);
+  const [results, setResults]           = useState<RemediationResult[] | null>(null);
+  const [error, setError]               = useState<string | null>(null);
+  const [debugOverlays, setDebugOverlays]   = useState(false);
   const [overlayLoading, setOverlayLoading] = useState(false);
-  const [overlayDone, setOverlayDone] = useState(false);
-  const [overwriteTags, setOverwriteTags] = useState(false);
+  const [overlayDone, setOverlayDone]       = useState(false);
+  const [overwriteTags, setOverwriteTags]   = useState(false);
   const [compareTagging, setCompareTagging] = useState(false);
   const [compareLoading, setCompareLoading] = useState(false);
-  const [compareResult, setCompareResult] = useState<TaggingComparisonReport | null>(null);
+  const [compareResult, setCompareResult]   = useState<TaggingComparisonReport | null>(null);
 
-  const isPdf = report.document.file_type === 'pdf';
-  const automatableIssues = report.all_issues.filter(i => i.automatable_fix && !i.fixed);
+  const isPdf             = report.document.file_type === 'pdf';
+  const automatableIssues = report.all_issues.filter((i) => i.automatable_fix && !i.fixed);
 
+  /* ── Handlers ─────────────────────────────────────────────── */
   const handleCompareTagging = async () => {
     setCompareLoading(true);
     setError(null);
     try {
       if (compareTagging) {
         const blob = await compareTaggingPipelines(report.id, { includeOverlays: true });
-        const url = URL.createObjectURL(blob as Blob);
-        const a = document.createElement('a');
-        a.href = url;
+        const url  = URL.createObjectURL(blob as Blob);
+        const a    = document.createElement('a');
+        a.href     = url;
         a.download = `tagging_compare_${report.document.filename.replace(/\.pdf$/i, '')}.zip`;
         document.body.appendChild(a);
         a.click();
@@ -89,10 +90,10 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
     setOverlayLoading(true);
     try {
       const blob = await generateModelOverlays(report.id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `layout_overlays.zip`;
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = 'layout_overlays.zip';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -118,48 +119,43 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
 
       setResults(response.results);
 
-      const successfulResults = response.results.filter(r => r.success);
+      const successfulResults = response.results.filter((r) => r.success);
+      const fixedRuleIds      = new Set<string>();
 
-      const fixedRuleIds = new Set<string>();
       for (const r of successfulResults) {
-        const mappedRule = PDF_ISSUE_ID_TO_RULE[r.issue_id];
-        if (mappedRule) {
-          fixedRuleIds.add(mappedRule);
-        }
+        const mapped = PDF_ISSUE_ID_TO_RULE[r.issue_id];
+        if (mapped) fixedRuleIds.add(mapped);
         fixedRuleIds.add(r.issue_id);
       }
 
-      const updatedIssues = report.all_issues.map(issue => {
+      const updatedIssues = report.all_issues.map((issue) => {
         const isFixed = fixedRuleIds.has(issue.rule_id) || fixedRuleIds.has(issue.id);
         return {
           ...issue,
-          fixed: issue.fixed || isFixed,
+          fixed:  issue.fixed || isFixed,
           status: isFixed ? ('pass' as const) : issue.status,
         };
       });
 
       const updatedByPrinciple: Record<string, typeof updatedIssues> = {};
       for (const issue of updatedIssues) {
-        const principle = issue.principle;
-        if (!updatedByPrinciple[principle]) {
-          updatedByPrinciple[principle] = [];
+        if (!updatedByPrinciple[issue.principle]) {
+          updatedByPrinciple[issue.principle] = [];
         }
-        updatedByPrinciple[principle].push(issue);
+        updatedByPrinciple[issue.principle].push(issue);
       }
 
-      const remainingErrors = updatedIssues.filter(i => !i.fixed && i.severity === 'error').length;
-      const remainingWarnings = updatedIssues.filter(i => !i.fixed && i.severity === 'warning').length;
+      const remainingErrors   = updatedIssues.filter((i) => !i.fixed && i.severity === 'error').length;
+      const remainingWarnings = updatedIssues.filter((i) => !i.fixed && i.severity === 'warning').length;
 
-      const updatedReport: AccessibilityReport = {
+      onComplete({
         ...report,
-        all_issues: updatedIssues,
-        issues_by_principle: updatedByPrinciple,
-        total_errors: remainingErrors,
-        total_warnings: remainingWarnings,
-        total_issues: remainingErrors + remainingWarnings,
-      };
-
-      onComplete(updatedReport);
+        all_issues:           updatedIssues,
+        issues_by_principle:  updatedByPrinciple,
+        total_errors:         remainingErrors,
+        total_warnings:       remainingWarnings,
+        total_issues:         remainingErrors + remainingWarnings,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Remediation failed');
     } finally {
@@ -167,34 +163,51 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
     }
   };
 
-  const successCount = results?.filter(r => r.success).length ?? 0;
-  const failedCount = results?.filter(r => !r.success).length ?? 0;
+  const successCount = results?.filter((r) => r.success).length  ?? 0;
+  const failedCount  = results?.filter((r) => !r.success).length ?? 0;
 
+  /* ── Render ───────────────────────────────────────────────── */
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={{ background: 'rgba(4, 8, 14, 0.80)' }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="remediation-title"
     >
-      <div className="bg-surface-900 border border-zinc-800 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col animate-scale-in">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-zinc-800">
+      <div
+        className="w-full sm:max-w-2xl max-h-[90vh] sm:max-h-[80vh] overflow-hidden flex flex-col animate-scale-in sm:rounded-2xl"
+        style={{ background: '#0d1420', border: '1px solid #1a2840' }}
+      >
+        {/* Modal header */}
+        <div
+          className="flex items-center justify-between px-6 py-5"
+          style={{ borderBottom: '1px solid #1a2840' }}
+        >
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-              results ? 'bg-emerald-500/20' : 'bg-cyan-500/20'
-            }`}>
+            <div
+              className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{
+                background: results
+                  ? 'rgba(34, 197, 94, 0.10)'
+                  : 'rgba(37, 99, 235, 0.10)',
+              }}
+            >
               {results ? (
-                <FileCheck className="w-5 h-5 text-emerald-400" aria-hidden="true" />
+                <FileCheck className="w-5 h-5" style={{ color: '#86efac' }} aria-hidden="true" />
               ) : (
-                <Wrench className="w-5 h-5 text-cyan-400" aria-hidden="true" />
+                <Wrench className="w-5 h-5" style={{ color: '#60a5fa' }} aria-hidden="true" />
               )}
             </div>
             <div>
-              <h2 id="remediation-title" className="text-lg font-semibold text-zinc-100">
-                {results ? 'Auto-fix run complete' : 'Try auto-fixes'}
+              <h2
+                id="remediation-title"
+                className="text-base font-semibold"
+                style={{ color: '#e8edf4' }}
+              >
+                {results ? 'Remediation complete' : 'Apply automated fixes'}
               </h2>
-              <p className="text-sm text-zinc-400">
+              <p className="text-sm mt-0.5" style={{ color: '#7a90a8' }}>
                 {results
                   ? `${successCount} fix${successCount !== 1 ? 'es' : ''} applied successfully`
                   : `${automatableIssues.length} issues can be fixed automatically`}
@@ -203,43 +216,63 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-zinc-400 hover:text-zinc-100 rounded-lg hover:bg-zinc-800 transition-colors"
+            className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{ color: '#4a607a' }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = '#111c2d';
+              (e.currentTarget as HTMLElement).style.color = '#e8edf4';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = 'transparent';
+              (e.currentTarget as HTMLElement).style.color = '#4a607a';
+            }}
             aria-label="Close remediation panel"
           >
-            <X className="w-5 h-5" aria-hidden="true" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+
+          {/* Error state */}
           {error && (
-            <div 
-              role="alert" 
-              className="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-lg flex items-start gap-3"
+            <div
+              role="alert"
+              className="p-4 rounded-lg flex items-start gap-3"
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.18)',
+              }}
             >
-              <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#fca5a5' }} aria-hidden="true" />
               <div>
-                <p className="font-medium text-red-400">Error</p>
-                <p className="text-sm text-red-300">{error}</p>
+                <p className="text-sm font-semibold" style={{ color: '#fca5a5' }}>Error</p>
+                <p className="text-sm mt-0.5" style={{ color: '#fca5a5', opacity: 0.8 }}>{error}</p>
               </div>
             </div>
           )}
 
-          {/* Processing state */}
+          {/* Processing */}
           {isProcessing && (
-            <div className="p-6 bg-cyan-500/10 border border-cyan-500/30 rounded-lg" role="status" aria-live="polite">
-              <div className="flex flex-col items-center text-center gap-4">
-                <Loader2 className="w-10 h-10 text-cyan-400 animate-spin" aria-hidden="true" />
-                <div>
-                  <p className="font-medium text-cyan-300">Applying Fixes...</p>
-                  <p className="text-sm text-zinc-400 mt-1">
-                    Trying the automated fixes on your document.
-                    Larger PDFs can take a bit.
-                  </p>
-                </div>
-                <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                  <div className="bg-cyan-500 h-1.5 rounded-full animate-pulse w-2/3" />
-                </div>
+            <div
+              className="p-6 rounded-lg flex flex-col items-center gap-4 text-center"
+              style={{ background: 'rgba(37,99,235,0.06)', border: '1px solid rgba(37,99,235,0.15)' }}
+              role="status"
+              aria-live="polite"
+            >
+              <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#60a5fa' }} aria-hidden="true" />
+              <div>
+                <p className="text-sm font-semibold" style={{ color: '#93c5fd' }}>Applying fixes…</p>
+                <p className="text-sm mt-1" style={{ color: '#7a90a8' }}>
+                  Larger PDFs may take a moment. Please wait.
+                </p>
+              </div>
+              <div className="w-full rounded-full overflow-hidden" style={{ background: '#111c2d', height: '2px' }}>
+                <div
+                  className="h-full animate-pulse rounded-full"
+                  style={{ background: '#2563eb', width: '60%' }}
+                />
               </div>
             </div>
           )}
@@ -247,81 +280,67 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
           {/* Pre-remediation: issue list + options */}
           {!results && !isProcessing && (
             <>
-              <div className="space-y-3 mb-6">
-                <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wider">
-                  Issues to Fix
-                </h3>
-                <ul className="space-y-2" role="list">
+              {/* Issues to fix */}
+              <div className="space-y-2">
+                <p
+                  className="text-xs font-semibold uppercase tracking-widest mb-3"
+                  style={{ color: '#4a607a' }}
+                >
+                  Issues queued for auto-fix
+                </p>
+                <ul className="space-y-1.5" role="list">
                   {automatableIssues.slice(0, 10).map((issue) => (
                     <IssuePreview key={issue.id} issue={issue} />
                   ))}
                 </ul>
                 {automatableIssues.length > 10 && (
-                  <p className="text-sm text-zinc-500">
-                    And {automatableIssues.length - 10} more...
+                  <p className="text-xs pt-1" style={{ color: '#4a607a' }}>
+                    +{automatableIssues.length - 10} more issues
                   </p>
                 )}
               </div>
 
+              {/* PDF-specific options */}
               {isPdf && (
-                <div className="mb-6 space-y-3">
-                  <div className="p-4 bg-zinc-800/50 border border-zinc-700 rounded-lg">
+                <div className="space-y-3 pt-2">
+                  <OptionRow
+                    id="overwrite-tags"
+                    checked={overwriteTags}
+                    onChange={setOverwriteTags}
+                    icon={<Wrench className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />}
+                    label="Rebuild structure with LayoutLM"
+                    description="Forces LayoutLM to re-tag the entire PDF even if it already has a structure tree. Use for poorly-tagged PDFs."
+                    warningText="This overwrites all existing tags."
+                  />
+                  <OptionRow
+                    id="debug-overlays"
+                    checked={debugOverlays}
+                    onChange={setDebugOverlays}
+                    icon={<Layers className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />}
+                    label="Generate layout overlay images"
+                    description="Creates annotated page images showing detected blocks for each page. Downloads as a ZIP after remediation."
+                  />
+                  <div
+                    className="p-4 rounded-lg space-y-3"
+                    style={{ background: '#111c2d', border: '1px solid #1a2840' }}
+                  >
                     <label className="flex items-start gap-3 cursor-pointer">
                       <input
-                        type="checkbox"
-                        checked={overwriteTags}
-                        onChange={(e) => setOverwriteTags(e.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
-                      />
-                      <div>
-                        <span className="font-medium text-zinc-300">
-                          Overwrite existing tags (rebuild structure with LayoutLM)
-                        </span>
-                        <p className="text-xs text-amber-400/80 mt-1">
-                          Forces LayoutLM to re-tag the entire PDF even if it already has a
-                          structure tree. Use for "fake-tagged" PDFs with low-quality tags.
-                        </p>
-                      </div>
-                    </label>
-                  </div>
-                  <div className="p-4 bg-zinc-800/50 border border-zinc-700 rounded-lg">
-                    <label className="flex items-start gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={debugOverlays}
-                        onChange={(e) => setDebugOverlays(e.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
-                      />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <Layers className="w-4 h-4 text-zinc-400" aria-hidden="true" />
-                          <span className="font-medium text-zinc-300">
-                            Generate layout overlay images (debug)
-                          </span>
-                        </div>
-                        <p className="text-xs text-zinc-500 mt-1">
-                          Creates annotated page images showing the detected blocks for each page
-                          (tag, text). Downloads as a ZIP after remediation.
-                        </p>
-                      </div>
-                    </label>
-                  </div>
-                  <div className="p-4 bg-zinc-800/50 border border-zinc-700 rounded-lg space-y-3">
-                    <label className="flex items-start gap-3 cursor-pointer">
-                      <input
+                        id="compare-tagging"
                         type="checkbox"
                         checked={compareTagging}
                         onChange={(e) => setCompareTagging(e.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+                        className="mt-1 w-4 h-4 rounded"
+                        style={{ accentColor: '#2563eb' }}
                       />
                       <div>
                         <div className="flex items-center gap-2">
-                          <GitCompare className="w-4 h-4 text-zinc-400" aria-hidden="true" />
-                          <span className="font-medium text-zinc-300">
+                          <GitCompare className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />
+                          <span className="text-sm font-medium" style={{ color: '#c8d8e8' }}>
                             Include overlay images in comparison ZIP
                           </span>
                         </div>
-                        <p className="text-xs text-zinc-500 mt-1">
+                        <p className="text-xs mt-1" style={{ color: '#4a607a' }}>
                           Runs LayoutLM and OpenDataLoader on the same PDF and compares block tags.
                         </p>
                       </div>
@@ -335,7 +354,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                       {compareLoading ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                          Comparing pipelines...
+                          Comparing pipelines…
                         </>
                       ) : (
                         <>
@@ -348,15 +367,22 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                 </div>
               )}
 
+              {/* Comparison result */}
               {compareResult?.comparison?.summary && (
-                <div className="mb-6 p-4 bg-violet-500/10 border border-violet-500/30 rounded-lg text-sm text-violet-100 space-y-2">
-                  <p className="font-semibold text-violet-200">Tagging comparison summary</p>
-                  <p>
+                <div
+                  className="p-4 rounded-lg text-sm space-y-1.5"
+                  style={{
+                    background: 'rgba(37,99,235,0.06)',
+                    border: '1px solid rgba(37,99,235,0.15)',
+                  }}
+                >
+                  <p className="font-semibold" style={{ color: '#93c5fd' }}>Tagging comparison summary</p>
+                  <p style={{ color: '#a0b4c8' }}>
                     LayoutLM blocks: {compareResult.comparison.summary.layoutlm.blocks}
                     {' · '}
                     OpenDataLoader blocks: {compareResult.comparison.summary.opendataloader.blocks}
                   </p>
-                  <p>
+                  <p style={{ color: '#a0b4c8' }}>
                     Matched pairs: {compareResult.comparison.summary.matched_block_pairs}
                     {' · '}
                     Tag agreement:{' '}
@@ -365,56 +391,72 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                       : 'n/a'}
                   </p>
                   {compareResult.report_filename && (
-                    <p className="text-xs text-violet-300/80">
-                      Full report saved as {compareResult.report_filename} on the server.
+                    <p className="text-xs" style={{ color: '#4a607a' }}>
+                      Report saved as {compareResult.report_filename}
                     </p>
                   )}
                 </div>
               )}
 
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-                <p className="text-sm text-amber-400">
-                  <strong>Note:</strong> Automated fixes add placeholder values that you should review. 
-                  For example, alt text will need meaningful descriptions.
+              {/* Disclaimer */}
+              <div
+                className="p-4 rounded-lg"
+                style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}
+              >
+                <p className="text-sm" style={{ color: '#fcd34d', opacity: 0.85 }}>
+                  <strong className="font-semibold">Note:</strong> Auto-fixes apply placeholder values that require human review. Alt text, for example, will need meaningful descriptions.
                 </p>
               </div>
             </>
           )}
 
-          {/* Post-remediation: results summary */}
+          {/* Post-remediation results */}
           {results && !isProcessing && (
             <>
-              {/* Summary cards */}
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center gap-3">
-                  <CheckCircle className="w-6 h-6 text-emerald-400" aria-hidden="true" />
+              {/* Summary */}
+              <div className="grid grid-cols-2 gap-4">
+                <div
+                  className="p-4 rounded-lg flex items-center gap-3"
+                  style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.18)' }}
+                >
+                  <CheckCircle className="w-6 h-6 flex-shrink-0" style={{ color: '#86efac' }} aria-hidden="true" />
                   <div>
-                    <p className="text-2xl font-bold text-emerald-400">{successCount}</p>
-                    <p className="text-sm text-emerald-300">Fixed Successfully</p>
+                    <p className="text-2xl font-semibold tabular-nums" style={{ color: '#86efac' }}>
+                      {successCount}
+                    </p>
+                    <p className="text-xs mt-0.5" style={{ color: '#bbf7d0' }}>Fixed successfully</p>
                   </div>
                 </div>
                 {failedCount > 0 && (
-                  <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center gap-3">
-                    <XCircle className="w-6 h-6 text-red-400" aria-hidden="true" />
+                  <div
+                    className="p-4 rounded-lg flex items-center gap-3"
+                    style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)' }}
+                  >
+                    <XCircle className="w-6 h-6 flex-shrink-0" style={{ color: '#fca5a5' }} aria-hidden="true" />
                     <div>
-                      <p className="text-2xl font-bold text-red-400">{failedCount}</p>
-                      <p className="text-sm text-red-300">Failed</p>
+                      <p className="text-2xl font-semibold tabular-nums" style={{ color: '#fca5a5' }}>
+                        {failedCount}
+                      </p>
+                      <p className="text-xs mt-0.5" style={{ color: '#fecaca' }}>Failed</p>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* What was fixed - plain language summary */}
+              {/* What was fixed */}
               {successCount > 0 && (
-                <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
-                  <h3 className="text-sm font-semibold text-emerald-300 mb-2">
-                    What was remediated:
-                  </h3>
-                  <ul className="space-y-1.5">
-                    {results.filter(r => r.success).map((result, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm text-emerald-200">
-                        <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
-                        <span>{result.message}</span>
+                <div
+                  className="p-4 rounded-lg"
+                  style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.14)' }}
+                >
+                  <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#86efac' }}>
+                    Remediated
+                  </p>
+                  <ul className="space-y-2">
+                    {results.filter((r) => r.success).map((result, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm" style={{ color: '#bbf7d0' }}>
+                        <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#86efac' }} aria-hidden="true" />
+                        {result.message}
                       </li>
                     ))}
                   </ul>
@@ -422,32 +464,33 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
               )}
 
               {/* Detailed results */}
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
-                  Detailed Results
-                </h3>
-                <ul className="space-y-2 max-h-48 overflow-y-auto" role="list">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#4a607a' }}>
+                  Detailed results
+                </p>
+                <ul className="space-y-1.5 max-h-44 overflow-y-auto" role="list">
                   {results.map((result, index) => (
-                    <li 
+                    <li
                       key={`${result.issue_id}-${index}`}
-                      className={`p-3 rounded-lg flex items-start gap-3 ${
-                        result.success 
-                          ? 'bg-emerald-500/10 border border-emerald-500/30' 
-                          : 'bg-red-500/10 border border-red-500/30'
-                      }`}
+                      className="px-3 py-2.5 rounded-lg flex items-start gap-3"
+                      style={
+                        result.success
+                          ? { background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.12)' }
+                          : { background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.12)' }
+                      }
                     >
                       {result.success ? (
-                        <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" aria-hidden="true" />
+                        <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#86efac' }} aria-hidden="true" />
                       ) : (
-                        <XCircle className="w-5 h-5 text-red-400 flex-shrink-0" aria-hidden="true" />
+                        <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#fca5a5' }} aria-hidden="true" />
                       )}
                       <div className="min-w-0">
-                        <p className={`text-sm ${result.success ? 'text-emerald-300' : 'text-red-300'}`}>
+                        <p className="text-sm" style={{ color: result.success ? '#bbf7d0' : '#fecaca' }}>
                           {result.message}
                         </p>
                         {result.new_value && (
-                          <p className="text-xs text-zinc-500 mt-1 font-mono truncate">
-                            New value: {result.new_value}
+                          <p className="text-xs mt-0.5 font-mono truncate" style={{ color: '#4a607a' }}>
+                            {result.new_value}
                           </p>
                         )}
                       </div>
@@ -457,25 +500,21 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
               </div>
 
               {/* Reminder */}
-              <div className="mt-4 p-3 bg-zinc-800/50 rounded-lg">
-                <p className="text-xs text-zinc-500">
-                  The remediated file is ready to download. Issues marked as fixed have been 
-                  updated in the dashboard. Re-upload the fixed file to verify all changes.
-                </p>
-              </div>
+              <p className="text-xs leading-relaxed" style={{ color: '#4a607a' }}>
+                The remediated file is ready to download. Re-upload it to verify all changes have been applied correctly.
+              </p>
             </>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-6 border-t border-zinc-800 flex justify-end gap-3">
+        {/* Modal footer */}
+        <div
+          className="px-6 py-4 flex justify-end gap-3"
+          style={{ borderTop: '1px solid #1a2840' }}
+        >
           {!results ? (
             <>
-              <button
-                onClick={onClose}
-                className="btn btn-secondary"
-                disabled={isProcessing}
-              >
+              <button onClick={onClose} className="btn btn-secondary" disabled={isProcessing}>
                 Cancel
               </button>
               <button
@@ -486,22 +525,19 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                 {isProcessing ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                    Processing...
+                    Processing…
                   </>
                 ) : (
                   <>
                     <Wrench className="w-4 h-4" aria-hidden="true" />
-                    Apply {automatableIssues.length} Fixes
+                    Apply {automatableIssues.length} fix{automatableIssues.length !== 1 ? 'es' : ''}
                   </>
                 )}
               </button>
             </>
           ) : (
             <>
-              <button
-                onClick={onClose}
-                className="btn btn-secondary"
-              >
+              <button onClick={onClose} className="btn btn-secondary">
                 Close
               </button>
               {debugOverlays && isPdf && (
@@ -513,12 +549,12 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                   {overlayLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                      Generating...
+                      Generating…
                     </>
                   ) : overlayDone ? (
                     <>
-                      <CheckCircle className="w-4 h-4 text-emerald-400" aria-hidden="true" />
-                      Overlays Downloaded
+                      <CheckCircle className="w-4 h-4" style={{ color: '#86efac' }} aria-hidden="true" />
+                      Downloaded
                     </>
                   ) : (
                     <>
@@ -534,7 +570,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                 className="btn btn-primary"
               >
                 <Download className="w-4 h-4" aria-hidden="true" />
-                Download Fixed File
+                Download Fixed PDF
               </a>
             </>
           )}
@@ -544,12 +580,69 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
   );
 }
 
+/* ── Option Row ─────────────────────────────────────────────── */
+function OptionRow({
+  id,
+  checked,
+  onChange,
+  icon,
+  label,
+  description,
+  warningText,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  icon: React.ReactNode;
+  label: string;
+  description: string;
+  warningText?: string;
+}) {
+  return (
+    <div
+      className="p-4 rounded-lg"
+      style={{ background: '#111c2d', border: '1px solid #1a2840' }}
+    >
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-1 w-4 h-4 rounded"
+          style={{ accentColor: '#2563eb' }}
+        />
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            {icon}
+            <span className="text-sm font-medium" style={{ color: '#c8d8e8' }}>{label}</span>
+          </div>
+          <p className="text-xs leading-relaxed" style={{ color: '#4a607a' }}>{description}</p>
+          {warningText && (
+            <p className="text-xs mt-1.5 font-medium" style={{ color: '#fcd34d', opacity: 0.75 }}>
+              {warningText}
+            </p>
+          )}
+        </div>
+      </label>
+    </div>
+  );
+}
+
+/* ── Issue Preview ───────────────────────────────────────────── */
 function IssuePreview({ issue }: { issue: AccessibilityIssue }) {
   return (
-    <li className="p-3 bg-zinc-800/50 rounded-lg flex items-center gap-3">
-      <span className="font-mono text-sm text-cyan-400">{issue.rule_id}</span>
-      <span className="text-sm text-zinc-300 truncate">{issue.rule_name}</span>
-      <span className="badge badge-success ml-auto">Auto-fix</span>
+    <li
+      className="px-3 py-2.5 rounded-lg flex items-center gap-3"
+      style={{ background: '#111c2d', border: '1px solid #1a2840' }}
+    >
+      <span className="font-mono text-xs font-medium" style={{ color: '#60a5fa' }}>
+        {issue.rule_id}
+      </span>
+      <span className="text-sm truncate flex-1" style={{ color: '#a0b4c8' }}>
+        {issue.rule_name}
+      </span>
+      <span className="badge badge-success flex-shrink-0">Auto-fix</span>
     </li>
   );
 }

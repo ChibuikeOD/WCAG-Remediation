@@ -2,193 +2,231 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Design Tokens ─────────────────────────────────────────── */
 :root {
-  --color-perceivable: #0891b2;
-  --color-operable: #7c3aed;
-  --color-understandable: #059669;
-  --color-robust: #dc2626;
+  --accent:          #2563eb;
+  --accent-hover:    #1d4ed8;
+  --surface-950:     #080c14;
+  --surface-900:     #0d1420;
+  --surface-800:     #111c2d;
+  --border:          #1a2840;
+  --border-strong:   #213354;
+  --text-primary:    #e8edf4;
+  --text-muted:      #7a90a8;
+  --text-placeholder:#4a607a;
 }
 
+/* ─── Base ───────────────────────────────────────────────────── */
 html {
   scroll-behavior: smooth;
 }
 
 body {
-  @apply bg-surface-950 text-zinc-100 antialiased;
-  font-feature-settings: 'ss01' on, 'cv01' on;
+  background-color: var(--surface-950);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-feature-settings: 'cv01' on, 'ss01' on;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Focus styles for accessibility - WCAG 2.4.7 Focus Visible */
+/* ─── Accessibility ──────────────────────────────────────────── */
 :focus-visible {
-  @apply outline-2 outline-offset-2 outline-cyan-400;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-/* Skip link - WCAG 2.4.1 Bypass Blocks */
 .skip-link {
-  @apply absolute -top-10 left-4 z-50 bg-cyan-600 text-white px-4 py-2 rounded-md transition-all;
+  @apply absolute -top-12 left-4 z-50 px-4 py-2 rounded-md font-medium text-sm text-white transition-all;
+  background: var(--accent);
 }
-
 .skip-link:focus {
   @apply top-4;
 }
 
-/* Accessible button base */
+/* ─── Buttons ────────────────────────────────────────────────── */
 .btn {
-  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
-  @apply focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-900;
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-150 select-none;
 }
 
 .btn-primary {
-  @apply bg-cyan-600 text-white hover:bg-cyan-500 focus-visible:ring-cyan-400;
+  background-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+.btn-primary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn-primary:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .btn-secondary {
-  @apply bg-zinc-700 text-zinc-100 hover:bg-zinc-600 focus-visible:ring-zinc-400;
+  background-color: var(--surface-800);
+  color: #cbd5e1;
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--border);
+  color: #e8edf4;
+}
+.btn-secondary:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .btn-ghost {
-  @apply bg-transparent text-zinc-300 hover:bg-zinc-800 focus-visible:ring-zinc-400;
+  background: transparent;
+  color: var(--text-muted);
+}
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--surface-800);
+  color: var(--text-primary);
 }
 
-/* Card styles */
+/* ─── Cards ──────────────────────────────────────────────────── */
 .card {
-  @apply bg-surface-900 border border-zinc-800 rounded-xl p-6;
+  background-color: var(--surface-900);
+  border: 1px solid var(--border);
+  @apply rounded-xl p-6;
 }
 
-/* Issue severity badges */
+/* ─── Badges ─────────────────────────────────────────────────── */
 .badge {
   @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
 }
 
 .badge-error {
-  @apply bg-red-500/20 text-red-400 ring-1 ring-red-500/30;
+  background-color: rgba(239, 68, 68, 0.10);
+  color: #fca5a5;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.20);
 }
 
 .badge-warning {
-  @apply bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/30;
+  background-color: rgba(245, 158, 11, 0.10);
+  color: #fcd34d;
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.20);
 }
 
 .badge-info {
-  @apply bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30;
+  background-color: rgba(59, 130, 246, 0.10);
+  color: #93c5fd;
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.20);
 }
 
 .badge-success {
-  @apply bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30;
+  background-color: rgba(34, 197, 94, 0.10);
+  color: #86efac;
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.20);
 }
 
-/* WCAG Principle colors */
-.principle-perceivable {
-  @apply text-cyan-400 border-cyan-500/30 bg-cyan-500/10;
+/* ─── Progress Bar ───────────────────────────────────────────── */
+.progress-bar {
+  height: 3px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background-color: var(--border);
+}
+.progress-bar-fill {
+  height: 100%;
+  background-color: var(--accent);
+  transition: width 0.5s ease-out;
 }
 
-.principle-operable {
-  @apply text-violet-400 border-violet-500/30 bg-violet-500/10;
+/* ─── Table ──────────────────────────────────────────────────── */
+.table-container {
+  @apply overflow-x-auto rounded-lg;
+  border: 1px solid var(--border);
+}
+.table-container table {
+  @apply w-full text-sm;
+}
+.table-container th {
+  @apply px-4 py-3 text-left font-medium;
+  color: var(--text-muted);
+  background-color: var(--surface-900);
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.02em;
+}
+.table-container td {
+  @apply px-4 py-3;
+  border-bottom: 1px solid rgba(26, 40, 64, 0.6);
+}
+.table-container tr:last-child td {
+  border-bottom: none;
+}
+.table-container tr:hover td {
+  background-color: rgba(17, 28, 45, 0.6);
 }
 
-.principle-understandable {
-  @apply text-emerald-400 border-emerald-500/30 bg-emerald-500/10;
+/* ─── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface-950);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2d4060;
 }
 
-.principle-robust {
-  @apply text-red-400 border-red-500/30 bg-red-500/10;
+/* ─── Drop Zone ──────────────────────────────────────────────── */
+.drop-zone {
+  @apply relative rounded-xl transition-all duration-200 cursor-pointer;
+  border: 1.5px dashed var(--border-strong);
+  padding: 3.5rem 2rem;
+}
+.drop-zone:hover,
+.drop-zone:focus {
+  border-color: var(--accent);
+  background-color: rgba(37, 99, 235, 0.04);
+  outline: none;
+}
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  background-color: rgba(37, 99, 235, 0.08);
 }
 
-/* Gradient text */
-.gradient-text {
-  @apply bg-gradient-to-r from-cyan-400 via-violet-400 to-emerald-400 bg-clip-text text-transparent;
+/* ─── Animations ─────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
-
-/* Loading animation */
+@keyframes slideUp {
+  from { transform: translateY(14px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes scaleIn {
+  from { transform: scale(0.97); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
 @keyframes pulse-ring {
-  0% {
-    transform: scale(0.8);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1.4);
-    opacity: 0;
-  }
+  0%   { transform: scale(0.9); opacity: 1; }
+  100% { transform: scale(1.45); opacity: 0; }
 }
+
+.animate-fade-in  { animation: fadeIn  0.4s  ease-out both; }
+.animate-scale-in { animation: scaleIn 0.25s ease-out both; }
 
 .loading-ring {
   animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* Progress bar */
-.progress-bar {
-  @apply h-2 bg-zinc-800 rounded-full overflow-hidden;
-}
-
-.progress-bar-fill {
-  @apply h-full transition-all duration-500 ease-out;
-}
-
-/* Table styles */
-.table-container {
-  @apply overflow-x-auto rounded-lg border border-zinc-800;
-}
-
-.table-container table {
-  @apply w-full text-sm;
-}
-
-.table-container th {
-  @apply px-4 py-3 text-left font-medium text-zinc-400 bg-surface-900 border-b border-zinc-800;
-}
-
-.table-container td {
-  @apply px-4 py-3 border-b border-zinc-800/50;
-}
-
-.table-container tr:last-child td {
-  @apply border-b-0;
-}
-
-.table-container tr:hover td {
-  @apply bg-zinc-800/30;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  @apply bg-surface-900;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-zinc-700 rounded-full;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-zinc-600;
-}
-
-/* Drop zone */
-.drop-zone {
-  @apply relative border-2 border-dashed border-zinc-700 rounded-xl p-8 transition-all duration-200;
-  @apply hover:border-cyan-500/50 hover:bg-cyan-500/5;
-}
-
-.drop-zone.drag-over {
-  @apply border-cyan-500 bg-cyan-500/10;
-}
-
-/* Animations */
 .animate-stagger > * {
   opacity: 0;
-  animation: slideUp 0.5s ease-out forwards;
+  animation: slideUp 0.4s ease-out both;
 }
-
-.animate-stagger > *:nth-child(1) { animation-delay: 0.1s; }
-.animate-stagger > *:nth-child(2) { animation-delay: 0.2s; }
-.animate-stagger > *:nth-child(3) { animation-delay: 0.3s; }
-.animate-stagger > *:nth-child(4) { animation-delay: 0.4s; }
-.animate-stagger > *:nth-child(5) { animation-delay: 0.5s; }
-
-
-
-
-
+.animate-stagger > *:nth-child(1) { animation-delay: 0.05s; }
+.animate-stagger > *:nth-child(2) { animation-delay: 0.11s; }
+.animate-stagger > *:nth-child(3) { animation-delay: 0.17s; }
+.animate-stagger > *:nth-child(4) { animation-delay: 0.23s; }
+.animate-stagger > *:nth-child(5) { animation-delay: 0.29s; }

@@ -70,26 +70,34 @@ def require_user(user: Optional[User] = Depends(get_current_user)) -> User:
 async def login(request: Request, redirect_to: Optional[str] = "/"):
     """
     Initiates the authentication flow.
-    If OIDC is configured, redirects to the provider.
-    Otherwise, logs in as a mock user for easy local development.
+    - DISABLE_AUTH=true : instantly creates a mock session, no click required.
+    - OIDC configured   : redirects to the identity provider.
+    - Neither           : mock SSO fallback for local development.
     """
-    # Store where to return after authentication
     request.session["auth_redirect_to"] = redirect_to
-    
+
+    # ── Auth-bypass mode (testing only) ──────────────────────────
+    if settings.DISABLE_AUTH:
+        logger.info("DISABLE_AUTH=true: auto-logging in as mock user.")
+        request.session["user_id"]    = "dev_user_001"
+        request.session["user_name"]  = "Dev User"
+        request.session["user_email"] = "dev@accesspdf.local"
+        frontend_url = settings.CORS_ORIGINS[1] if len(settings.CORS_ORIGINS) > 1 else settings.CORS_ORIGINS[0]
+        return RedirectResponse(url=f"{frontend_url}{redirect_to}")
+
     if OIDC_CONFIGURED:
         callback_uri = str(request.url_for("auth_callback"))
         # Force HTTPS redirect URI in production/non-localhost
         if "localhost" not in callback_uri and callback_uri.startswith("http:"):
             callback_uri = callback_uri.replace("http:", "https:")
         return await oauth.oidc.authorize_redirect(request, callback_uri)
-    
-    # Mock authentication flow
+
+    # Mock authentication flow (OIDC not configured)
     logger.info("Mock Login: Authenticating developer user.")
-    mock_id = "mock_umass_prof_101"
+    mock_id    = "mock_umass_prof_101"
     mock_email = "prof_johndoe@umass.edu"
-    mock_name = "Professor John Doe"
-    
-    # Save mock user in local SQLite DB
+    mock_name  = "Professor John Doe"
+
     db = next(get_db())
     try:
         user = db.query(User).filter(User.id == mock_id).first()
@@ -98,13 +106,13 @@ async def login(request: Request, redirect_to: Optional[str] = "/"):
             db.add(user)
             db.commit()
             db.refresh(user)
-        
-        request.session["user_id"] = user.id
-        request.session["user_name"] = user.name
+
+        request.session["user_id"]    = user.id
+        request.session["user_name"]  = user.name
         request.session["user_email"] = user.email
     finally:
         db.close()
-        
+
     frontend_url = settings.CORS_ORIGINS[1] if len(settings.CORS_ORIGINS) > 1 else settings.CORS_ORIGINS[0]
     return RedirectResponse(url=f"{frontend_url}{redirect_to}")
 
@@ -170,11 +178,21 @@ async def logout(request: Request):
 
 
 @router.get("/me")
-async def get_me(user: Optional[User] = Depends(get_current_user)):
+async def get_me(request: Request, user: Optional[User] = Depends(get_current_user)):
     """
     Returns user details for active sessions.
-    Useful for frontend check if user is authenticated.
+    When DISABLE_AUTH=true, always returns a mock authenticated user so the
+    frontend skips the login screen without any click required.
     """
+    # ── Auth-bypass mode (testing only) ──────────────────────────
+    if settings.DISABLE_AUTH:
+        return {
+            "authenticated": True,
+            "id":    "dev_user_001",
+            "name":  "Dev User",
+            "email": "dev@accesspdf.local",
+        }
+
     if not user:
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -182,8 +200,8 @@ async def get_me(user: Optional[User] = Depends(get_current_user)):
         )
     return {
         "authenticated": True,
-        "id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "created_at": user.created_at.isoformat()
+        "id":         user.id,
+        "name":       user.name,
+        "email":      user.email,
+        "created_at": user.created_at.isoformat(),
     }

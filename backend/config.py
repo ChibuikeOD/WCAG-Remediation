@@ -55,7 +55,11 @@ class Settings(BaseSettings):
     PLAYWRIGHT_TIMEOUT: int = 30000  # milliseconds
     
     # CORS
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: list = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://wcag-remediation.vercel.app"
+    ]
     
     class Config:
         env_file = ".env"

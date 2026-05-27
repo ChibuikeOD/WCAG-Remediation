@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify installations
-RUN java -version && playwright --version
+RUN java -version && python -m playwright --version
 
 # Copy requirements file first to cache package dependencies
 COPY backend/requirements.txt /app/backend/requirements.txt

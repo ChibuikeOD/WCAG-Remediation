@@ -73,6 +73,49 @@ layoutlmv3-doclaynet-remediator-model/
 .cache/layoutlm_trained_hf/
 
 
+# Local dev / debug scripts (root-level one-offs)
+check_display_doc_title.py
+debug_pdfix.py
+find_pdf.py
+inspect_all_pages_mcids.py
+test_blocks.py
+test_clean.py
+test_compat.py
+test_compat_fitz.py
+test_content_stream.py
+test_copy.py
+test_fitz_pdfix.py
+test_fitz_toc.py
+test_fitz_toc_run.py
+test_font_size.py
+test_header.py
+test_odl_help.py
+test_odl_json.py
+test_odl_pdf.py
+test_odl_struct.py
+test_page_structParents.py
+test_parent_tree.py
+test_pdf_validity.py
+test_pike_save.py
+test_pikepdf.py
+test_stream_direct.py
+test_tail.py
 
+# Database (local SQLite)
+*.db
+*.sqlite
+*.sqlite3
 
+# Remediation report JSON dumps (generated at runtime)
+Remediation_Report_*.json
+
+# pikepdf temp files
+.pikepdf.*
+
+# Local test output dirs and scratch
+scratch/
+test_odl_output/
+test_overlays/
+test_overlays.zip
+VirtualEnvironment/
 

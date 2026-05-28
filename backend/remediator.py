@@ -570,7 +570,24 @@ class PDFRemediator:
         meta_results = self.fix_metadata(title=pdf_title, language=pdf_lang)
         results.extend(meta_results)
 
-        # 2. Auto-tag PDFs -----------------------------------------------
+        # 2. Run OCR (scanned pages check) first so subsequent steps work on a searchable PDF --------
+        try:
+            r = fixes.fix_scanned_pages(target)
+            results.append(RemediationResult(
+                issue_id=r["issue_id"],
+                success=r["success"],
+                message=r["message"],
+                new_value=r.get("new_value", ""),
+            ))
+        except Exception as e:
+            logger.error(f"fix_scanned_pages raised: {e}", exc_info=True)
+            results.append(RemediationResult(
+                issue_id="pdf-fix_scanned_pages",
+                success=False,
+                message=str(e),
+            ))
+
+        # 3. Auto-tag PDFs -----------------------------------------------
         try:
             import pikepdf as _pk
             with _pk.open(str(target)) as _pdf:
@@ -622,7 +639,7 @@ class PDFRemediator:
                 message="PDF auto-tagging skipped (OpenDataLoader layout analysis disabled)",
             ))
 
-        # 3-11. Structural / content fixes --------------------------------
+        # 4-11. Structural / content fixes --------------------------------
         fix_funcs = [
             fixes.fix_heading_hierarchy,
             fixes.fix_table_headers,
@@ -631,7 +648,6 @@ class PDFRemediator:
             fixes.fix_reading_order,
             fixes.fix_untagged_urls,
             fixes.fix_bookmarks,
-            fixes.fix_scanned_pages,
             fixes.fix_form_labels,
         ]
         for fn in fix_funcs:

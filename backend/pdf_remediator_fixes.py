@@ -691,32 +691,45 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
             doc.close()
             return _result("pdf-ocr", True, "No scanned pages detected")
 
+        # Reconstruct PDF to insert OCR text layer
+        new_doc = fitz.open()
         ocr_done = 0
-        for page_num in scanned_pages:
-            try:
-                page = doc[page_num]
-                tp = page.get_textpage_ocr(flags=fitz.TEXT_PRESERVE_WHITESPACE, full=True)
-                if tp:
+        for page_num in range(len(doc)):
+            if page_num in scanned_pages:
+                try:
+                    page = doc[page_num]
+                    # Render the scanned page to a high-quality image pixmap
+                    pix = page.get_pixmap(dpi=150)
+                    # Run OCR and generate page bytes with the text layer
+                    ocr_bytes = pix.pdfocr_tobytes(language="eng")
+                    # Open the OCR-ed page and insert into new document
+                    ocr_page_doc = fitz.open("pdf", ocr_bytes)
+                    new_doc.insert_pdf(ocr_page_doc)
+                    ocr_page_doc.close()
                     ocr_done += 1
-            except Exception as e:
-                logger.warning(f"OCR failed on page {page_num + 1}: {e}")
-
-        if ocr_done:
-            doc.save(str(pdf_path), incremental=True, encryption=0)
+                except Exception as e:
+                    logger.warning(f"OCR failed on page {page_num + 1}: {e}")
+                    new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
+            else:
+                new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
 
         doc.close()
 
         if ocr_done:
+            new_doc.save(str(pdf_path))
+            new_doc.close()
             return _result(
                 "pdf-ocr", True,
                 f"Applied OCR to {ocr_done} scanned page(s)",
                 f"{ocr_done} pages OCR'd",
             )
-        return _result(
-            "pdf-ocr", False,
-            "OCR failed -- Tesseract may not be installed. "
-            "Install Tesseract OCR for scanned-page remediation.",
-        )
+        else:
+            new_doc.close()
+            return _result(
+                "pdf-ocr", False,
+                "OCR failed -- Tesseract may not be installed. "
+                "Install Tesseract OCR for scanned-page remediation.",
+            )
     except Exception as e:
         logger.error(f"fix_scanned_pages: {e}", exc_info=True)
         return _result("pdf-ocr", False, str(e))

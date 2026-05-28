@@ -171,7 +171,9 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {
         pages[i].filterPageContents(&filter, &buf);
         buf.finish();
         
-        std::string new_content_str = buf.getString();
+        Buffer* b = buf.getBuffer();
+        std::string new_content_str(reinterpret_cast<char const*>(b->getBuffer()), b->getSize());
+        delete b;
         QPDFObjectHandle new_contents = QPDFObjectHandle::newStream(&pdf, new_content_str);
         
         pages[i].getObjectHandle().replaceKey("/Contents", new_contents);

@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # Set DISABLE_AUTH=true to skip the login screen entirely.
     # /auth/me will return a pre-authenticated mock user automatically.
     # Never enable this in production.
-    DISABLE_AUTH: bool = False
+    DISABLE_AUTH: bool = True
     
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50

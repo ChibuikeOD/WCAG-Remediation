@@ -7,7 +7,7 @@ import { RemediationPanel } from './components/RemediationPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
 import { uploadFile, analyzeDocument, getCurrentUser, getLoginURL, type UserSession } from './api';
 
-const DEMO_MODE = import.meta.env.VITE_DISABLE_AUTH === 'true';
+const DEMO_MODE = import.meta.env.VITE_DISABLE_AUTH !== 'false';
 const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@accesspdf.com' };
 import { FileCheck, LogIn, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
 

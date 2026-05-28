@@ -17,17 +17,20 @@ void build_struct_tree(QPDF& pdf, const std::vector<LayoutBlock>& blocks, const 
     // 1. Create StructTreeRoot
     QPDFObjectHandle struct_root = QPDFObjectHandle::newDictionary();
     struct_root.replaceKey("/Type", QPDFObjectHandle::newName("/StructTreeRoot"));
+    QPDFObjectHandle struct_root_indirect = pdf.makeIndirectObject(struct_root);
 
     QPDFObjectHandle doc_kids = QPDFObjectHandle::newArray();
     QPDFObjectHandle doc_elem = QPDFObjectHandle::newDictionary();
     doc_elem.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));
     doc_elem.replaceKey("/S", QPDFObjectHandle::newName("/Document"));
-    doc_elem.replaceKey("/P", struct_root);
+    doc_elem.replaceKey("/P", struct_root_indirect);
     doc_elem.replaceKey("/K", doc_kids);
 
+    QPDFObjectHandle doc_elem_indirect = pdf.makeIndirectObject(doc_elem);
+
     QPDFObjectHandle root_kids = QPDFObjectHandle::newArray();
-    root_kids.appendItem(pdf.makeIndirectObject(doc_elem));
-    struct_root.replaceKey("/K", root_kids);
+    root_kids.appendItem(doc_elem_indirect);
+    struct_root_indirect.replaceKey("/K", root_kids);
 
     // 2. Group the layout blocks from JSON by page index
     std::map<int, std::vector<LayoutBlock>> page_blocks;
@@ -68,7 +71,7 @@ void build_struct_tree(QPDF& pdf, const std::vector<LayoutBlock>& blocks, const 
             QPDFObjectHandle se = QPDFObjectHandle::newDictionary();
             se.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));
             se.replaceKey("/S", QPDFObjectHandle::newName("/" + tag));
-            se.replaceKey("/P", doc_elem);
+            se.replaceKey("/P", doc_elem_indirect);
             se.replaceKey("/Pg", page.getObjectHandle());
             se.replaceKey("/K", QPDFObjectHandle::newInteger(mcid));
 
@@ -103,10 +106,10 @@ void build_struct_tree(QPDF& pdf, const std::vector<LayoutBlock>& blocks, const 
     QPDFObjectHandle parent_tree = QPDFObjectHandle::newDictionary();
     parent_tree.replaceKey("/Nums", parent_tree_nums);
 
-    struct_root.replaceKey("/ParentTree", pdf.makeIndirectObject(parent_tree));
-    struct_root.replaceKey("/ParentTreeNextKey", QPDFObjectHandle::newInteger(page_mcid_counts.size()));
+    struct_root_indirect.replaceKey("/ParentTree", pdf.makeIndirectObject(parent_tree));
+    struct_root_indirect.replaceKey("/ParentTreeNextKey", QPDFObjectHandle::newInteger(page_mcid_counts.size()));
 
-    root.replaceKey("/StructTreeRoot", pdf.makeIndirectObject(struct_root));
+    root.replaceKey("/StructTreeRoot", struct_root_indirect);
 
     // Set MarkInfo
     QPDFObjectHandle mark_info = QPDFObjectHandle::newDictionary();

@@ -18,6 +18,8 @@ services:
         value: /tmp/uploads
       - key: OUTPUT_DIR
         value: /tmp/output
+      - key: _JAVA_OPTIONS
+        value: "-Xmx128m"
       # Uncomment and fill in when you have real SSO credentials:
       # - key: OIDC_CLIENT_ID
       #   sync: false

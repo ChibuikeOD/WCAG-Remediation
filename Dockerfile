@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 ENV UPLOAD_DIR=/app/uploads
 ENV OUTPUT_DIR=/app/output
+ENV _JAVA_OPTIONS="-Xmx128m"
 
 # Create app directory
 WORKDIR /app

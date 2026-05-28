@@ -89,7 +89,7 @@ def auto_tag_pdf(
         fd, temp_json_path = tempfile.mkstemp(prefix="layout_blocks_", suffix=".json")
         try:
             with open(fd, 'w', encoding='utf-8') as f:
-                json.dump(blocks_data, f, indent=2)
+                json.dump(blocks_data, f)
 
             # Step 4: Resolve C++ remediator executable path cross-platform
             workspace_root = Path(__file__).resolve().parent.parent

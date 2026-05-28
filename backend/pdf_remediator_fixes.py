@@ -278,18 +278,32 @@ def _wrap_list_children(pdf, lst) -> bool:
 
         new_kids = pikepdf.Array()
         for kid in kids:
-            lbody_ref = pdf.make_indirect(pikepdf.Dictionary({
+            pg_obj = None
+            if hasattr(kid, "keys") and "/Pg" in kid:
+                pg_obj = kid["/Pg"]
+            elif hasattr(lst, "keys") and "/Pg" in lst:
+                pg_obj = lst["/Pg"]
+
+            lbody_dict = {
                 "/Type": pikepdf.Name("/StructElem"),
                 "/S": pikepdf.Name("/LBody"),
                 "/P": pikepdf.Null(),   # will be updated below
                 "/K": pikepdf.Array([kid]),
-            }))
-            li_ref = pdf.make_indirect(pikepdf.Dictionary({
+            }
+            if pg_obj is not None:
+                lbody_dict["/Pg"] = pg_obj
+            lbody_ref = pdf.make_indirect(pikepdf.Dictionary(lbody_dict))
+
+            li_dict = {
                 "/Type": pikepdf.Name("/StructElem"),
                 "/S": pikepdf.Name("/LI"),
                 "/P": lst,
                 "/K": pikepdf.Array([lbody_ref]),
-            }))
+            }
+            if pg_obj is not None:
+                li_dict["/Pg"] = pg_obj
+            li_ref = pdf.make_indirect(pikepdf.Dictionary(li_dict))
+
             # Fix parent pointers now that both objects exist as indirect refs
             lbody_ref["/P"] = li_ref
             if hasattr(kid, "keys"):

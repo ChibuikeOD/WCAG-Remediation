@@ -67,6 +67,11 @@ htmlcov/
 *.log
 logs/
 
+# LayoutLMv3 Models
+layoutLM_trained/
+layoutlmv3-doclaynet-remediator-model/
+.cache/layoutlm_trained_hf/
+
 
 
 

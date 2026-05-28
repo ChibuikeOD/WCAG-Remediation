@@ -638,8 +638,8 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
     """Run OCR on image-only pages to insert a searchable text layer."""
     from .config import settings
-    if settings.DISABLE_LAYOUTLM:
-        return _result("pdf-ocr", False, "OCR skipped (heavy models disabled on this server)")
+    if settings.DISABLE_OCR:
+        return _result("pdf-ocr", False, "OCR skipped (OCR disabled on this server)")
 
     if not HAS_PYMUPDF:
         return _result("pdf-ocr", False, "PyMuPDF not available")

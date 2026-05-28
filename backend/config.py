@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Disable PyTorch/LayoutLMv3 (large model, high RAM) by default
     DISABLE_LAYOUTLM: bool = True
 
+    # Disable system OCR (Tesseract) by default (now enabled since we have Starter plan)
+    DISABLE_OCR: bool = False
+
     # Enable OpenDataLoader (Java) structure tagging by default
     # Requires Java and the compiled C++ remediator binary to be present
     DISABLE_OPENDATALOADER: bool = False

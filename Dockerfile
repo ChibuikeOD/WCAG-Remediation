@@ -15,12 +15,14 @@ ENV _JAVA_OPTIONS="-Xmx128m"
 # Create app directory
 WORKDIR /app
 
-# Install Java JRE, build tools, and QPDF dependencies
+# Install Java JRE, build tools, QPDF dependencies, and Tesseract OCR
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jre-headless \
     cmake \
     build-essential \
     libqpdf-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify Java is available

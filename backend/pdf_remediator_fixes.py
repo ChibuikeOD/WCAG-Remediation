@@ -278,19 +278,23 @@ def _wrap_list_children(pdf, lst) -> bool:
 
         new_kids = pikepdf.Array()
         for kid in kids:
-            lbody = pdf.make_indirect(pikepdf.Dictionary({
+            lbody_ref = pdf.make_indirect(pikepdf.Dictionary({
                 "/Type": pikepdf.Name("/StructElem"),
                 "/S": pikepdf.Name("/LBody"),
-                "/P": lst,
+                "/P": pikepdf.Null(),   # will be updated below
                 "/K": pikepdf.Array([kid]),
             }))
-            li = pdf.make_indirect(pikepdf.Dictionary({
+            li_ref = pdf.make_indirect(pikepdf.Dictionary({
                 "/Type": pikepdf.Name("/StructElem"),
                 "/S": pikepdf.Name("/LI"),
                 "/P": lst,
-                "/K": pikepdf.Array([lbody]),
+                "/K": pikepdf.Array([lbody_ref]),
             }))
-            new_kids.append(li)
+            # Fix parent pointers now that both objects exist as indirect refs
+            lbody_ref["/P"] = li_ref
+            if hasattr(kid, "keys"):
+                kid["/P"] = lbody_ref
+            new_kids.append(li_ref)
 
         lst["/K"] = new_kids
         return True
@@ -406,9 +410,10 @@ def _get_mcid(elem):
 
 def fix_reading_order(pdf_path: Path) -> Dict[str, Any]:
     """Re-sort structure-tree children by geometric position
-    (top-to-bottom, then left-to-right) using bounding-box data from PyMuPDF."""
-    if not HAS_PIKEPDF or not HAS_PYMUPDF:
-        return _result("pdf-reading-order", False, "pikepdf/PyMuPDF not available")
+    (top-to-bottom, then left-to-right) using the /A BBox attribute that the
+    C++ engine embeds in each StructElem, falling back to MCID order."""
+    if not HAS_PIKEPDF:
+        return _result("pdf-reading-order", False, "pikepdf not available")
 
     try:
         pdf = pikepdf.open(str(pdf_path), allow_overwriting_input=True)
@@ -437,23 +442,41 @@ def fix_reading_order(pdf_path: Path) -> Dict[str, Any]:
         if not isinstance(kids, pikepdf.Array) or len(kids) < 2:
             return _result("pdf-reading-order", True, "Too few elements to reorder")
 
-        bbox_data = _extract_struct_bboxes(pdf_path)
-
-        kid_list = list(kids)
         def sort_key(elem):
+            """Sort by page then by the BBox top-left corner embedded by C++ engine."""
             try:
-                pg = _get_page_num(elem) if hasattr(elem, "keys") else 0
-                mcid = _get_mcid(elem) if hasattr(elem, "keys") else None
-                if mcid is not None and (pg, mcid) in bbox_data:
-                    y, x = bbox_data[(pg, mcid)]
-                    return (pg, y, x)
-            except Exception:
-                pass
-            return (9999, 9999, 9999)
+                if not hasattr(elem, "keys"):
+                    return (9999, 9999, 9999, 9999)
 
-        sorted_kids = sorted(kid_list, key=sort_key)
-        new_arr = pikepdf.Array(sorted_kids)
-        doc_elem["/K"] = new_arr
+                # Page number as primary sort key
+                pg = 0
+                if "/Pg" in elem:
+                    try:
+                        pg_obj = elem["/Pg"]
+                        pg = pdf.pages.index(pg_obj)
+                    except Exception:
+                        pg = 0
+
+                # Use /A BBox (Layout attribute) written by the C++ engine
+                if "/A" in elem:
+                    attr = elem["/A"]
+                    if hasattr(attr, "keys") and "/BBox" in attr:
+                        bbox = attr["/BBox"]
+                        if isinstance(bbox, pikepdf.Array) and len(bbox) == 4:
+                            # PDF BBox: [left, bottom, right, top] (origin bottom-left)
+                            # Sort top-to-bottom (descending y → ascending -top)
+                            left  = float(bbox[0])
+                            top   = float(bbox[3])
+                            return (pg, -top, left, 0)
+
+                # Fallback: use MCID (preserves content-stream order)
+                mcid = _get_mcid(elem)
+                return (pg, 9998, mcid if mcid is not None else 9999, 0)
+            except Exception:
+                return (9999, 9999, 9999, 9999)
+
+        sorted_kids = sorted(list(kids), key=sort_key)
+        doc_elem["/K"] = pikepdf.Array(sorted_kids)
 
         pdf.save()
         return _result(

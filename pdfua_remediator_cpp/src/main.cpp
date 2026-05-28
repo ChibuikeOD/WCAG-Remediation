@@ -95,8 +95,14 @@ int main(int argc, char* argv[]) {
         std::cout << "Structure tree generated." << std::endl;
 
         // Step 3: Write out the final tagged PDF
+        // Use PDF 1.4 settings: disable object streams and xref streams so that
+        // NVDA, JAWS and other AT tools can traverse the structure tree without
+        // issues caused by compressed/object-stream cross-reference tables.
         std::cout << "Saving compliant PDF to " << output_pdf << "..." << std::endl;
         QPDFWriter writer(pdf, output_pdf.c_str());
+        writer.setObjectStreamMode(qpdf_o_disable);   // No object streams (PDF 1.5+)
+        writer.setMinimumPDFVersion("1.4");            // PDF 1.4 baseline
+        writer.setLinearization(false);                // Simpler file structure
         writer.write();
         std::cout << "PDF/UA compliant document created successfully." << std::endl;
 

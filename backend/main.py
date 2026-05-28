@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 import logging
 import json
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
@@ -231,6 +231,19 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+@app.middleware("http")
+async def api_prefix_middleware(request: Request, call_next):
+    """
+    Middleware that dynamically strips /api from the beginning of paths
+    so the router can match endpoints successfully regardless of whether
+    the request goes through a proxy/CDN that includes the prefix.
+    """
+    path = request.scope.get("path", "")
+    if path.startswith("/api"):
+        request.scope["path"] = path[4:] or "/"
+    response = await call_next(request)
+    return response
 
 # Register SSO Session Middleware
 app.add_middleware(

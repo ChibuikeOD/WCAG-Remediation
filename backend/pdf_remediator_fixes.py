@@ -614,6 +614,10 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
             doc.close()
             return _result("pdf-bookmarks", True, "No heading text found for bookmarks")
 
+        # PyMuPDF TOC must start with a level 1 item to avoid ValueError
+        if toc[0][0] > 1:
+            toc[0][0] = 1
+
         doc.set_toc(toc)
         doc.save(str(pdf_path), incremental=True, encryption=0)
         doc.close()
@@ -633,6 +637,10 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 
 def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
     """Run OCR on image-only pages to insert a searchable text layer."""
+    from .config import settings
+    if settings.DISABLE_HEAVY_MODELS:
+        return _result("pdf-ocr", False, "OCR skipped (heavy models disabled on this server)")
+
     if not HAS_PYMUPDF:
         return _result("pdf-ocr", False, "PyMuPDF not available")
 

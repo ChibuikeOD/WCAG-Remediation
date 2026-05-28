@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # Never enable this in production.
     DISABLE_AUTH: bool = True
     
+    # Disable heavy models (LayoutLM, PyTorch, Java layout analysis) by default
+    # to fit within low-memory environments (like Render Free Tier 512MB RAM)
+    DISABLE_HEAVY_MODELS: bool = True
+    
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50
     MAX_PAGES_PDF: int = 100

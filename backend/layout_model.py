@@ -19,9 +19,13 @@ except ImportError:
     HAS_PYMUPDF = False
 
 try:
-    import torch
-    from transformers import LayoutLMv3ForTokenClassification, LayoutLMv3Processor
-    HAS_LAYOUTLM = True
+    from .config import settings
+    if settings.DISABLE_HEAVY_MODELS:
+        HAS_LAYOUTLM = False
+    else:
+        import torch
+        from transformers import LayoutLMv3ForTokenClassification, LayoutLMv3Processor
+        HAS_LAYOUTLM = True
 except ImportError:
     HAS_LAYOUTLM = False
 

@@ -14,9 +14,12 @@ ENV OUTPUT_DIR=/app/output
 # Create app directory
 WORKDIR /app
 
-# Install Java JRE (required for OpenDataLoader PDF structure extraction)
+# Install Java JRE, build tools, and QPDF dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jre-headless \
+    cmake \
+    build-essential \
+    libqpdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify Java is available
@@ -34,6 +37,10 @@ RUN mkdir -p /app/uploads /app/output && \
 
 # Copy the entire project code into the container
 COPY . /app
+
+# Build C++ pdfua-remediator-cli for Linux
+RUN cmake -S /app/pdfua_remediator_cpp -B /app/pdfua_remediator_cpp/build && \
+    cmake --build /app/pdfua_remediator_cpp/build --config Release
 
 # Expose port
 EXPOSE 8000

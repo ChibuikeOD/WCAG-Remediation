@@ -579,10 +579,10 @@ class PDFRemediator:
 
         from .config import settings
 
-        should_tag = (not is_tagged or overwrite_tags) and not settings.DISABLE_HEAVY_MODELS
+        should_tag = (not is_tagged or overwrite_tags) and not settings.DISABLE_OPENDATALOADER
         if should_tag:
             reason = "overwrite requested" if is_tagged else "untagged"
-            logger.info("Running LayoutLM PDF tagging (%s)...", reason)
+            logger.info("Running PDF layout tagging using OpenDataLoader (%s)...", reason)
             tag_result = self.auto_tag_document(
                 output_path=target,
                 overwrite_tags=overwrite_tags,
@@ -604,12 +604,12 @@ class PDFRemediator:
                     success=False,
                     message=f"Auto-tagging failed: {tag_result.get('error', 'Unknown')}",
                 ))
-        elif settings.DISABLE_HEAVY_MODELS and (not is_tagged or overwrite_tags):
-            logger.info("LayoutLM PDF tagging skipped (DISABLE_HEAVY_MODELS is enabled)")
+        elif settings.DISABLE_OPENDATALOADER and (not is_tagged or overwrite_tags):
+            logger.info("PDF layout tagging skipped (DISABLE_OPENDATALOADER is enabled)")
             results.append(RemediationResult(
                 issue_id="pdf-auto-tag",
                 success=False,
-                message="PDF auto-tagging skipped (LayoutLM model disabled on low-memory server)",
+                message="PDF auto-tagging skipped (OpenDataLoader layout analysis disabled)",
             ))
 
         # 3-11. Structural / content fixes --------------------------------

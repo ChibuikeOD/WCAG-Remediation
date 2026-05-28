@@ -20,7 +20,7 @@ except ImportError:
 
 try:
     from .config import settings
-    if settings.DISABLE_HEAVY_MODELS:
+    if settings.DISABLE_LAYOUTLM:
         HAS_LAYOUTLM = False
     else:
         import torch

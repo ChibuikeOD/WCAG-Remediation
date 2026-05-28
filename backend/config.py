@@ -46,9 +46,12 @@ class Settings(BaseSettings):
     # Never enable this in production.
     DISABLE_AUTH: bool = True
     
-    # Disable heavy models (LayoutLM, PyTorch, Java layout analysis) by default
-    # to fit within low-memory environments (like Render Free Tier 512MB RAM)
-    DISABLE_HEAVY_MODELS: bool = True
+    # Disable PyTorch/LayoutLMv3 (large model, high RAM) by default
+    DISABLE_LAYOUTLM: bool = True
+
+    # Enable OpenDataLoader (Java) structure tagging by default
+    # Requires Java and the compiled C++ remediator binary to be present
+    DISABLE_OPENDATALOADER: bool = False
     
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50

@@ -91,9 +91,15 @@ def auto_tag_pdf(
             with open(fd, 'w', encoding='utf-8') as f:
                 json.dump(blocks_data, f, indent=2)
 
-            # Step 4: Resolve C++ remediator executable path
+            # Step 4: Resolve C++ remediator executable path cross-platform
             workspace_root = Path(__file__).resolve().parent.parent
-            cpp_binary = workspace_root / "pdfua_remediator_cpp" / "build" / "Release" / "pdfua-remediator-cli.exe"
+            import sys
+            if sys.platform.startswith("win"):
+                cpp_binary = workspace_root / "pdfua_remediator_cpp" / "build" / "Release" / "pdfua-remediator-cli.exe"
+            else:
+                cpp_binary = workspace_root / "pdfua_remediator_cpp" / "build" / "pdfua-remediator-cli"
+                if not cpp_binary.exists():
+                    cpp_binary = workspace_root / "pdfua_remediator_cpp" / "build" / "Release" / "pdfua-remediator-cli"
 
             if not cpp_binary.exists():
                 raise FileNotFoundError(f"Compiled C++ remediator CLI executable not found at '{cpp_binary}'. Please build it first.")

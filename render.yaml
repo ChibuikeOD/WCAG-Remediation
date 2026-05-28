@@ -1,12 +1,10 @@
 services:
   - type: web
     name: accesspdf-api
-    runtime: python
+    runtime: docker
     region: ohio          # pick the region closest to your users
     plan: free            # change to "starter" or higher for production
     rootDir: .
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DISABLE_AUTH
         value: "true"              # remove when you add real SSO

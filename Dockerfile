@@ -35,12 +35,13 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 RUN mkdir -p /app/uploads /app/output && \
     chmod 777 /app/uploads /app/output
 
-# Copy the entire project code into the container
-COPY . /app
-
-# Build C++ pdfua-remediator-cli for Linux
+# Copy and build C++ pdfua-remediator-cli for Linux (cached layer)
+COPY pdfua_remediator_cpp /app/pdfua_remediator_cpp
 RUN cmake -S /app/pdfua_remediator_cpp -B /app/pdfua_remediator_cpp/build && \
     cmake --build /app/pdfua_remediator_cpp/build --config Release
+
+# Copy the entire project code into the container (non-C++ updates won't trigger recompilation)
+COPY . /app
 
 # Expose port
 EXPOSE 8000

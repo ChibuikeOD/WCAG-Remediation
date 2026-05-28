@@ -6,14 +6,74 @@
 
 class MCIDTokenFilter : public QPDFObjectHandle::TokenFilter {
 public:
-    MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false) {}
+    MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
+                        marked_content_depth(0), in_path_construction(false) {}
     virtual ~MCIDTokenFilter() = default;
 
     virtual void handleToken(QPDFTokenizer::Token const& token) override {
         QPDFTokenizer::token_type_e type = token.getType();
         std::string value = token.getValue();
 
-        // 1. Handle name token buffering for Do (which only occurs outside text objects)
+        // Track marked content depth to avoid nesting artifacts inside structural elements
+        if (type == QPDFTokenizer::tt_word) {
+            if (value == "BDC" || value == "BMC") {
+                marked_content_depth++;
+            } else if (value == "EMC") {
+                marked_content_depth--;
+                if (marked_content_depth < 0) marked_content_depth = 0;
+            }
+        }
+
+        // Flush path construction buffering on marked content or text object boundaries
+        if (type == QPDFTokenizer::tt_word && (value == "BDC" || value == "BMC" || value == "EMC" || value == "BT" || value == "ET" || value == "Do")) {
+            flush_buffered_path_tokens();
+        }
+
+        // 1. Handle untagged path objects outside marked content blocks
+        if (!in_text_object && marked_content_depth == 0) {
+            if (type == QPDFTokenizer::tt_word && (value == "m" || value == "re")) {
+                write_pending_name();
+                flush_buffered_path_tokens();
+                in_path_construction = true;
+                buffered_path_tokens.push_back(token);
+                return;
+            }
+
+            if (in_path_construction) {
+                if (type == QPDFTokenizer::tt_word && 
+                    (value == "S" || value == "s" || value == "f" || value == "F" || value == "f*" || 
+                     value == "B" || value == "B*" || value == "b" || value == "b*" || value == "sh")) {
+                    
+                    // Wrap the entire path sequence in an /Artifact BMC block
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/Artifact"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BMC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    
+                    for (auto const& t : buffered_path_tokens) {
+                        writeToken(t);
+                    }
+                    writeToken(token); // Write the painting operator itself
+                    
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                    buffered_path_tokens.clear();
+                    in_path_construction = false;
+                    return;
+                } else if (type == QPDFTokenizer::tt_word && value == "n") {
+                    // Path ended without painting (no-op or clip path) - flush unwrapped
+                    flush_buffered_path_tokens();
+                } else {
+                    buffered_path_tokens.push_back(token);
+                    return;
+                }
+            }
+        }
+
+        // 2. Handle name token buffering for Do (which only occurs outside text objects)
         if (!in_text_object) {
             if (type == QPDFTokenizer::tt_space || type == QPDFTokenizer::tt_comment) {
                 if (has_last_name) {
@@ -71,7 +131,7 @@ public:
             write_pending_name();
         }
 
-        // 2. Handle text object BT...ET and its buffering
+        // 3. Handle text object BT...ET and its buffering
         if (type == QPDFTokenizer::tt_word && value == "BT") {
             in_text_object = true;
             writeToken(token);
@@ -128,6 +188,7 @@ public:
     virtual void handleEOF() override {
         write_pending_name();
         write_buffered_text_tokens();
+        flush_buffered_path_tokens();
     }
 
     int getMCIDCount() const { return mcid_counter; }
@@ -151,12 +212,25 @@ private:
         buffered_text_tokens.clear();
     }
 
+    void flush_buffered_path_tokens() {
+        if (in_path_construction) {
+            for (auto const& t : buffered_path_tokens) {
+                writeToken(t);
+            }
+            buffered_path_tokens.clear();
+            in_path_construction = false;
+        }
+    }
+
     int mcid_counter;
     bool in_text_object;
     QPDFTokenizer::Token last_name_token;
     bool has_last_name;
     std::vector<QPDFTokenizer::Token> spaces_after_name;
     std::vector<QPDFTokenizer::Token> buffered_text_tokens;
+    int marked_content_depth;
+    bool in_path_construction;
+    std::vector<QPDFTokenizer::Token> buffered_path_tokens;
 };
 
 std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {

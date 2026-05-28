@@ -1,0 +1,182 @@
+#include "content_tagger.h"
+#include <qpdf/QPDFPageDocumentHelper.hh>
+#include <qpdf/QPDFPageObjectHelper.hh>
+#include <qpdf/Pl_Buffer.hh>
+#include <iostream>
+
+class MCIDTokenFilter : public QPDFObjectHandle::TokenFilter {
+public:
+    MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false) {}
+    virtual ~MCIDTokenFilter() = default;
+
+    virtual void handleToken(QPDFTokenizer::Token const& token) override {
+        QPDFTokenizer::token_type_e type = token.getType();
+        std::string value = token.getValue();
+
+        // 1. Handle name token buffering for Do (which only occurs outside text objects)
+        if (!in_text_object) {
+            if (type == QPDFTokenizer::tt_space || type == QPDFTokenizer::tt_comment) {
+                if (has_last_name) {
+                    spaces_after_name.push_back(token);
+                } else {
+                    writeToken(token);
+                }
+                return;
+            }
+
+            if (type == QPDFTokenizer::tt_name) {
+                write_pending_name();
+                last_name_token = token;
+                has_last_name = true;
+                spaces_after_name.clear();
+                return;
+            }
+
+            if (type == QPDFTokenizer::tt_word && value == "Do") {
+                if (has_last_name) {
+                    // Wrap the Do operator in a BDC/EMC block representing a Figure
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/Figure"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_open, "<<"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/MCID"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_integer, std::to_string(mcid_counter)));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_close, ">>"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BDC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                    // Write the buffered name token (e.g. /Im0) and spaces
+                    writeToken(last_name_token);
+                    for (auto const& s : spaces_after_name) {
+                        writeToken(s);
+                    }
+                    has_last_name = false;
+                    spaces_after_name.clear();
+
+                    // Write Do
+                    writeToken(token);
+
+                    // Write EMC
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                    mcid_counter++;
+                    return;
+                }
+            }
+
+            write_pending_name();
+        }
+
+        // 2. Handle text object BT...ET and its buffering
+        if (type == QPDFTokenizer::tt_word && value == "BT") {
+            in_text_object = true;
+            writeToken(token);
+            return;
+        }
+
+        if (type == QPDFTokenizer::tt_word && value == "ET") {
+            // Write any remaining buffered tokens
+            write_buffered_text_tokens();
+            in_text_object = false;
+            writeToken(token);
+            return;
+        }
+
+        if (in_text_object) {
+            if (type == QPDFTokenizer::tt_word && (value == "Tj" || value == "TJ" || value == "'" || value == "\"")) {
+                // Write BDC
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/P"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_open, "<<"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/MCID"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_integer, std::to_string(mcid_counter)));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_close, ">>"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BDC"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                // Write all buffered tokens
+                write_buffered_text_tokens();
+
+                // Write the text showing operator itself
+                writeToken(token);
+
+                // Write EMC
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                mcid_counter++;
+                return;
+            } else {
+                // Buffer the token
+                buffered_text_tokens.push_back(token);
+                return;
+            }
+        }
+
+        // Pass through the original token
+        writeToken(token);
+    }
+
+    virtual void handleEOF() override {
+        write_pending_name();
+        write_buffered_text_tokens();
+    }
+
+    int getMCIDCount() const { return mcid_counter; }
+
+private:
+    void write_pending_name() {
+        if (has_last_name) {
+            writeToken(last_name_token);
+            for (auto const& s : spaces_after_name) {
+                writeToken(s);
+            }
+            has_last_name = false;
+            spaces_after_name.clear();
+        }
+    }
+
+    void write_buffered_text_tokens() {
+        for (auto const& t : buffered_text_tokens) {
+            writeToken(t);
+        }
+        buffered_text_tokens.clear();
+    }
+
+    int mcid_counter;
+    bool in_text_object;
+    QPDFTokenizer::Token last_name_token;
+    bool has_last_name;
+    std::vector<QPDFTokenizer::Token> spaces_after_name;
+    std::vector<QPDFTokenizer::Token> buffered_text_tokens;
+};
+
+std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {
+    std::map<int, int> page_mcid_counts;
+    QPDFPageDocumentHelper pdh(pdf);
+    std::vector<QPDFPageObjectHelper> pages = pdh.getAllPages();
+
+    for (size_t i = 0; i < pages.size(); ++i) {
+        MCIDTokenFilter filter;
+        Pl_Buffer buf("filtered contents");
+        
+        pages[i].filterPageContents(&filter, &buf);
+        buf.finish();
+        
+        std::string new_content_str = buf.getString();
+        QPDFObjectHandle new_contents = QPDFObjectHandle::newStream(&pdf, new_content_str);
+        
+        pages[i].getObjectHandle().replaceKey("/Contents", new_contents);
+        page_mcid_counts[static_cast<int>(i)] = filter.getMCIDCount();
+    }
+
+    return page_mcid_counts;
+}

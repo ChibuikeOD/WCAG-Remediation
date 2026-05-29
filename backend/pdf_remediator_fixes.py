@@ -751,6 +751,9 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
                     page = doc[page_num]
                     # Render the scanned page to a high-quality image pixmap
                     pix = page.get_pixmap(dpi=150)
+                    # Drop alpha channel if present, as OCR fails on transparent pixmaps
+                    if pix.alpha:
+                        pix = fitz.Pixmap(pix, 0)
                     # Run OCR and generate page bytes with the text layer
                     ocr_bytes = pix.pdfocr_tobytes(language="eng")
                     # Open the OCR-ed page and insert into new document

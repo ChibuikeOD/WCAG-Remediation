@@ -11,6 +11,7 @@ ENV PORT=8000
 ENV UPLOAD_DIR=/app/uploads
 ENV OUTPUT_DIR=/app/output
 ENV _JAVA_OPTIONS="-Xmx128m"
+ENV TESSDATA_PREFIX="/usr/share/tesseract-ocr/"
 
 # Create app directory
 WORKDIR /app

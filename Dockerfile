@@ -11,7 +11,9 @@ ENV PORT=8000
 ENV UPLOAD_DIR=/app/uploads
 ENV OUTPUT_DIR=/app/output
 ENV _JAVA_OPTIONS="-Xmx128m"
-ENV TESSDATA_PREFIX="/usr/share/tesseract-ocr/4.00/"
+# PyMuPDF/MuPDF expects the path to the tessdata folder ITSELF (not its parent),
+# otherwise pix.pdfocr_tobytes() cannot find eng.traineddata and OCR silently fails.
+ENV TESSDATA_PREFIX="/usr/share/tesseract-ocr/4.00/tessdata"
 
 # Create app directory
 WORKDIR /app
@@ -28,6 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Verify Java is available
 RUN java -version
+
+# Verify Tesseract + English language data are present where PyMuPDF expects them.
+# Fail the build early if the tessdata path drifts in a future base image.
+RUN tesseract --version && \
+    test -f "$TESSDATA_PREFIX/eng.traineddata" \
+    || (echo "ERROR: eng.traineddata not found at $TESSDATA_PREFIX" && \
+        find /usr -name 'eng.traineddata' 2>/dev/null; exit 1)
 
 # Copy requirements file first to cache package dependencies
 COPY backend/requirements.txt /app/backend/requirements.txt

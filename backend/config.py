@@ -1,6 +1,7 @@
 """
 Configuration settings for the WCAG Accessibility Remediation Platform.
 """
+import glob
 import os
 from pathlib import Path
 
@@ -9,6 +10,50 @@ _tesseract_win_path = r"C:\Program Files\Tesseract-OCR"
 if os.name == "nt" and os.path.exists(_tesseract_win_path):
     if _tesseract_win_path not in os.environ.get("PATH", ""):
         os.environ["PATH"] = _tesseract_win_path + os.pathsep + os.environ.get("PATH", "")
+
+
+def _normalize_tessdata_prefix() -> None:
+    """Ensure TESSDATA_PREFIX points at the 'tessdata' folder itself.
+
+    PyMuPDF/MuPDF reads TESSDATA_PREFIX at ``import fitz`` time and expects the
+    folder that actually contains ``*.traineddata`` (not its parent, which is
+    the classic Tesseract-CLI convention). We normalize/auto-detect it here,
+    before fitz is imported anywhere, so OCR works across hosts and conventions.
+    """
+    def _has_traineddata(d: str) -> bool:
+        try:
+            return bool(d) and os.path.isdir(d) and bool(glob.glob(os.path.join(d, "*.traineddata")))
+        except Exception:
+            return False
+
+    env = os.environ.get("TESSDATA_PREFIX")
+    if env:
+        env = env.rstrip("/\\")
+        if _has_traineddata(env):
+            os.environ["TESSDATA_PREFIX"] = env
+            return
+        nested = os.path.join(env, "tessdata")
+        if _has_traineddata(nested):
+            os.environ["TESSDATA_PREFIX"] = nested
+            return
+
+    candidates = [
+        "/usr/share/tesseract-ocr/4.00/tessdata",
+        "/usr/share/tesseract-ocr/5/tessdata",
+        "/usr/share/tesseract-ocr/tessdata",
+        "/usr/share/tessdata",
+        "/usr/local/share/tessdata",
+        r"C:\Program Files\Tesseract-OCR\tessdata",
+        r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
+    ]
+    candidates.extend(sorted(glob.glob("/usr/share/tesseract-ocr/*/tessdata"), reverse=True))
+    for c in candidates:
+        if _has_traineddata(c):
+            os.environ["TESSDATA_PREFIX"] = c
+            return
+
+
+_normalize_tessdata_prefix()
 
 from pydantic import Field
 from pydantic_settings import BaseSettings

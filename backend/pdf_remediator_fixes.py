@@ -17,12 +17,73 @@ Fixes covered:
   - Form field labels (3.3.2)
   - Tab order not set to S (2.4.3 / PDF/UA)
 """
+import glob
 import logging
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_tessdata() -> Optional[str]:
+    """Locate Tesseract's ``tessdata`` language folder for PyMuPDF.
+
+    PyMuPDF/MuPDF expects the path to the ``tessdata`` directory *itself*
+    (the folder containing ``eng.traineddata``), which differs from the
+    classic Tesseract-CLI convention of pointing at the parent directory.
+    We resolve it explicitly so OCR works regardless of how (or whether)
+    ``TESSDATA_PREFIX`` was set on the host/container.
+
+    Returns the tessdata directory path, or ``None`` if it cannot be found.
+    """
+    def _has_traineddata(d: str) -> bool:
+        try:
+            return bool(d) and os.path.isdir(d) and bool(glob.glob(os.path.join(d, "*.traineddata")))
+        except Exception:
+            return False
+
+    # 1. Honour TESSDATA_PREFIX, accepting either the tessdata folder itself
+    #    or its parent (classic Tesseract convention).
+    env = os.environ.get("TESSDATA_PREFIX")
+    if env:
+        env = env.rstrip("/\\")
+        if _has_traineddata(env):
+            return env
+        nested = os.path.join(env, "tessdata")
+        if _has_traineddata(nested):
+            return nested
+
+    # 2. Common fixed locations across distros and Windows.
+    candidates = [
+        "/usr/share/tesseract-ocr/4.00/tessdata",
+        "/usr/share/tesseract-ocr/5/tessdata",
+        "/usr/share/tesseract-ocr/tessdata",
+        "/usr/share/tessdata",
+        "/usr/local/share/tessdata",
+        r"C:\Program Files\Tesseract-OCR\tessdata",
+        r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
+    ]
+    # 3. Glob any versioned tesseract-ocr data dir we may have missed.
+    candidates.extend(sorted(glob.glob("/usr/share/tesseract-ocr/*/tessdata"), reverse=True))
+
+    for c in candidates:
+        if _has_traineddata(c):
+            return c
+
+    # 4. Derive from the tesseract binary location, if present.
+    binary = shutil.which("tesseract")
+    if binary:
+        bin_dir = os.path.dirname(os.path.realpath(binary))
+        for rel in ("tessdata", os.path.join("..", "share", "tessdata"),
+                    os.path.join("..", "share", "tesseract-ocr", "tessdata")):
+            cand = os.path.normpath(os.path.join(bin_dir, rel))
+            if _has_traineddata(cand):
+                return cand
+
+    return None
 
 try:
     import pikepdf
@@ -682,6 +743,15 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
     if not HAS_PYMUPDF:
         return _result("pdf-ocr", False, "PyMuPDF not available")
 
+    tessdata = _resolve_tessdata()
+    if not tessdata:
+        return _result(
+            "pdf-ocr", False,
+            "OCR unavailable -- Tesseract language data (tessdata) not found. "
+            "Install Tesseract OCR and ensure TESSDATA_PREFIX points to the "
+            "'tessdata' folder for scanned-page remediation.",
+        )
+
     try:
         doc = fitz.open(str(pdf_path))
         scanned_pages = []
@@ -746,6 +816,7 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
         # Reconstruct PDF to insert OCR text layer
         new_doc = fitz.open()
         ocr_done = 0
+        last_error: Optional[str] = None
         for page_num in range(len(doc)):
             if page_num in scanned_pages:
                 try:
@@ -755,14 +826,17 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
                     # Drop alpha channel if present, as OCR fails on transparent pixmaps
                     if pix.alpha:
                         pix = fitz.Pixmap(pix, 0)
-                    # Run OCR and generate page bytes with the text layer
-                    ocr_bytes = pix.pdfocr_tobytes(language="eng")
+                    # Run OCR and generate page bytes with the text layer. Pass the
+                    # tessdata path explicitly so MuPDF locates the language data
+                    # regardless of the TESSDATA_PREFIX convention on this host.
+                    ocr_bytes = pix.pdfocr_tobytes(language="eng", tessdata=tessdata)
                     # Open the OCR-ed page and insert into new document
                     ocr_page_doc = fitz.open("pdf", ocr_bytes)
                     new_doc.insert_pdf(ocr_page_doc)
                     ocr_page_doc.close()
                     ocr_done += 1
                 except Exception as e:
+                    last_error = str(e)
                     logger.warning(f"OCR failed on page {page_num + 1}: {e}")
                     new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
             else:
@@ -780,10 +854,11 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
             )
         else:
             new_doc.close()
+            detail = f" (last error: {last_error})" if last_error else ""
             return _result(
                 "pdf-ocr", False,
-                "OCR failed -- Tesseract may not be installed. "
-                "Install Tesseract OCR for scanned-page remediation.",
+                f"OCR failed on all {len(scanned_pages)} scanned page(s) "
+                f"using tessdata at '{tessdata}'.{detail}",
             )
     except Exception as e:
         logger.error(f"fix_scanned_pages: {e}", exc_info=True)

@@ -36,8 +36,8 @@ opendataloader-pdf==2.2.1
 pytest==8.0.0
 pytest-asyncio==0.23.3
 
-# OCR support (optional - requires Tesseract system install)
-pytesseract>=0.3.10
+# OCR support is provided by PyMuPDF (pix.pdfocr_tobytes), which wraps the
+# system Tesseract install. TESSDATA_PREFIX must point at the 'tessdata' folder.
 
 # Authentication & Database
 authlib==1.3.0

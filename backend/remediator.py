@@ -668,6 +668,46 @@ class PDFRemediator:
                     message=str(e),
                 ))
 
+        # 12. Finalize metadata LAST ---------------------------------------
+        # The OCR rebuild (PyMuPDF) and the C++ tagging pass (QPDF) both drop
+        # the XMP /Metadata stream, /ViewerPreferences and /Lang. Re-apply them
+        # here, after every step that rewrites the file, so the PDF/UA + WCAG
+        # 2.4.2 requirements survive: an XMP metadata stream containing dc:title,
+        # and ViewerPreferences/DisplayDocTitle = true.
+        try:
+            import pikepdf as _pk
+            with _pk.open(str(target), allow_overwriting_input=True) as pdf:
+                # XMP metadata stream + dc:title (also synced into /Info via
+                # update_docinfo). Creating the metadata context guarantees an
+                # XMP packet is written on save.
+                with pdf.open_metadata(set_pikepdf_as_editor=True, update_docinfo=True) as meta:
+                    if pdf_title:
+                        meta["dc:title"] = pdf_title
+
+                if pdf_lang:
+                    pdf.Root.Lang = _pk.String(pdf_lang)
+
+                # DisplayDocTitle makes conforming viewers show the title rather
+                # than the filename (required by PDF/UA, checked by PAC).
+                if "/ViewerPreferences" not in pdf.Root:
+                    pdf.Root.ViewerPreferences = _pk.Dictionary()
+                pdf.Root.ViewerPreferences.DisplayDocTitle = True
+
+                pdf.save()
+            results.append(RemediationResult(
+                issue_id="pdf-metadata-final",
+                success=True,
+                message="Finalized XMP metadata (dc:title), language, and DisplayDocTitle",
+                new_value=pdf_title,
+            ))
+        except Exception as e:
+            logger.error(f"finalize metadata raised: {e}", exc_info=True)
+            results.append(RemediationResult(
+                issue_id="pdf-metadata-final",
+                success=False,
+                message=str(e),
+            ))
+
         return results
 
     def get_change_summary(self) -> Dict[str, Any]:

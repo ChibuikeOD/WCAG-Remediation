@@ -84,7 +84,9 @@ int main(int argc, char* argv[]) {
 
         // Step 1: Wrap text elements in BDC/EMC marked content and assign MCIDs
         std::map<int, std::set<int>> page_figure_mcids;
-        std::map<int, int> page_mcid_counts = tag_pdf_content_streams(pdf, page_figure_mcids);
+        std::map<int, std::map<int, MCIDInfo>> page_mcid_info;
+        std::map<int, int> page_mcid_counts =
+            tag_pdf_content_streams(pdf, page_figure_mcids, page_mcid_info);
         std::cout << "Content streams tagged successfully." << std::endl;
         for (auto const& pair : page_mcid_counts) {
             std::cout << "  Page " << pair.first + 1 << ": " << pair.second << " MCIDs injected." << std::endl;
@@ -92,7 +94,7 @@ int main(int argc, char* argv[]) {
 
         // Step 2: Build the structure tagging tree mapping MCIDs -> tags
         std::cout << "Building PDF/UA structure tree..." << std::endl;
-        build_struct_tree(pdf, blocks, page_mcid_counts, page_figure_mcids);
+        build_struct_tree(pdf, blocks, page_mcid_counts, page_figure_mcids, page_mcid_info);
         std::cout << "Structure tree generated." << std::endl;
 
         // Step 3: Write out the final tagged PDF

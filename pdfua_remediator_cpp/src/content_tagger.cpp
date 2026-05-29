@@ -7,7 +7,7 @@
 class MCIDTokenFilter : public QPDFObjectHandle::TokenFilter {
 public:
     MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
-                        marked_content_depth(0), in_path(false) {}
+                        marked_content_depth(0), in_path(false), inline_dict_depth(0) {}
     virtual ~MCIDTokenFilter() = default;
 
     virtual void handleToken(QPDFTokenizer::Token const& token) override {
@@ -37,6 +37,42 @@ public:
                 in_path = false;
             }
             return;
+        }
+
+        // Pass inline dictionaries through verbatim (outside text objects).
+        // Marked-content property lists such as the "/P <</MCID 0>> BDC"
+        // sequences emitted by MuPDF's OCR text layer arrive while
+        // in_text_object == false and marked_content_depth == 0, the same state
+        // in which numeric operands are buffered for path wrapping and names are
+        // held as a pending name. Without this guard the dictionary's value (an
+        // integer) is captured by the path-operand buffer and flushed before the
+        // pending key name, reordering "<</MCID 0>>" into "<<0 /MCID >>" and
+        // producing "name object expected" parse errors in strict readers (PAC).
+        if (!in_text_object) {
+            if (inline_dict_depth > 0) {
+                if (type == QPDFTokenizer::tt_dict_open) {
+                    inline_dict_depth++;
+                } else if (type == QPDFTokenizer::tt_dict_close) {
+                    inline_dict_depth--;
+                    if (inline_dict_depth < 0) inline_dict_depth = 0;
+                }
+                writeToken(token);
+                return;
+            }
+            if (type == QPDFTokenizer::tt_dict_open) {
+                // Preserve ordering: emit any buffered path operands and the
+                // pending name (e.g. the "/P" tag) before the dictionary opens.
+                if (!path_operand_buffer.empty()) {
+                    for (auto const& t : path_operand_buffer) {
+                        writeToken(t);
+                    }
+                    path_operand_buffer.clear();
+                }
+                write_pending_name();
+                inline_dict_depth++;
+                writeToken(token);
+                return;
+            }
         }
 
         // If we are not inside a path, and we are outside text objects, and not inside marked content:
@@ -248,6 +284,72 @@ private:
     int marked_content_depth;
     bool in_path;
     std::vector<QPDFTokenizer::Token> path_operand_buffer;
+    int inline_dict_depth;
+};
+
+// Removes any pre-existing marked-content operators (BDC/BMC/EMC/DP/MP) and
+// their operands from a content stream, leaving the drawing operators intact.
+// This makes re-tagging idempotent and, crucially, cleans up the marked content
+// MuPDF's OCR layer injects (e.g. an unbalanced "/P <</MCID 0>> BDC" wrapping the
+// page image). Without this, re-tagging would emit duplicate MCIDs and unbalanced
+// marked-content sequences, which PAC and other strict validators reject.
+class StripMarkedContentFilter : public QPDFObjectHandle::TokenFilter {
+public:
+    StripMarkedContentFilter() : dict_depth(0), array_depth(0) {}
+    virtual ~StripMarkedContentFilter() = default;
+
+    virtual void handleToken(QPDFTokenizer::Token const& token) override {
+        QPDFTokenizer::token_type_e type = token.getType();
+        std::string value = token.getValue();
+
+        // Accumulate the tokens of a compound operand (dict/array) verbatim.
+        if (dict_depth > 0 || array_depth > 0) {
+            pending.push_back(token);
+            if (type == QPDFTokenizer::tt_dict_open)        dict_depth++;
+            else if (type == QPDFTokenizer::tt_dict_close)  { if (--dict_depth < 0) dict_depth = 0; }
+            else if (type == QPDFTokenizer::tt_array_open)  array_depth++;
+            else if (type == QPDFTokenizer::tt_array_close) { if (--array_depth < 0) array_depth = 0; }
+            return;
+        }
+
+        if (type == QPDFTokenizer::tt_dict_open)  { pending.push_back(token); dict_depth++;  return; }
+        if (type == QPDFTokenizer::tt_array_open) { pending.push_back(token); array_depth++; return; }
+
+        if (type == QPDFTokenizer::tt_word) {
+            // Marked-content operators: drop the operator and its buffered operands.
+            if (value == "BDC" || value == "BMC" || value == "DP" || value == "MP") {
+                pending.clear();
+                return;
+            }
+            if (value == "EMC") {
+                pending.clear();
+                return;
+            }
+            // Any other operator: commit its operands, then the operator itself.
+            flushPending();
+            writeToken(token);
+            return;
+        }
+
+        // Operand token (name, number, string, space, comment, inline image): buffer it.
+        pending.push_back(token);
+    }
+
+    virtual void handleEOF() override {
+        flushPending();
+    }
+
+private:
+    void flushPending() {
+        for (auto const& t : pending) {
+            writeToken(t);
+        }
+        pending.clear();
+    }
+
+    std::vector<QPDFTokenizer::Token> pending;
+    int dict_depth;
+    int array_depth;
 };
 
 std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {
@@ -256,9 +358,22 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {
     std::vector<QPDFPageObjectHelper> pages = pdh.getAllPages();
 
     for (size_t i = 0; i < pages.size(); ++i) {
+        // Pass 1: strip any pre-existing marked content (e.g. from OCR output or
+        // a previously tagged PDF) so the re-tagging pass starts from a clean,
+        // unmarked content stream.
+        StripMarkedContentFilter strip;
+        Pl_Buffer strip_buf("stripped contents");
+        pages[i].filterPageContents(&strip, &strip_buf);
+        strip_buf.finish();
+        Buffer* sb = strip_buf.getBuffer();
+        std::string stripped_str(reinterpret_cast<char const*>(sb->getBuffer()), sb->getSize());
+        delete sb;
+        pages[i].getObjectHandle().replaceKey("/Contents",
+                                              QPDFObjectHandle::newStream(&pdf, stripped_str));
+
+        // Pass 2: inject fresh MCIDs and marked content on the cleaned stream.
         MCIDTokenFilter filter;
         Pl_Buffer buf("filtered contents");
-        
         pages[i].filterPageContents(&filter, &buf);
         buf.finish();
         

@@ -7,7 +7,7 @@
 class MCIDTokenFilter : public QPDFObjectHandle::TokenFilter {
 public:
     MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
-                        marked_content_depth(0) {}
+                        marked_content_depth(0), in_path(false) {}
     virtual ~MCIDTokenFilter() = default;
 
     virtual void handleToken(QPDFTokenizer::Token const& token) override {
@@ -24,25 +24,68 @@ public:
             }
         }
 
-        // 1. Handle untagged path painting objects outside marked content blocks
-        if (!in_text_object && marked_content_depth == 0) {
+        // If we are currently inside a path, we write everything directly.
+        // If we hit a path painting/terminating operator, we write it, then write EMC, and set in_path = false.
+        if (in_path) {
+            writeToken(token);
             if (type == QPDFTokenizer::tt_word && 
                 (value == "S" || value == "s" || value == "f" || value == "F" || value == "f*" || 
-                 value == "B" || value == "B*" || value == "b" || value == "b*" || value == "sh")) {
-                
-                // Wrap only the path painting operator in an /Artifact BMC block
+                 value == "B" || value == "B*" || value == "b" || value == "b*" || value == "sh" || value == "n")) {
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                in_path = false;
+            }
+            return;
+        }
+
+        // If we are not inside a path, and we are outside text objects, and not inside marked content:
+        if (!in_text_object && marked_content_depth == 0) {
+            // Check if this token is a path-starting operator
+            bool is_path_start = (type == QPDFTokenizer::tt_word &&
+                                  (value == "m" || value == "re" || value == "l" || value == "c" || 
+                                   value == "v" || value == "y" || value == "h"));
+            
+            if (is_path_start) {
+                // Wrap the path in /Artifact BMC ... EMC
                 writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
                 writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/Artifact"));
                 writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
                 writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BMC"));
                 writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                // Write the buffered operands
+                for (auto const& t : path_operand_buffer) {
+                    writeToken(t);
+                }
+                path_operand_buffer.clear();
+
+                // Write the path starting operator itself
+                writeToken(token);
                 
-                writeToken(token); // Write the painting operator itself
-                
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                in_path = true;
                 return;
+            }
+
+            // If it is not a path-starting operator, check if it's a bufferable token (numeric, or space/comment when buffer is not empty)
+            bool is_numeric = (type == QPDFTokenizer::tt_integer || type == QPDFTokenizer::tt_real);
+            bool is_space_comment = (type == QPDFTokenizer::tt_space || type == QPDFTokenizer::tt_comment);
+
+            if (is_numeric) {
+                path_operand_buffer.push_back(token);
+                return;
+            } else if (is_space_comment && !path_operand_buffer.empty()) {
+                path_operand_buffer.push_back(token);
+                return;
+            } else {
+                // Not a path-starting operator and not a bufferable token.
+                // Flush path operand buffer before processing this token.
+                if (!path_operand_buffer.empty()) {
+                    for (auto const& t : path_operand_buffer) {
+                        writeToken(t);
+                    }
+                    path_operand_buffer.clear();
+                }
             }
         }
 
@@ -159,8 +202,20 @@ public:
     }
 
     virtual void handleEOF() override {
+        if (!path_operand_buffer.empty()) {
+            for (auto const& t : path_operand_buffer) {
+                writeToken(t);
+            }
+            path_operand_buffer.clear();
+        }
         write_pending_name();
         write_buffered_text_tokens();
+        if (in_path) {
+            writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+            writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+            writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+            in_path = false;
+        }
     }
 
     int getMCIDCount() const { return mcid_counter; }
@@ -191,6 +246,8 @@ private:
     std::vector<QPDFTokenizer::Token> spaces_after_name;
     std::vector<QPDFTokenizer::Token> buffered_text_tokens;
     int marked_content_depth;
+    bool in_path;
+    std::vector<QPDFTokenizer::Token> path_operand_buffer;
 };
 
 std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {

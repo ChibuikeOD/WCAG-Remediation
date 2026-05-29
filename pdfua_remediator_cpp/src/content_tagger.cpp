@@ -175,6 +175,9 @@ public:
                     writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
                     writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
 
+                    // Record that this MCID is an image so the structure builder
+                    // tags it (and only it) as a /Figure.
+                    figure_mcids.insert(mcid_counter);
                     mcid_counter++;
                     return;
                 }
@@ -255,6 +258,7 @@ public:
     }
 
     int getMCIDCount() const { return mcid_counter; }
+    const std::set<int>& getFigureMCIDs() const { return figure_mcids; }
 
 private:
     void write_pending_name() {
@@ -285,6 +289,7 @@ private:
     bool in_path;
     std::vector<QPDFTokenizer::Token> path_operand_buffer;
     int inline_dict_depth;
+    std::set<int> figure_mcids;
 };
 
 // Removes any pre-existing marked-content operators (BDC/BMC/EMC/DP/MP) and
@@ -352,7 +357,8 @@ private:
     int array_depth;
 };
 
-std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {
+std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
+                                           std::map<int, std::set<int>>& page_figure_mcids) {
     std::map<int, int> page_mcid_counts;
     QPDFPageDocumentHelper pdh(pdf);
     std::vector<QPDFPageObjectHelper> pages = pdh.getAllPages();
@@ -384,6 +390,7 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf) {
         
         pages[i].getObjectHandle().replaceKey("/Contents", new_contents);
         page_mcid_counts[static_cast<int>(i)] = filter.getMCIDCount();
+        page_figure_mcids[static_cast<int>(i)] = filter.getFigureMCIDs();
     }
 
     return page_mcid_counts;

@@ -686,18 +686,35 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
         scanned_pages = []
 
         for page_num, page in enumerate(doc):
-            # Check for non-embedded Type3 fonts or unnamed/bad fonts
+            # Check for non-embedded fonts or fonts with missing Unicode mapping
             try:
                 fonts = page.get_fonts(full=True)
                 has_bad_fonts = False
                 for f in fonts:
                     # f is (xref, ext, type, name, username, encoding, is_embedded)
                     if len(f) >= 7:
+                        f_xref = f[0]
                         f_type = f[2]
                         f_name = f[3]
+                        f_encoding = f[5]
                         f_is_embedded = f[6]
+
+                        # 1. Flag if font is unnamed or bad
+                        if not f_name or f_name == "n/a" or f_name == "":
+                            has_bad_fonts = True
+                            break
+
+                        # 2. Flag if font is not embedded (PDF/UA violation)
                         if f_is_embedded == 0:
-                            if f_type == "Type3" or not f_name or f_name == "n/a" or f_name == "":
+                            has_bad_fonts = True
+                            break
+
+                        # 3. Flag if font is embedded but lacks ToUnicode map and uses non-standard encoding
+                        dict_str = doc.xref_object(f_xref)
+                        if "ToUnicode" not in dict_str:
+                            clean_encoding = f_encoding.replace("/", "") if isinstance(f_encoding, str) else ""
+                            standard_encodings = {"WinAnsiEncoding", "MacRomanEncoding", "MacExpertEncoding", "StandardEncoding", "PDFDocEncoding"}
+                            if f_type == "Type0" or clean_encoding in ("Identity-H", "Identity-V") or (clean_encoding and clean_encoding not in standard_encodings):
                                 has_bad_fonts = True
                                 break
                 if has_bad_fonts:

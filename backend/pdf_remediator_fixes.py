@@ -686,6 +686,26 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
         scanned_pages = []
 
         for page_num, page in enumerate(doc):
+            # Check for non-embedded Type3 fonts or unnamed/bad fonts
+            try:
+                fonts = page.get_fonts(full=True)
+                has_bad_fonts = False
+                for f in fonts:
+                    # f is (xref, ext, type, name, username, encoding, is_embedded)
+                    if len(f) >= 7:
+                        f_type = f[2]
+                        f_name = f[3]
+                        f_is_embedded = f[6]
+                        if f_is_embedded == 0:
+                            if f_type == "Type3" or not f_name or f_name == "n/a" or f_name == "":
+                                has_bad_fonts = True
+                                break
+                if has_bad_fonts:
+                    scanned_pages.append(page_num)
+                    continue
+            except Exception:
+                pass
+
             text = page.get_text("text").strip()
             images = page.get_images()
             if len(images) > 0 and len(text) < 50:

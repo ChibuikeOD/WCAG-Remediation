@@ -452,11 +452,12 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
                 logger.warning(f"Browser checks failed: {e}")
             
         elif file_info["file_type"] == "pdf":
-            # Parse and analyze PDF
-            parser = PDFParser(file_path=file_path)
+            # Parse and analyze PDF using the comprehensive PDFAccessibilityAnalyzer
+            from .pdf_accessibility import PDFAccessibilityAnalyzer
+            analyzer = PDFAccessibilityAnalyzer(file_path=file_path)
             
             try:
-                summary = parser.get_accessibility_summary()
+                summary = analyzer.analyze()
                 
                 doc_info = DocumentInfo(
                     filename=file_info["original_filename"],
@@ -521,7 +522,7 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
                 )
                 
             finally:
-                parser.close()
+                analyzer.close()
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type")
     

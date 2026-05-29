@@ -3,6 +3,13 @@ Configuration settings for the WCAG Accessibility Remediation Platform.
 """
 import os
 from pathlib import Path
+
+# Proactively add standard Windows Tesseract path to PATH to prevent OCR failure if terminal environment is stale
+_tesseract_win_path = r"C:\Program Files\Tesseract-OCR"
+if os.name == "nt" and os.path.exists(_tesseract_win_path):
+    if _tesseract_win_path not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _tesseract_win_path + os.pathsep + os.environ.get("PATH", "")
+
 from pydantic import Field
 from pydantic_settings import BaseSettings
 from typing import Optional

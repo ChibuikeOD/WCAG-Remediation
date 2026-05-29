@@ -649,6 +649,7 @@ class PDFRemediator:
             fixes.fix_untagged_urls,
             fixes.fix_bookmarks,
             fixes.fix_form_labels,
+            fixes.fix_tab_order,
         ]
         for fn in fix_funcs:
             try:

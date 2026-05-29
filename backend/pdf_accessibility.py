@@ -59,6 +59,7 @@ class PDFIssueType(Enum):
     LIST_STRUCTURE_INVALID = "list_structure_invalid"
     SPAN_OVERUSE = "span_overuse"
     WRONG_TAG_TYPE = "wrong_tag_type"
+    TAB_ORDER_NOT_STRUCTURE = "tab_order_not_structure"
 
 
 @dataclass
@@ -116,6 +117,7 @@ class PDFStructure:
     span_overuse: int = 0  # Excessive Span tags that should be P/H/etc
     paragraphs_as_headings: int = 0  # Visual headings tagged as P
     wrong_tag_types: List[Dict[str, Any]] = None  # Specific mismatches found
+    tabs_not_s_count: int = 0  # Pages with annotations but /Tabs != /S
     
     def __post_init__(self):
         if self.heading_sequence is None:
@@ -202,6 +204,7 @@ class PDFAccessibilityAnalyzer:
         self._check_span_overuse()    # WCAG 1.3.1 - tag quality
         self._check_forms()           # WCAG 1.3.1, 3.3.2
         self._check_scanned_content() # WCAG 1.4.5
+        self._check_tab_order()        # PDF/UA + WCAG 2.4.3
         
         return self._generate_report()
     
@@ -799,43 +802,157 @@ class PDFAccessibilityAnalyzer:
                 auto_fixable=True
             ))
     
+    def _check_tab_order(self):
+        """
+        Check that every page with annotations has /Tabs set to /S (structure).
+
+        PDF/UA-1 clause 7.18.3 and PDF 1.7 §12.5 require that when a page
+        contains annotations (links, form widgets, etc.) the page dictionary's
+        /Tabs entry is set to /S so that the Tab key follows the document's
+        logical structure tree rather than arbitrary PDF object order.
+
+        Related: WCAG 2.4.3 Focus Order (Level A)
+        """
+        pike = self._open_pike()
+        if not pike:
+            return
+
+        pages_without_s = 0
+        affected_pages = []
+
+        try:
+            for page_num, page in enumerate(pike.pages):
+                # Only check pages that have annotations
+                if "/Annots" not in page:
+                    continue
+                annots = page["/Annots"]
+                # annots could be an empty array – skip those
+                if hasattr(annots, "__len__") and len(annots) == 0:
+                    continue
+
+                # Check /Tabs entry
+                tabs = page.get("/Tabs")
+                if tabs is None or str(tabs) != "/S":
+                    pages_without_s += 1
+                    affected_pages.append(page_num + 1)  # 1-based for reporting
+        except Exception as e:
+            logger.debug(f"Error checking tab order: {e}")
+            return
+
+        self.structure.tabs_not_s_count = pages_without_s
+
+        if pages_without_s > 0:
+            page_list = ", ".join(str(p) for p in affected_pages[:10])
+            if len(affected_pages) > 10:
+                page_list += f" … ({len(affected_pages)} total)"
+            self.issues.append(PDFIssue(
+                issue_type=PDFIssueType.TAB_ORDER_NOT_STRUCTURE,
+                wcag_criterion="2.4.3",
+                wcag_name="Focus Order",
+                wcag_level="A",
+                severity="error",
+                message=(
+                    f"{pages_without_s} page(s) with annotations do not have "
+                    f"tab order set to \"S\" (structure): page(s) {page_list}"
+                ),
+                fix_suggestion=(
+                    "Set the /Tabs entry to /S on every page dictionary that "
+                    "contains annotations. This ensures the Tab key follows the "
+                    "document structure tree rather than arbitrary PDF object order."
+                ),
+                element_info={
+                    "pages_affected": affected_pages,
+                    "total": pages_without_s,
+                },
+                auto_fixable=True,
+            ))
+
     def _check_scanned_content(self):
         """
-        Check for scanned/image-based content.
+        Check for scanned/image-based content or unreadable text.
         WCAG 1.4.5 Images of Text (Level AA)
         """
         doc = self._open_fitz()
         if not doc:
             return
-        
+
+        scanned_pages = []
+
         for page_num, page in enumerate(doc):
+            # 1. Check for non-embedded fonts or fonts with missing Unicode mapping
+            try:
+                fonts = page.get_fonts(full=True)
+                has_bad_fonts = False
+                for f in fonts:
+                    # f is (xref, ext, type, name, username, encoding, is_embedded)
+                    if len(f) >= 7:
+                        f_xref = f[0]
+                        f_type = f[2]
+                        f_name = f[3]
+                        f_encoding = f[5]
+                        f_is_embedded = f[6]
+
+                        # Flag if font is unnamed or bad
+                        if not f_name or f_name == "n/a" or f_name == "":
+                            has_bad_fonts = True
+                            break
+
+                        # Flag if font is not embedded (PDF/UA violation)
+                        if f_is_embedded == 0:
+                            has_bad_fonts = True
+                            break
+
+                        # Flag if font is embedded but lacks ToUnicode map and uses non-standard encoding
+                        dict_str = doc.xref_object(f_xref)
+                        if "ToUnicode" not in dict_str:
+                            clean_encoding = f_encoding.replace("/", "") if isinstance(f_encoding, str) else ""
+                            standard_encodings = {"WinAnsiEncoding", "MacRomanEncoding", "MacExpertEncoding", "StandardEncoding", "PDFDocEncoding"}
+                            if f_type == "Type0" or clean_encoding in ("Identity-H", "Identity-V") or (clean_encoding and clean_encoding not in standard_encodings):
+                                has_bad_fonts = True
+                                break
+                if has_bad_fonts:
+                    scanned_pages.append(page_num)
+                    continue
+            except Exception:
+                pass
+
+            # 2. Check for pure scanned image pages
             text = page.get_text("text").strip()
             images = page.get_images()
-            
-            # If page has images but little/no text, might be scanned
             if len(images) > 0 and len(text) < 50:
-                # Check if image covers most of page
                 for img in images:
                     try:
-                        img_rect = page.get_image_rects(img[0])
-                        if img_rect:
-                            img_area = img_rect[0].width * img_rect[0].height
+                        rects = page.get_image_rects(img[0])
+                        if rects:
+                            img_area = rects[0].width * rects[0].height
                             page_area = page.rect.width * page.rect.height
                             if img_area > page_area * 0.5:
-                                self.issues.append(PDFIssue(
-                                    issue_type=PDFIssueType.SCANNED_IMAGE,
-                                    wcag_criterion="1.4.5",
-                                    wcag_name="Images of Text",
-                                    wcag_level="AA",
-                                    severity="error",
-                                    message=f"Page {page_num + 1} appears to be a scanned image without real text",
-                                    fix_suggestion="Run OCR (Recognize Text) to convert image to searchable text",
-                                    page_number=page_num + 1,
-                                    auto_fixable=True
-                                ))
-                                return  # Only report first occurrence
+                                scanned_pages.append(page_num)
+                                break
                     except Exception:
                         pass
+
+        if scanned_pages:
+            affected_pages = [p + 1 for p in scanned_pages]
+            page_list = ", ".join(str(p) for p in affected_pages[:10])
+            if len(affected_pages) > 10:
+                page_list += f" … ({len(affected_pages)} total)"
+
+            self.issues.append(PDFIssue(
+                issue_type=PDFIssueType.SCANNED_IMAGE,
+                wcag_criterion="1.4.5",
+                wcag_name="Images of Text",
+                wcag_level="AA",
+                severity="error",
+                message=f"{len(scanned_pages)} page(s) appear to be scanned images or have unreadable text: page(s) {page_list}",
+                fix_suggestion="Run OCR (Recognize Text) to convert image to searchable text",
+                page_number=scanned_pages[0] + 1,
+                element_info={
+                    "pages_affected": affected_pages,
+                    "total": len(scanned_pages)
+                },
+                auto_fixable=True
+            ))
     
     def _generate_report(self) -> Dict[str, Any]:
         """Generate comprehensive accessibility report."""

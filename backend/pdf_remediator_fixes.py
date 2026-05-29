@@ -15,6 +15,7 @@ Fixes covered:
   - Missing bookmarks (2.4.5)
   - Scanned pages / OCR (1.4.5)
   - Form field labels (3.3.2)
+  - Tab order not set to S (2.4.3 / PDF/UA)
 """
 import logging
 import re
@@ -838,3 +839,56 @@ def fix_form_labels(pdf_path: Path) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"fix_form_labels: {e}", exc_info=True)
         return _result("pdf-form-labels", False, str(e))
+
+
+# ---------------------------------------------------------------------------
+# 10. Tab order (PDF/UA clause 7.18.3 / WCAG 2.4.3)
+# ---------------------------------------------------------------------------
+
+def fix_tab_order(pdf_path: Path) -> Dict[str, Any]:
+    """
+    Set /Tabs /S on every page that contains annotations but is missing the
+    entry or has it set to something other than /S.
+
+    PDF/UA-1 §7.18.3 and PDF 1.7 §12.5 require /Tabs /S whenever a page has
+    annotations so that assistive technology follows the logical reading order
+    defined by the structure tree rather than arbitrary PDF object ordering.
+
+    Related: WCAG 2.4.3 Focus Order (Level A)
+    """
+    if not HAS_PIKEPDF:
+        return _result("pdf-tab-order", False, "pikepdf not available")
+
+    try:
+        pdf = pikepdf.open(str(pdf_path), allow_overwriting_input=True)
+    except Exception as e:
+        return _result("pdf-tab-order", False, str(e))
+
+    try:
+        fixed = 0
+        for page in pdf.pages:
+            # Only pages with a non-empty /Annots array need /Tabs /S
+            if "/Annots" not in page:
+                continue
+            annots = page["/Annots"]
+            if hasattr(annots, "__len__") and len(annots) == 0:
+                continue
+
+            tabs = page.get("/Tabs")
+            if tabs is None or str(tabs) != "/S":
+                page["/Tabs"] = pikepdf.Name("/S")
+                fixed += 1
+
+        if fixed:
+            pdf.save()
+            return _result(
+                "pdf-tab-order", True,
+                f"Set /Tabs /S on {fixed} page(s) with annotations",
+                f"{fixed} pages fixed",
+            )
+        return _result("pdf-tab-order", True, "Tab order already correct on all pages")
+    except Exception as e:
+        logger.error(f"fix_tab_order: {e}", exc_info=True)
+        return _result("pdf-tab-order", False, str(e))
+    finally:
+        pdf.close()

@@ -45,7 +45,7 @@ public:
           marked_content_depth(0), in_path(false), inline_dict_depth(0),
           text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
           in_marked_content(false), last_x(0.0), last_y(0.0), last_link_idx(-1) {
-        for (auto const& rect : link_rects) {
+        for (auto rect : link_rects) {
             if (rect.isArray() && rect.getArrayNItems() == 4) {
                 Rect r;
                 r.left = rect.getArrayItem(0).getNumericValue();

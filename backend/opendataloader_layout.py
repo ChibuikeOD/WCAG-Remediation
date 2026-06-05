@@ -110,6 +110,8 @@ class OpenDataLoaderLayoutAnalyzer:
     def _run_local_jar(self, input_path: Path, output_dir: Path, runtime: RuntimeResolution):
         if runtime.jar_path is None:
             raise RuntimeError("Local OpenDataLoader runtime is missing a CLI JAR")
+        from .config import settings
+
         command = [
             "java",
             "-jar",
@@ -122,12 +124,64 @@ class OpenDataLoaderLayoutAnalyzer:
             "--include-header-footer",
         ]
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=settings.PDF_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "OpenDataLoader CLI timed out after "
+                f"{settings.PDF_SUBPROCESS_TIMEOUT_SECONDS}s (likely out of memory "
+                "or too large a document for the current Java heap)."
+            ) from exc
         except subprocess.CalledProcessError as exc:
             message = exc.stderr or exc.stdout or str(exc)
             raise RuntimeError(f"OpenDataLoader CLI failed: {message.strip()}") from exc
 
     def _run_installed_package(self, input_path: Path, output_dir: Path):
+        from .config import settings
+
+        timeout = settings.PDF_SUBPROCESS_TIMEOUT_SECONDS
+
+        # Prefer invoking the bundled CLI JAR directly so we can enforce a hard
+        # wall-clock timeout. The package's own runner.run_jar() has no timeout,
+        # so a wedged/OOM-thrashing JVM would otherwise hang the request forever.
+        jar_path = self._locate_bundled_jar()
+        if jar_path is not None:
+            command = [
+                "java",
+                "-jar",
+                str(jar_path),
+                str(input_path),
+                "--output-dir",
+                str(output_dir),
+                "--format",
+                "json",
+                "--include-header-footer",
+            ]
+            try:
+                subprocess.run(
+                    command,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                return
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"OpenDataLoader CLI timed out after {timeout}s (likely out of "
+                    "memory or too large a document for the current Java heap)."
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                message = exc.stderr or exc.stdout or str(exc)
+                raise RuntimeError(f"OpenDataLoader CLI failed: {message.strip()}") from exc
+
+        # Fallback: the bundled JAR could not be located, so defer to the
+        # package's own convert(). No timeout is possible on this path.
         package = importlib.import_module("opendataloader_pdf")
         package.convert(
             input_path=str(input_path),
@@ -136,6 +190,22 @@ class OpenDataLoaderLayoutAnalyzer:
             include_header_footer=True,
             use_struct_tree=False,
         )
+
+    @staticmethod
+    def _locate_bundled_jar() -> Optional[Path]:
+        """Resolve the path to the CLI JAR shipped inside opendataloader_pdf."""
+        try:
+            import importlib.resources as resources
+
+            jar_ref = resources.files("opendataloader_pdf").joinpath(
+                "jar", "opendataloader-pdf-cli.jar"
+            )
+            with resources.as_file(jar_ref) as jar_path:
+                jar = Path(jar_path)
+                return jar if jar.exists() else None
+        except Exception as exc:
+            logger.debug("Could not locate bundled OpenDataLoader JAR: %s", exc)
+            return None
 
     def _convert_to_json(self, input_path: Path) -> Path:
         runtime = self._ensure_runtime()

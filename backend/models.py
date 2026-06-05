@@ -210,6 +210,33 @@ class ContrastResult(BaseModel):
     is_large_text: bool = False
 
 
+class DocumentImageItem(BaseModel):
+    """Represents an extracted image/figure from the document."""
+    id: str
+    page_num: Optional[int] = None  # None for HTML
+    current_alt: str
+    image_url: Optional[str] = None  # base64 data URL
+
+
+class AltTextResolution(BaseModel):
+    """Represents the resolution for a single image/figure."""
+    id: str
+    alt_text: str
+    is_decorative: bool = False
+
+
+class AltTextResolutionRequest(BaseModel):
+    """Payload to resolve alt-text for one or more images/figures."""
+    resolutions: List[AltTextResolution]
+
+
+class AltTextGenerateRequest(BaseModel):
+    """Payload to request AI alt-text generation."""
+    image_id: str
+    api_key: Optional[str] = None
+
+
+
 
 
 

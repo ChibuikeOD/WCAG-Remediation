@@ -591,27 +591,59 @@ def _extract_struct_bboxes(pdf_path: Path) -> Dict:
 URL_RE = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+|www\.[^\s<>"{}|\\^`\[\]]+')
 
 
-def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
-    """Find URLs in page text and add /Link structure elements for them."""
-    if not HAS_PIKEPDF or not HAS_PYMUPDF:
-        return _result("pdf-untagged-urls", False, "pikepdf/PyMuPDF not available")
+def inject_link_annotations(pdf_path: Path) -> Dict[str, Any]:
+    """Find URLs in page text and add /Link annotations for them."""
+    if not HAS_PYMUPDF:
+        return _result("pdf-inject-link-annots", False, "PyMuPDF not available")
 
     try:
         doc = fitz.open(str(pdf_path))
-        urls_by_page: Dict[int, List[str]] = {}
+        added = 0
         for page_num, page in enumerate(doc):
             text = page.get_text("text")
-            found = URL_RE.findall(text)
-            if found:
-                urls_by_page[page_num] = found
+            found_urls = URL_RE.findall(text)
+            for url in found_urls:
+                rects = page.search_for(url)
+                for rect in rects:
+                    # Check if there is already a link annot overlapping this rect
+                    already_has = False
+                    for link in page.get_links():
+                        l_rect = fitz.Rect(link["from"])
+                        if l_rect.intersects(rect):
+                            already_has = True
+                            break
+                    if not already_has:
+                        page.insert_link({
+                            "kind": fitz.LINK_URI,
+                            "from": rect,
+                            "uri": url
+                        })
+                        added += 1
+        if added > 0:
+            doc.save(str(pdf_path), incremental=True, encryption=0)
         doc.close()
+        return _result(
+            "pdf-inject-link-annots", True,
+            f"Injected {added} Link annotation(s) for URLs",
+            f"{added} annotations injected"
+        )
     except Exception as e:
-        return _result("pdf-untagged-urls", False, str(e))
+        logger.error(f"inject_link_annotations: {e}", exc_info=True)
+        return _result("pdf-inject-link-annots", False, str(e))
 
-    total_urls = sum(len(v) for v in urls_by_page.values())
-    if total_urls == 0:
-        return _result("pdf-untagged-urls", True, "No untagged URLs found")
 
+def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
+    """Find URLs in page text and ensure they have both /Link annotations and structure elements."""
+    if not HAS_PIKEPDF or not HAS_PYMUPDF:
+        return _result("pdf-untagged-urls", False, "pikepdf/PyMuPDF not available")
+
+    # 1. First, ensure all text URLs have /Link annotations on the pages
+    try:
+        inject_link_annotations(pdf_path)
+    except Exception as e:
+        logger.error(f"fix_untagged_urls - inject_link_annotations failed: {e}")
+
+    # 2. Now check all /Link annotations across all pages to see if they are tagged
     try:
         pdf = pikepdf.open(str(pdf_path), allow_overwriting_input=True)
     except Exception as e:
@@ -622,12 +654,23 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
             pdf.close()
             return _result("pdf-untagged-urls", True, "No structure tree; skipped")
 
-        existing_links = _collect_struct_elems(
-            pdf.Root["/StructTreeRoot"], {"/Link"}
-        )
-        if len(existing_links) >= total_urls:
-            pdf.close()
-            return _result("pdf-untagged-urls", True, "URLs already tagged as Links")
+        struct_root = pdf.Root["/StructTreeRoot"]
+        
+        # Build ParentTree map
+        pt_map = {}
+        if "/ParentTree" in struct_root:
+            parent_tree = struct_root["/ParentTree"]
+            if "/Nums" in parent_tree:
+                nums = parent_tree["/Nums"]
+                for i in range(0, len(nums), 2):
+                    pt_map[int(nums[i])] = nums[i+1]
+        
+        # Find next parent tree key
+        next_key = 0
+        if pt_map:
+            next_key = max(pt_map.keys()) + 1
+        if "/ParentTreeNextKey" in struct_root:
+            next_key = max(next_key, int(struct_root["/ParentTreeNextKey"]))
 
         doc_elem = _get_doc_element(pdf)
         if doc_elem is None:
@@ -635,33 +678,89 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
             return _result("pdf-untagged-urls", True, "No document element; skipped")
 
         added = 0
-        for page_num, urls in urls_by_page.items():
-            if page_num >= len(pdf.pages):
-                continue
-            page_obj = pdf.pages[page_num].obj
-            for url in urls:
-                link_elem = pdf.make_indirect(pikepdf.Dictionary({
-                    "/Type": pikepdf.Name("/StructElem"),
-                    "/S": pikepdf.Name("/Link"),
-                    "/P": doc_elem,
-                    "/Pg": page_obj,
-                    "/Alt": pikepdf.String(url[:200]),
-                }))
-                doc_elem["/K"].append(link_elem)
-                added += 1
 
-        if added:
+        for page_num, page in enumerate(pdf.pages):
+            annots = page.get("/Annots")
+            if not annots:
+                continue
+            for annot in annots:
+                if annot.get("/Subtype") == "/Link":
+                    sp = annot.get("/StructParent")
+                    # Check if it has a valid mapping in ParentTree to a /Link element
+                    is_tagged = False
+                    if sp is not None:
+                        sp_val = int(sp)
+                        if sp_val in pt_map:
+                            mapped_obj = pt_map[sp_val]
+                            if isinstance(mapped_obj, pikepdf.Dictionary) and mapped_obj.get("/S") == "/Link":
+                                is_tagged = True
+                    
+                    if not is_tagged:
+                        # Find or generate a StructParent key
+                        if sp is None:
+                            sp_val = next_key
+                            next_key += 1
+                            annot["/StructParent"] = sp_val
+                        else:
+                            sp_val = int(sp)
+
+                        # Find a parent structure element. We attach to doc_elem.
+                        link_elem = pdf.make_indirect(pikepdf.Dictionary({
+                            "/Type": pikepdf.Name("/StructElem"),
+                            "/S": pikepdf.Name("/Link"),
+                            "/P": doc_elem,
+                            "/Pg": page.obj,
+                        }))
+                        
+                        # Add /OBJR to Kids of the Link structure element
+                        objr = pikepdf.Dictionary({
+                            "/Type": pikepdf.Name("/OBJR"),
+                            "/Obj": annot,
+                            "/Pg": page.obj,
+                        })
+                        link_elem["/K"] = pikepdf.Array([objr])
+                        
+                        # Append to doc_elem's kids
+                        if "/K" not in doc_elem:
+                            doc_elem["/K"] = pikepdf.Array()
+                        if isinstance(doc_elem["/K"], pikepdf.Array):
+                            doc_elem["/K"].append(link_elem)
+                        elif isinstance(doc_elem["/K"], pikepdf.Dictionary):
+                            # wrap it in an array
+                            doc_elem["/K"] = pikepdf.Array([doc_elem["/K"], link_elem])
+                            
+                        # Add to the new ParentTree mappings
+                        pt_map[sp_val] = link_elem
+                        added += 1
+
+        if added > 0:
+            # Rebuild ParentTree Nums (with sorted keys!)
+            parent_tree_nums = pikepdf.Array()
+            for k in sorted(pt_map.keys()):
+                parent_tree_nums.append(k)
+                parent_tree_nums.append(pt_map[k])
+            
+            if "/ParentTree" not in struct_root:
+                struct_root["/ParentTree"] = pdf.make_indirect(pikepdf.Dictionary())
+            
+            struct_root["/ParentTree"]["/Nums"] = parent_tree_nums
+            struct_root["/ParentTreeNextKey"] = next_key
             pdf.save()
+
+        pdf.close()
         return _result(
             "pdf-untagged-urls", True,
-            f"Added {added} Link tag(s) for URLs",
-            f"{added} URLs tagged",
+            f"Ensured all URLs are tagged as Links (added {added} Link tags)",
+            f"{added} Link tags added",
         )
     except Exception as e:
         logger.error(f"fix_untagged_urls: {e}", exc_info=True)
         return _result("pdf-untagged-urls", False, str(e))
     finally:
-        pdf.close()
+        try:
+            pdf.close()
+        except Exception:
+            pass
 
 
 def _get_doc_element(pdf):
@@ -775,10 +874,8 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
                             has_bad_fonts = True
                             break
 
-                        # 2. Flag if font is not embedded (PDF/UA violation)
-                        if f_is_embedded == 0:
-                            has_bad_fonts = True
-                            break
+                        # 2. Flag if font is not embedded (PDF/UA violation) - REMOVED
+                        # Triggering OCR for non-embedded fonts on text-heavy pages is destructive.
 
                         # 3. Flag if font is embedded but lacks ToUnicode map and uses non-standard encoding
                         dict_str = doc.xref_object(f_xref)
@@ -789,8 +886,11 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
                                 has_bad_fonts = True
                                 break
                 if has_bad_fonts:
-                    scanned_pages.append(page_num)
-                    continue
+                    # Only run OCR if the page lacks significant extractable text
+                    text = page.get_text("text").strip()
+                    if len(text) < 100:
+                        scanned_pages.append(page_num)
+                        continue
             except Exception:
                 pass
 
@@ -845,6 +945,10 @@ def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
         doc.close()
 
         if ocr_done:
+            try:
+                new_doc.set_toc(doc.get_toc())
+            except Exception as e:
+                logger.warning(f"Failed to copy TOC during OCR step: {e}")
             new_doc.save(str(pdf_path))
             new_doc.close()
             return _result(
@@ -967,3 +1071,74 @@ def fix_tab_order(pdf_path: Path) -> Dict[str, Any]:
         return _result("pdf-tab-order", False, str(e))
     finally:
         pdf.close()
+
+
+def resolve_pdf_alt_texts(pdf_path: Path, resolutions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Applies user-provided alt-text resolutions to a PDF document's structure tree.
+    """
+    if not HAS_PIKEPDF:
+        return _result("pdf-alt-text", False, "pikepdf not available")
+
+    try:
+        pdf = pikepdf.open(str(pdf_path), allow_overwriting_input=True)
+    except Exception as e:
+        return _result("pdf-alt-text", False, str(e))
+
+    try:
+        if "/StructTreeRoot" not in pdf.Root:
+            return _result("pdf-alt-text", False, "Document has no structure tree")
+
+        struct_root = pdf.Root["/StructTreeRoot"]
+        fixed = 0
+
+        for res in resolutions:
+            img_id = res["id"]
+            alt_text = res["alt_text"]
+            is_decorative = res.get("is_decorative", False)
+
+            # Skip images not matching PDF struct path format
+            if "-" not in img_id and not img_id.isdigit():
+                continue
+
+            try:
+                path = [int(x) for x in img_id.split("-")]
+            except ValueError:
+                continue
+
+            # Traverse to the target node
+            node = struct_root
+            success = True
+            for idx in path:
+                if "/K" not in node:
+                    success = False
+                    break
+                kids = node["/K"]
+                if not isinstance(kids, pikepdf.Array):
+                    kids = [kids]
+                if idx >= len(kids):
+                    success = False
+                    break
+                node = kids[idx]
+
+            if success and hasattr(node, "keys"):
+                if is_decorative:
+                    node["/Alt"] = pikepdf.String("")
+                else:
+                    node["/Alt"] = pikepdf.String(alt_text)
+                fixed += 1
+
+        if fixed > 0:
+            pdf.save()
+            return _result(
+                "pdf-alt-text", True,
+                f"Resolved alt-text for {fixed} figure(s)",
+                f"{fixed} figure alt-texts updated",
+            )
+        return _result("pdf-alt-text", True, "No figure alt-texts were updated")
+    except Exception as e:
+        logger.error(f"resolve_pdf_alt_texts: {e}", exc_info=True)
+        return _result("pdf-alt-text", False, str(e))
+    finally:
+        pdf.close()
+

@@ -111,10 +111,18 @@ class Settings(BaseSettings):
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50
     MAX_PAGES_PDF: int = 100
+
+    # Hard wall-clock cap (seconds) for external PDF tooling subprocesses
+    # (OpenDataLoader/Java layout extraction and the C++ tagging engine).
+    # Without this, a wedged or thrashing subprocess hangs the request forever.
+    PDF_SUBPROCESS_TIMEOUT_SECONDS: int = 180
     
     # Playwright settings
     PLAYWRIGHT_HEADLESS: bool = True
     PLAYWRIGHT_TIMEOUT: int = 30000  # milliseconds
+    
+    # AI Alt-text generation
+    DEEPSEEK_API_KEY: Optional[str] = None
     
     # CORS
     CORS_ORIGINS: list = [

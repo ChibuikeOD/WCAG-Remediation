@@ -8,20 +8,15 @@ import {
   Loader2,
   AlertTriangle,
   FileCheck,
-  Layers,
-  GitCompare,
 } from 'lucide-react';
 import type {
   AccessibilityReport,
   AccessibilityIssue,
   RemediationResult,
-  TaggingComparisonReport,
 } from '../types';
 import {
   remediateDocument,
   getRemediatedFileURL,
-  generateModelOverlays,
-  compareTaggingPipelines,
 } from '../api';
 
 interface RemediationPanelProps {
@@ -49,62 +44,12 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults]           = useState<RemediationResult[] | null>(null);
   const [error, setError]               = useState<string | null>(null);
-  const [debugOverlays, setDebugOverlays]   = useState(false);
-  const [overlayLoading, setOverlayLoading] = useState(false);
-  const [overlayDone, setOverlayDone]       = useState(false);
   const [overwriteTags, setOverwriteTags]   = useState(false);
-  const [compareTagging, setCompareTagging] = useState(false);
-  const [compareLoading, setCompareLoading] = useState(false);
-  const [compareResult, setCompareResult]   = useState<TaggingComparisonReport | null>(null);
 
   const isPdf             = report.document.file_type === 'pdf';
   const automatableIssues = report.all_issues.filter((i) => i.automatable_fix && !i.fixed);
 
   /* ── Handlers ─────────────────────────────────────────────── */
-  const handleCompareTagging = async () => {
-    setCompareLoading(true);
-    setError(null);
-    try {
-      if (compareTagging) {
-        const blob = await compareTaggingPipelines(report.id, { includeOverlays: true });
-        const url  = URL.createObjectURL(blob as Blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = `tagging_compare_${report.document.filename.replace(/\.pdf$/i, '')}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } else {
-        const data = (await compareTaggingPipelines(report.id)) as TaggingComparisonReport;
-        setCompareResult(data);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Tagging comparison failed');
-    } finally {
-      setCompareLoading(false);
-    }
-  };
-
-  const handleDownloadOverlays = async () => {
-    setOverlayLoading(true);
-    try {
-      const blob = await generateModelOverlays(report.id);
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = 'layout_overlays.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setOverlayDone(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Overlay generation failed');
-    } finally {
-      setOverlayLoading(false);
-    }
-  };
 
   const handleApplyFixes = async () => {
     setIsProcessing(true);
@@ -308,93 +253,10 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                     checked={overwriteTags}
                     onChange={setOverwriteTags}
                     icon={<Wrench className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />}
-                    label="Rebuild structure with LayoutLM"
-                    description="Forces LayoutLM to re-tag the entire PDF even if it already has a structure tree. Use for poorly-tagged PDFs."
+                    label="Rebuild structure with OpenDataLoader"
+                    description="Forces OpenDataLoader to re-tag the entire PDF even if it already has a structure tree. Use for poorly-tagged PDFs."
                     warningText="This overwrites all existing tags."
                   />
-                  <OptionRow
-                    id="debug-overlays"
-                    checked={debugOverlays}
-                    onChange={setDebugOverlays}
-                    icon={<Layers className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />}
-                    label="Generate layout overlay images"
-                    description="Creates annotated page images showing detected blocks for each page. Downloads as a ZIP after remediation."
-                  />
-                  <div
-                    className="p-4 rounded-lg space-y-3"
-                    style={{ background: '#111c2d', border: '1px solid #1a2840' }}
-                  >
-                    <label className="flex items-start gap-3 cursor-pointer">
-                      <input
-                        id="compare-tagging"
-                        type="checkbox"
-                        checked={compareTagging}
-                        onChange={(e) => setCompareTagging(e.target.checked)}
-                        className="mt-1 w-4 h-4 rounded"
-                        style={{ accentColor: '#2563eb' }}
-                      />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <GitCompare className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />
-                          <span className="text-sm font-medium" style={{ color: '#c8d8e8' }}>
-                            Include overlay images in comparison ZIP
-                          </span>
-                        </div>
-                        <p className="text-xs mt-1" style={{ color: '#4a607a' }}>
-                          Runs LayoutLM and OpenDataLoader on the same PDF and compares block tags.
-                        </p>
-                      </div>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleCompareTagging}
-                      disabled={compareLoading}
-                      className="btn btn-secondary w-full"
-                    >
-                      {compareLoading ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                          Comparing pipelines…
-                        </>
-                      ) : (
-                        <>
-                          <GitCompare className="w-4 h-4" aria-hidden="true" />
-                          Compare LayoutLM vs OpenDataLoader
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Comparison result */}
-              {compareResult?.comparison?.summary && (
-                <div
-                  className="p-4 rounded-lg text-sm space-y-1.5"
-                  style={{
-                    background: 'rgba(37,99,235,0.06)',
-                    border: '1px solid rgba(37,99,235,0.15)',
-                  }}
-                >
-                  <p className="font-semibold" style={{ color: '#93c5fd' }}>Tagging comparison summary</p>
-                  <p style={{ color: '#a0b4c8' }}>
-                    LayoutLM blocks: {compareResult.comparison.summary.layoutlm.blocks}
-                    {' · '}
-                    OpenDataLoader blocks: {compareResult.comparison.summary.opendataloader.blocks}
-                  </p>
-                  <p style={{ color: '#a0b4c8' }}>
-                    Matched pairs: {compareResult.comparison.summary.matched_block_pairs}
-                    {' · '}
-                    Tag agreement:{' '}
-                    {compareResult.comparison.summary.overall_agreement_rate != null
-                      ? `${Math.round(compareResult.comparison.summary.overall_agreement_rate * 100)}%`
-                      : 'n/a'}
-                  </p>
-                  {compareResult.report_filename && (
-                    <p className="text-xs" style={{ color: '#4a607a' }}>
-                      Report saved as {compareResult.report_filename}
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -540,30 +402,6 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
               <button onClick={onClose} className="btn btn-secondary">
                 Close
               </button>
-              {debugOverlays && isPdf && (
-                <button
-                  onClick={handleDownloadOverlays}
-                  disabled={overlayLoading}
-                  className="btn btn-secondary"
-                >
-                  {overlayLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                      Generating…
-                    </>
-                  ) : overlayDone ? (
-                    <>
-                      <CheckCircle className="w-4 h-4" style={{ color: '#86efac' }} aria-hidden="true" />
-                      Downloaded
-                    </>
-                  ) : (
-                    <>
-                      <Layers className="w-4 h-4" aria-hidden="true" />
-                      Download Overlays
-                    </>
-                  )}
-                </button>
-              )}
               <a
                 href={getRemediatedFileURL(report.id)}
                 download

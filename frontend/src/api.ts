@@ -7,6 +7,8 @@ import type {
   TaggingComparisonReport,
   WCAGLevel,
   WCAGRule,
+  DocumentImageItem,
+  AltTextResolution,
 } from './types';
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || '/api';
@@ -225,6 +227,35 @@ export async function exportReport(
 ): Promise<{ csv?: string; html?: string } | AccessibilityReport> {
   return fetchJSON(`${API_BASE}/report/${reportId}/export?format=${format}`);
 }
+
+// Fetch document images for alt-text resolution
+export async function getDocumentImages(reportId: string): Promise<DocumentImageItem[]> {
+  return fetchJSON<DocumentImageItem[]>(`${API_BASE}/report/${reportId}/images`);
+}
+
+// Generate alt-text using DeepSeek AI
+export async function generateAltText(
+  reportId: string,
+  imageId: string,
+  apiKey?: string
+): Promise<{ alt_text: string }> {
+  return fetchJSON<{ alt_text: string }>(`${API_BASE}/report/${reportId}/generate-alt-text`, {
+    method: 'POST',
+    body: JSON.stringify({ image_id: imageId, api_key: apiKey }),
+  });
+}
+
+// Save resolved alt-texts back to the document
+export async function resolveAltText(
+  reportId: string,
+  resolutions: AltTextResolution[]
+): Promise<RemediationResponse> {
+  return fetchJSON<RemediationResponse>(`${API_BASE}/report/${reportId}/resolve-alt-text`, {
+    method: 'POST',
+    body: JSON.stringify({ resolutions }),
+  });
+}
+
 
 
 

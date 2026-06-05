@@ -3,7 +3,9 @@ services:
     name: accesspdf-api
     runtime: docker
     region: ohio          # pick the region closest to your users
-    plan: free            # change to "starter" or higher for production
+    # Standard = 2GB RAM / 1 CPU. Starter and free are only 512MB, which OOMs
+    # under the Java (OpenDataLoader) + Tesseract OCR + Python PDF workload.
+    plan: standard
     rootDir: .
     envVars:
       - key: DISABLE_AUTH
@@ -18,8 +20,12 @@ services:
         value: /tmp/uploads
       - key: OUTPUT_DIR
         value: /tmp/output
+      # OpenDataLoader (Java) loads the whole PDF in memory; 128m OOMs on real
+      # documents and breaks text extraction, leaving output PDFs untagged and
+      # inaccessible. 1g is safe on the Standard plan's 2GB envelope alongside
+      # Python + OCR. If you stay on Starter/free (512MB), drop this to -Xmx256m.
       - key: _JAVA_OPTIONS
-        value: "-Xmx128m"
+        value: "-Xmx1g"
       # Uncomment and fill in when you have real SSO credentials:
       # - key: OIDC_CLIENT_ID
       #   sync: false

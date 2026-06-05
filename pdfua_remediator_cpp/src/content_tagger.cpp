@@ -4,6 +4,7 @@
 #include <qpdf/Pl_Buffer.hh>
 #include <iostream>
 #include <cmath>
+#include <algorithm>
 
 // A 2x3 affine matrix [a b c d e f] mapping a row-vector point (x, y, 1):
 //   x' = a*x + c*y + e
@@ -29,9 +30,32 @@ static AffineMat affine_mul(const AffineMat& L, const AffineMat& R) {
 
 class MCIDTokenFilter : public QPDFObjectHandle::TokenFilter {
 public:
+    struct Rect {
+        double left, bottom, right, top;
+    };
+    std::vector<Rect> page_link_rects;
+
     MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
                         marked_content_depth(0), in_path(false), inline_dict_depth(0),
-                        text_leading(0.0), geo_array_depth(0), geo_dict_depth(0) {}
+                        text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
+                        in_marked_content(false), last_x(0.0), last_y(0.0), last_link_idx(-1) {}
+
+    MCIDTokenFilter(std::vector<QPDFObjectHandle> const& link_rects) 
+        : mcid_counter(0), in_text_object(false), has_last_name(false),
+          marked_content_depth(0), in_path(false), inline_dict_depth(0),
+          text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
+          in_marked_content(false), last_x(0.0), last_y(0.0), last_link_idx(-1) {
+        for (auto const& rect : link_rects) {
+            if (rect.isArray() && rect.getArrayNItems() == 4) {
+                Rect r;
+                r.left = rect.getArrayItem(0).getNumericValue();
+                r.bottom = rect.getArrayItem(1).getNumericValue();
+                r.right = rect.getArrayItem(2).getNumericValue();
+                r.top = rect.getArrayItem(3).getNumericValue();
+                page_link_rects.push_back(r);
+            }
+        }
+    }
     virtual ~MCIDTokenFilter() = default;
 
     virtual void handleToken(QPDFTokenizer::Token const& token) override {
@@ -205,11 +229,29 @@ public:
 
                     // Record that this MCID is an image so the structure builder
                     // tags it (and only it) as a /Figure. The image is drawn into
-                    // the unit square transformed by the CTM, so use its centre.
+                    // the unit square transformed by the CTM, so use its centre and calculate its BBox.
                     MCIDInfo info;
                     info.x = ctm.a * 0.5 + ctm.c * 0.5 + ctm.e;
                     info.y = ctm.b * 0.5 + ctm.d * 0.5 + ctm.f;
                     info.is_figure = true;
+
+                    // Calculate transformed corners of [0, 0, 1, 1] unit square
+                    double x1 = ctm.e;
+                    double y1 = ctm.f;
+                    double x2 = ctm.a + ctm.e;
+                    double y2 = ctm.b + ctm.f;
+                    double x3 = ctm.c + ctm.e;
+                    double y3 = ctm.d + ctm.f;
+                    double x4 = ctm.a + ctm.c + ctm.e;
+                    double y4 = ctm.b + ctm.d + ctm.f;
+
+                    info.bbox = {
+                        std::min({x1, x2, x3, x4}),
+                        std::min({y1, y2, y3, y4}),
+                        std::max({x1, x2, x3, x4}),
+                        std::max({y1, y2, y3, y4})
+                    };
+
                     mcid_info[mcid_counter] = info;
 
                     figure_mcids.insert(mcid_counter);
@@ -224,11 +266,19 @@ public:
         // 3. Handle text object BT...ET and its buffering
         if (type == QPDFTokenizer::tt_word && value == "BT") {
             in_text_object = true;
+            in_marked_content = false;
+            last_link_idx = -1;
             writeToken(token);
             return;
         }
 
         if (type == QPDFTokenizer::tt_word && value == "ET") {
+            if (in_marked_content) {
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                in_marked_content = false;
+            }
             // Write any remaining buffered tokens
             write_buffered_text_tokens();
             in_text_object = false;
@@ -238,18 +288,60 @@ public:
 
         if (in_text_object) {
             if (type == QPDFTokenizer::tt_word && (value == "Tj" || value == "TJ" || value == "'" || value == "\"")) {
-                // Write BDC
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/P"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_open, "<<"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/MCID"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_integer, std::to_string(mcid_counter)));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_close, ">>"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BDC"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                AffineMat trm = affine_mul(tm, ctm);
+
+                int current_link_idx = -1;
+                for (int j = 0; j < static_cast<int>(page_link_rects.size()); ++j) {
+                    const auto& r = page_link_rects[j];
+                    if (trm.e >= r.left - 2.0 && trm.e <= r.right + 2.0 &&
+                        trm.f >= r.bottom - 5.0 && trm.f <= r.top + 5.0) {
+                        current_link_idx = j;
+                        break;
+                    }
+                }
+
+                bool start_new_mcid = false;
+                if (!in_marked_content) {
+                    start_new_mcid = true;
+                } else {
+                    double dx = std::abs(trm.e - last_x);
+                    double dy = std::abs(trm.f - last_y);
+                    if (dy > 3.0 || dx > 150.0 || trm.e < last_x - 5.0) {
+                        start_new_mcid = true;
+                    } else if (current_link_idx != last_link_idx) {
+                        start_new_mcid = true;
+                    }
+                }
+
+                if (start_new_mcid) {
+                    if (in_marked_content) {
+                        writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                        writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                        writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                        in_marked_content = false;
+                    }
+
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/P"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_open, "<<"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/MCID"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_integer, std::to_string(mcid_counter)));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_dict_close, ">>"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BDC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                    MCIDInfo info;
+                    info.x = trm.e;
+                    info.y = trm.f;
+                    info.is_figure = false;
+                    mcid_info[mcid_counter] = info;
+
+                    mcid_counter++;
+                    in_marked_content = true;
+                }
 
                 // Write all buffered tokens
                 write_buffered_text_tokens();
@@ -257,21 +349,9 @@ public:
                 // Write the text showing operator itself
                 writeToken(token);
 
-                // Write EMC
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
-                writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
-
-                // Record the text origin (in page user space) for this MCID so the
-                // structure builder can group it into the correct layout block.
-                AffineMat trm = affine_mul(tm, ctm);
-                MCIDInfo info;
-                info.x = trm.e;
-                info.y = trm.f;
-                info.is_figure = false;
-                mcid_info[mcid_counter] = info;
-
-                mcid_counter++;
+                last_x = trm.e;
+                last_y = trm.f;
+                last_link_idx = current_link_idx;
                 return;
             } else {
                 // Buffer the token
@@ -420,6 +500,11 @@ private:
     int geo_array_depth;              // depth inside [...] arrays (e.g. TJ)
     int geo_dict_depth;               // depth inside <<...>> dictionaries
     std::map<int, MCIDInfo> mcid_info;
+
+    bool in_marked_content;
+    double last_x;
+    double last_y;
+    int last_link_idx;
 };
 
 // Removes any pre-existing marked-content operators (BDC/BMC/EMC/DP/MP) and
@@ -509,7 +594,18 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
                                               QPDFObjectHandle::newStream(&pdf, stripped_str));
 
         // Pass 2: inject fresh MCIDs and marked content on the cleaned stream.
-        MCIDTokenFilter filter;
+        std::vector<QPDFObjectHandle> link_rects;
+        for (auto& annot : pages[i].getAnnotations()) {
+            QPDFObjectHandle annot_obj = annot.getObjectHandle();
+            if (annot_obj.getKey("/Subtype").isName() && annot_obj.getKey("/Subtype").getName() == "/Link") {
+                QPDFObjectHandle rect = annot_obj.getKey("/Rect");
+                if (rect.isArray() && rect.getArrayNItems() == 4) {
+                    link_rects.push_back(rect);
+                }
+            }
+        }
+
+        MCIDTokenFilter filter(link_rects);
         Pl_Buffer buf("filtered contents");
         pages[i].filterPageContents(&filter, &buf);
         buf.finish();

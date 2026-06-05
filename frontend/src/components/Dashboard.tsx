@@ -10,6 +10,7 @@ import {
   Clock,
   FileText,
   Wrench,
+  Image,
 } from 'lucide-react';
 import type { AccessibilityReport, WCAGPrinciple } from '../types';
 
@@ -18,6 +19,7 @@ interface DashboardProps {
   onPrincipleSelect: (principle: string | null) => void;
   selectedPrinciple: string | null;
   onShowRemediation: () => void;
+  onShowAltTextResolution: () => void;
 }
 
 const principleConfig: Record<WCAGPrinciple, {
@@ -52,6 +54,7 @@ export function Dashboard({
   onPrincipleSelect,
   selectedPrinciple,
   onShowRemediation,
+  onShowAltTextResolution,
 }: DashboardProps) {
   const automatableIssues = report.all_issues.filter((i) => i.automatable_fix && !i.fixed);
   const unfixedIssues     = report.all_issues.filter((i) => !i.fixed);
@@ -95,6 +98,14 @@ export function Dashboard({
             <span className="badge badge-info">
               WCAG {report.target_level}
             </span>
+            <button
+              onClick={onShowAltTextResolution}
+              className="btn btn-secondary flex items-center gap-2"
+              aria-label="Open Alt-Text Manager"
+            >
+              <Image className="w-4 h-4" aria-hidden="true" />
+              Alt-Text Manager
+            </button>
             {automatableIssues.length > 0 && (
               <button
                 onClick={onShowRemediation}

@@ -22,6 +22,7 @@ struct MCIDInfo {
     double x = 0.0;        // text/image origin X in page user space
     double y = 0.0;        // text/image origin Y in page user space
     bool is_figure = false; // true when the MCID wraps an image XObject
+    std::vector<double> bbox; // exact page bounding box [left, bottom, right, top] for figures
 };
 
 // Process content streams of the PDF pages and insert BDC/EMC tags with MCIDs.

@@ -513,7 +513,7 @@ class PDFRemediator:
             from .pdf_auto_tagging import auto_tag_pdf
 
             result = auto_tag_pdf(
-                self.file_path,
+                target,
                 output_path=target,
                 overwrite_tags=overwrite_tags,
                 model_path=model_path,
@@ -583,6 +583,23 @@ class PDFRemediator:
             logger.error(f"fix_scanned_pages raised: {e}", exc_info=True)
             results.append(RemediationResult(
                 issue_id="pdf-fix_scanned_pages",
+                success=False,
+                message=str(e),
+            ))
+
+        # 2b. Inject link annotations for plain text URLs so they exist before tagging
+        try:
+            r = fixes.inject_link_annotations(target)
+            results.append(RemediationResult(
+                issue_id=r["issue_id"],
+                success=r["success"],
+                message=r["message"],
+                new_value=r.get("new_value", ""),
+            ))
+        except Exception as e:
+            logger.error(f"inject_link_annotations raised: {e}", exc_info=True)
+            results.append(RemediationResult(
+                issue_id="pdf-inject-link-annots",
                 success=False,
                 message=str(e),
             ))

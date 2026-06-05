@@ -4,6 +4,7 @@ import { UploadZone } from './components/UploadZone';
 import { Dashboard } from './components/Dashboard';
 import { IssueList } from './components/IssueList';
 import { RemediationPanel } from './components/RemediationPanel';
+import { AltTextPanel } from './components/AltTextPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
 import { uploadFile, analyzeDocument, getCurrentUser, getLoginURL, type UserSession } from './api';
 
@@ -21,6 +22,7 @@ function App() {
   const [targetLevel, setTargetLevel] = useState<WCAGLevel>('AA');
   const [selectedPrinciple, setSelectedPrinciple] = useState<string | null>(null);
   const [showRemediation, setShowRemediation] = useState(false);
+  const [showAltText, setShowAltText] = useState(false);
 
   // Authentication state
   // DEMO_MODE: skip the /auth/me call entirely and render straight into the app.
@@ -279,6 +281,7 @@ function App() {
               onPrincipleSelect={setSelectedPrinciple}
               selectedPrinciple={selectedPrinciple}
               onShowRemediation={() => setShowRemediation(true)}
+              onShowAltTextResolution={() => setShowAltText(true)}
             />
 
             <IssueList
@@ -295,6 +298,14 @@ function App() {
               <RemediationPanel
                 report={report}
                 onClose={() => setShowRemediation(false)}
+                onComplete={handleRemediationComplete}
+              />
+            )}
+
+            {showAltText && (
+              <AltTextPanel
+                report={report}
+                onClose={() => setShowAltText(false)}
                 onComplete={handleRemediationComplete}
               />
             )}

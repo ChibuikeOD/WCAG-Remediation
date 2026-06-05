@@ -19,6 +19,7 @@ import logging
 import json
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
@@ -27,7 +28,7 @@ from .config import settings
 from .models import (
     AccessibilityReport, DocumentInfo, WCAGLevel,
     UploadResponse, AnalyzeRequest, RemediationRequest, RemediationResponse,
-    RemediationResult
+    RemediationResult, DocumentImageItem, AltTextResolutionRequest, AltTextGenerateRequest
 )
 from .rules_engine import get_rules_engine
 from .parsers import HTMLParser, PDFParser
@@ -415,12 +416,15 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
                 file_size=file_info["file_size"]
             )
             
-            # Run static analysis first
-            report = engine.analyze_html(
+            # Run static analysis first. BeautifulSoup parsing + selector checks
+            # are CPU-bound and synchronous, so run them in a worker thread to
+            # avoid blocking the asyncio event loop (and every other request).
+            report = await run_in_threadpool(
+                engine.analyze_html,
                 html_content,
                 doc_info,
                 target_level=request.target_level,
-                include_aaa=request.include_aaa
+                include_aaa=request.include_aaa,
             )
             
             # Run browser-based checks (contrast, target size, focus, etc.)
@@ -457,7 +461,11 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
             analyzer = PDFAccessibilityAnalyzer(file_path=file_path)
             
             try:
-                summary = analyzer.analyze()
+                # PDF analysis (PyMuPDF + pikepdf, structure-tree walks, per-page
+                # text/font extraction) is fully synchronous and can take many
+                # seconds. Run it off the event loop so a single in-flight
+                # analysis cannot freeze the whole server ("loads forever").
+                summary = await run_in_threadpool(analyzer.analyze)
                 
                 doc_info = DocumentInfo(
                     filename=file_info["original_filename"],
@@ -541,12 +549,13 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
                 url=request.url
             )
             
-            # Analyze the fetched HTML
-            report = engine.analyze_html(
+            # Analyze the fetched HTML (CPU-bound; keep it off the event loop)
+            report = await run_in_threadpool(
+                engine.analyze_html,
                 results["html_content"],
                 doc_info,
                 target_level=request.target_level,
-                include_aaa=request.include_aaa
+                include_aaa=request.include_aaa,
             )
             
             # Add Playwright-detected issues
@@ -677,7 +686,11 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
         shutil.copy2(file_path, output_path)
 
         remediator = PDFRemediator(output_path)
-        results = remediator.fix_all(
+        # The PDF pipeline shells out to Java (OpenDataLoader), the C++ tagging
+        # engine, and Tesseract OCR — all blocking and potentially slow. Run it
+        # in a worker thread so it can't stall the event loop / other requests.
+        results = await run_in_threadpool(
+            remediator.fix_all,
             output_path=output_path,
             report=report,
             original_filename=file_info["original_filename"],
@@ -793,7 +806,7 @@ async def analyze_pdf_document(file_id: str, user: User = Depends(require_user))
         from .pdf_accessibility import PDFAccessibilityAnalyzer
         
         analyzer = PDFAccessibilityAnalyzer(file_path=file_path)
-        report = analyzer.analyze()
+        report = await run_in_threadpool(analyzer.analyze)
         analyzer.close()
         
         return report
@@ -857,7 +870,7 @@ async def remediate_pdf_document(
         
         # First, analyze the document to get current state
         analyzer = PDFAccessibilityAnalyzer(file_path=file_path)
-        analysis_before = analyzer.analyze()
+        analysis_before = await run_in_threadpool(analyzer.analyze)
         analyzer.close()
         
         # Apply remediations
@@ -870,7 +883,9 @@ async def remediate_pdf_document(
         
         # Apply metadata fixes
         if title or language:
-            metadata_result = remediator.fix_metadata(title=title, language=language)
+            metadata_result = await run_in_threadpool(
+                remediator.fix_metadata, title=title, language=language
+            )
             results["metadata"] = metadata_result
             if metadata_result.get("success"):
                 for change in metadata_result.get("changes", []):
@@ -879,7 +894,9 @@ async def remediate_pdf_document(
         
         # Generate bookmarks
         if add_bookmarks:
-            bookmark_result = remediator.generate_bookmarks_from_headings()
+            bookmark_result = await run_in_threadpool(
+                remediator.generate_bookmarks_from_headings
+            )
             results["bookmarks"] = bookmark_result
             if bookmark_result.get("success"):
                 results["changes"].append({
@@ -891,7 +908,7 @@ async def remediate_pdf_document(
         # Auto-tag using OpenDataLoader layout extraction
         if auto_tag:
             logger.info("Running PDF structure tagging on PDF...")
-            tag_result = remediator.auto_tag_document()
+            tag_result = await run_in_threadpool(remediator.auto_tag_document)
             results["auto_tag"] = tag_result
             if tag_result.get("success"):
                 results["changes"].append({
@@ -1164,6 +1181,522 @@ async def get_rule(rule_id: str):
         raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
     
     return rule
+
+
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+    
+    return rule
+
+
+# =============================================================================
+# Alt-Text Resolution System Helpers and Endpoints
+# =============================================================================
+
+from typing import List
+
+def _resolve_document_from_report(report_id: str) -> tuple[Path, str]:
+    if report_id not in report_storage:
+        raise HTTPException(status_code=404, detail="Report not found")
+        
+    report = report_storage[report_id]
+    file_id = None
+    for fid, finfo in file_storage.items():
+        if finfo["original_filename"] == report.document.filename:
+            file_id = fid
+            break
+            
+    if not file_id:
+        raise HTTPException(status_code=404, detail="Original file not found")
+        
+    file_info = file_storage[file_id]
+    return Path(file_info["file_path"]), file_info["file_type"]
+
+
+def extract_html_images(html_path: Path) -> List[DocumentImageItem]:
+    from bs4 import BeautifulSoup
+    import base64
+    
+    with open(html_path, 'r', encoding='utf-8') as f:
+        soup = BeautifulSoup(f.read(), 'html5lib')
+        
+    figures = []
+    for idx, img in enumerate(soup.find_all('img')):
+        src = img.get('src', '')
+        alt = img.get('alt', '')
+        
+        image_url = src
+        if src and not src.startswith(('http://', 'https://', 'data:')):
+            potential_path = html_path.parent / src
+            if potential_path.exists():
+                try:
+                    with open(potential_path, 'rb') as img_f:
+                        ext = potential_path.suffix.lower().replace('.', '')
+                        if ext == 'jpg': ext = 'jpeg'
+                        encoded = base64.b64encode(img_f.read()).decode('utf-8')
+                        image_url = f"data:image/{ext};base64,{encoded}"
+                except Exception:
+                    pass
+                    
+        figures.append(DocumentImageItem(
+            id=f"html_img_{idx}",
+            page_num=None,
+            current_alt=alt or "",
+            image_url=image_url
+        ))
+    return figures
+
+
+def extract_pdf_images(pdf_path: Path) -> List[DocumentImageItem]:
+    import pikepdf
+    import fitz
+    import base64
+    
+    figures = []
+    
+    if not pdf_path.exists():
+        return []
+        
+    doc = fitz.open(str(pdf_path))
+    
+    try:
+        with pikepdf.open(pdf_path) as pdf:
+            struct_root = pdf.Root.get("/StructTreeRoot")
+            if not struct_root:
+                # Fallback: if PDF is untagged, return raw images from pages
+                for page_idx in range(len(doc)):
+                    page = doc[page_idx]
+                    img_infos = page.get_image_info(xrefs=True)
+                    for img_idx, img_info in enumerate(img_infos):
+                        bbox = img_info["bbox"]
+                        xref = img_info["xref"]
+                        
+                        try:
+                            rect = fitz.Rect(bbox)
+                            pix = page.get_pixmap(clip=rect, dpi=100)
+                            if pix.alpha:
+                                pix = fitz.Pixmap(pix, 0)
+                            img_data = pix.tobytes("png")
+                            base64_data = base64.b64encode(img_data).decode("utf-8")
+                            image_url = f"data:image/png;base64,{base64_data}"
+                        except Exception:
+                            image_url = None
+                            
+                        figures.append(DocumentImageItem(
+                            id=f"raw_page_{page_idx}_img_{img_idx}_xref_{xref}",
+                            page_num=page_idx + 1,
+                            current_alt="",
+                            image_url=image_url
+                        ))
+                return figures
+            
+            # Walk structure tree recursively
+            def walk(node, path):
+                if not hasattr(node, "keys"):
+                    return
+                
+                if "/S" in node and str(node["/S"]) == "/Figure":
+                    current_alt = str(node["/Alt"]) if "/Alt" in node else ""
+                    
+                    page_num = 0
+                    page_obj = node.get("/Pg")
+                    if page_obj:
+                        try:
+                            page_num = pdf.pages.index(page_obj)
+                        except Exception:
+                            pass
+                            
+                    bbox = None
+                    if "/A" in node:
+                        attr = node["/A"]
+                        if hasattr(attr, "keys") and "/BBox" in attr:
+                            bbox = [float(x) for x in attr["/BBox"]]
+                            
+                    if not bbox and "/K" in node:
+                        kids = node["/K"]
+                        if not isinstance(kids, pikepdf.Array):
+                            kids = [kids]
+                        for kid in kids:
+                            if hasattr(kid, "keys") and "/Type" in kid and str(kid["/Type"]) == "/OBJR":
+                                obj = kid.get("/Obj")
+                                if obj:
+                                    xref = obj.objgen[0]
+                                    page = doc[page_num]
+                                    img_infos = page.get_image_info(xrefs=True)
+                                    for img_info in img_infos:
+                                        if img_info["xref"] == xref:
+                                            p_bbox = img_info["bbox"]
+                                            bbox = [p_bbox[0], page.rect.height - p_bbox[3], p_bbox[2], page.rect.height - p_bbox[1]]
+                                            break
+                    
+                    base64_data = ""
+                    try:
+                        page = doc[page_num]
+                        if bbox:
+                            x0 = max(0, min(bbox[0], page.rect.width))
+                            y0 = max(0, min(page.rect.height - bbox[3], page.rect.height))
+                            x1 = max(0, min(bbox[2], page.rect.width))
+                            y1 = max(0, min(page.rect.height - bbox[1], page.rect.height))
+                            
+                            rect = fitz.Rect(x0, y0, x1, y1)
+                            if rect.is_empty or rect.width < 5 or rect.height < 5:
+                                pix = page.get_pixmap(dpi=72)
+                            else:
+                                pix = page.get_pixmap(clip=rect, dpi=120)
+                        else:
+                            img_list = page.get_images()
+                            if img_list:
+                                xref = img_list[0][0]
+                                base_img = doc.extract_image(xref)
+                                base64_data = base64.b64encode(base_img["image"]).decode("utf-8")
+                            else:
+                                pix = page.get_pixmap(dpi=50)
+                                
+                        if not base64_data:
+                            if pix.alpha:
+                                pix = fitz.Pixmap(pix, 0)
+                            img_bytes = pix.tobytes("png")
+                            base64_data = base64.b64encode(img_bytes).decode("utf-8")
+                    except Exception as e:
+                        logger.error(f"Error rendering figure crop: {e}")
+                        
+                    figures.append(DocumentImageItem(
+                        id="-".join(map(str, path)),
+                        page_num=page_num + 1,
+                        current_alt=current_alt,
+                        image_url=f"data:image/png;base64,{base64_data}" if base64_data else None
+                    ))
+                    
+                if "/K" in node:
+                    kids = node["/K"]
+                    if not isinstance(kids, pikepdf.Array):
+                        kids = [kids]
+                    for idx, kid in enumerate(kids):
+                        walk(kid, path + [idx])
+                        
+            walk(struct_root, [])
+    finally:
+        doc.close()
+        
+    return figures
+
+
+async def call_deepseek_vision_or_ocr_fallback(
+    image_url_or_bytes: str,
+    api_key: str,
+    tessdata_path: Optional[str] = None
+) -> str:
+    import base64
+    import httpx
+    
+    base64_str = ""
+    image_bytes = b""
+    if image_url_or_bytes.startswith("data:image/"):
+        header, base64_str = image_url_or_bytes.split(",", 1)
+        image_bytes = base64.b64decode(base64_str)
+    
+    # Try vision first
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Describe this image for use as WCAG alt text. Provide a concise description (maximum 150 characters) focusing on the visual content and context. Do not include introductory text like 'This image shows' or 'An image of'."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url_or_bytes
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 100
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                json=payload,
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                alt_text = data["choices"][0]["message"]["content"].strip()
+                alt_text = alt_text.strip('"' + "'")
+                return alt_text
+            else:
+                logger.info(f"DeepSeek vision call returned status {response.status_code}: {response.text}. Trying OCR fallback.")
+    except Exception as e:
+        logger.info(f"DeepSeek vision call failed: {e}. Trying OCR fallback.")
+        
+    # Fallback: OCR + Text completion
+    ocr_text = ""
+    if image_bytes and tessdata_path:
+        try:
+            import fitz
+            pix = fitz.Pixmap(image_bytes)
+            if pix.alpha:
+                pix = fitz.Pixmap(pix, 0)
+            ocr_bytes = pix.pdfocr_tobytes(language="eng", tessdata=tessdata_path)
+            with fitz.open("pdf", ocr_bytes) as ocr_doc:
+                ocr_text = ocr_doc[0].get_text().strip()
+            logger.info(f"OCR extracted text for alt-text: '{ocr_text}'")
+        except Exception as ocr_err:
+            logger.warning(f"OCR fallback extraction failed: {ocr_err}")
+            
+    prompt = (
+        "Based on the following context, describe this image for use as WCAG alt text. "
+        "Provide a concise description (maximum 150 characters) focusing on the visual content and context. "
+        "Do not include introductory text like 'This image shows' or 'An image of'."
+    )
+    if ocr_text:
+        prompt += f"\nThe image contains the following text: '{ocr_text}'."
+    else:
+        prompt += "\nThe image has no extractable text. Describe a generic chart/diagram/photo."
+        
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "max_tokens": 100
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                json=payload,
+                headers=headers
+            )
+            if response.status_code == 200:
+                data = response.json()
+                alt_text = data["choices"][0]["message"]["content"].strip()
+                alt_text = alt_text.strip('"' + "'")
+                return alt_text
+            else:
+                raise Exception(f"DeepSeek API error: {response.text}")
+    except Exception as e:
+        logger.error(f"DeepSeek text completion fallback failed: {e}")
+        if ocr_text:
+            return f"Image containing text: {ocr_text[:50]}..."
+        return "Image description unavailable"
+
+
+@app.get("/report/{report_id}/images", response_model=List[DocumentImageItem])
+async def get_document_images(report_id: str, user: User = Depends(require_user)):
+    """
+    Extract all figures and images from a document associated with a report.
+    """
+    if report_id not in report_storage:
+        raise HTTPException(status_code=404, detail="Report not found")
+        
+    db_conn = SessionLocal()
+    try:
+        report_rec = db_conn.query(DbReport).filter(DbReport.id == report_id).first()
+        if report_rec:
+            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this report.")
+    finally:
+        db_conn.close()
+        
+    file_path, file_type = _resolve_document_from_report(report_id)
+    
+    if file_type == "html":
+        return await run_in_threadpool(extract_html_images, file_path)
+    elif file_type == "pdf":
+        return await run_in_threadpool(extract_pdf_images, file_path)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported document type")
+
+
+@app.post("/report/{report_id}/generate-alt-text")
+async def generate_alt_text_endpoint(
+    report_id: str,
+    request: AltTextGenerateRequest,
+    user: User = Depends(require_user)
+):
+    """
+    Generate alt-text for an image in the document using DeepSeek API with OCR fallback.
+    """
+    file_path, file_type = _resolve_document_from_report(report_id)
+    if file_type == "html":
+        images = await run_in_threadpool(extract_html_images, file_path)
+    elif file_type == "pdf":
+        images = await run_in_threadpool(extract_pdf_images, file_path)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported document type")
+        
+    target_image = None
+    for img in images:
+        if img.id == request.image_id:
+            target_image = img
+            break
+            
+    if not target_image or not target_image.image_url:
+        raise HTTPException(status_code=404, detail="Image not found or has no content to describe")
+        
+    api_key = request.api_key or settings.DEEPSEEK_API_KEY
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="DeepSeek API key is required. Please set it in system environment or provide it in settings."
+        )
+        
+    from .pdf_remediator_fixes import _resolve_tessdata
+    tessdata = _resolve_tessdata()
+    
+    alt_text = await call_deepseek_vision_or_ocr_fallback(
+        target_image.image_url,
+        api_key,
+        tessdata
+    )
+    
+    return {"alt_text": alt_text}
+
+
+@app.post("/report/{report_id}/resolve-alt-text", response_model=RemediationResponse)
+async def resolve_alt_text_endpoint(
+    report_id: str,
+    request: AltTextResolutionRequest,
+    user: User = Depends(require_user)
+):
+    """
+    Apply manual or decorative alt-text resolutions to the document.
+    """
+    if report_id not in report_storage:
+        raise HTTPException(status_code=404, detail="Report not found")
+        
+    db_conn = SessionLocal()
+    try:
+        report_rec = db_conn.query(DbReport).filter(DbReport.id == report_id).first()
+        if report_rec:
+            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this report.")
+    finally:
+        db_conn.close()
+        
+    report = report_storage[report_id]
+    file_path, file_type = _resolve_document_from_report(report_id)
+    
+    results = []
+    
+    if file_type == "html":
+        async def fix_html():
+            from bs4 import BeautifulSoup
+            with open(file_path, 'r', encoding='utf-8') as f:
+                soup = BeautifulSoup(f.read(), 'html5lib')
+                
+            fixed = 0
+            for res in request.resolutions:
+                if not res.id.startswith("html_img_"):
+                    continue
+                try:
+                    idx = int(res.id.split("_")[-1])
+                    imgs = soup.find_all('img')
+                    if idx < len(imgs):
+                        img = imgs[idx]
+                        if res.is_decorative:
+                            img['alt'] = ""
+                            img['role'] = "presentation"
+                        else:
+                            img['alt'] = res.alt_text
+                            if 'role' in img.attrs:
+                                del img['role']
+                        fixed += 1
+                        results.append(RemediationResult(
+                            issue_id="1.1.1",
+                            success=True,
+                            message=f"Updated image {idx} alt text",
+                            new_value=res.alt_text if not res.is_decorative else "decorative"
+                        ))
+                except Exception as e:
+                    results.append(RemediationResult(
+                        issue_id="1.1.1",
+                        success=False,
+                        message=f"Failed to update image {res.id}: {str(e)}"
+                    ))
+            if fixed > 0:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(str(soup))
+            return results
+            
+        results = await fix_html()
+        
+    elif file_type == "pdf":
+        from .pdf_remediator_fixes import resolve_pdf_alt_texts
+        
+        resolutions_dict = [r.model_dump() for r in request.resolutions]
+        pdf_res = await run_in_threadpool(resolve_pdf_alt_texts, file_path, resolutions_dict)
+        
+        results.append(RemediationResult(
+            issue_id="1.1.1",
+            success=pdf_res["success"],
+            message=pdf_res["message"],
+            new_value=pdf_res.get("new_value", "")
+        ))
+        
+    total_fixed = len([r for r in results if r.success])
+    total_failed = len([r for r in results if not r.success])
+    
+    if total_fixed > 0:
+        from .models import IssueStatus, Severity
+        updated_issues = []
+        for issue in report.all_issues:
+            is_alt_issue = (issue.rule_id == "1.1.1" or "alt" in issue.rule_id.lower() or "alt" in issue.message.lower())
+            if is_alt_issue:
+                issue.fixed = True
+                issue.status = IssueStatus.PASS
+            updated_issues.append(issue)
+            
+        report.all_issues = updated_issues
+        
+        updated_by_principle = {}
+        for issue in updated_issues:
+            updated_by_principle.setdefault(issue.principle.value, []).append(issue)
+        report.issues_by_principle = updated_by_principle
+        
+        remaining_errors = len([i for i in updated_issues if not i.fixed and i.severity == Severity.ERROR])
+        remaining_warnings = len([i for i in updated_issues if not i.fixed and i.severity == Severity.WARNING])
+        report.total_errors = remaining_errors
+        report.total_warnings = remaining_warnings
+        report.total_issues = remaining_errors + remaining_warnings
+        report.total_passed = len([i for i in updated_issues if i.fixed or i.status == IssueStatus.PASS])
+        
+        report_storage[report.id] = report
+        
+    import shutil
+    output_filename = f"remediated_{report.document.filename}"
+    output_path = settings.OUTPUT_DIR / output_filename
+    shutil.copy2(file_path, output_path)
+    
+    return RemediationResponse(
+        report_id=report.id,
+        total_fixed=total_fixed,
+        total_failed=total_failed,
+        results=results,
+        remediated_file_path=str(output_path)
+    )
 
 
 # =============================================================================

@@ -123,11 +123,28 @@ def auto_tag_pdf(
             ]
             
             # Execute the C++ CLI tool
+            from .config import settings
+
             try:
-                subprocess.run(cmd, capture_output=True, text=True, check=True)
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=settings.PDF_SUBPROCESS_TIMEOUT_SECONDS,
+                )
                 logger.info("C++ QPDF engine finished successfully.")
                 if use_temp_out:
                     shutil.move(actual_target, str(target))
+            except subprocess.TimeoutExpired as err:
+                logger.error(
+                    "C++ remediator CLI timed out after %ss",
+                    settings.PDF_SUBPROCESS_TIMEOUT_SECONDS,
+                )
+                raise RuntimeError(
+                    "C++ remediator CLI timed out after "
+                    f"{settings.PDF_SUBPROCESS_TIMEOUT_SECONDS}s"
+                ) from err
             except subprocess.CalledProcessError as err:
                 logger.error("C++ remediator CLI failed with exit code %d", err.returncode)
                 logger.error("STDOUT:\n%s", err.stdout)

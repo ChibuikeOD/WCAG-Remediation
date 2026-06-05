@@ -141,6 +141,20 @@ export interface TaggingComparisonReport {
   report_filename?: string;
 }
 
+export interface DocumentImageItem {
+  id: string;
+  page_num?: number | null;
+  current_alt: string;
+  image_url?: string | null;
+}
+
+export interface AltTextResolution {
+  id: string;
+  alt_text: string;
+  is_decorative: boolean;
+}
+
+
 
 
 

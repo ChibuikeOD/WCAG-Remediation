@@ -10,7 +10,11 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 ENV UPLOAD_DIR=/app/uploads
 ENV OUTPUT_DIR=/app/output
-ENV _JAVA_OPTIONS="-Xmx128m"
+# OpenDataLoader (Java) parses the full PDF page tree in memory. 128m starves
+# it and triggers OutOfMemoryError on real documents, which surfaces as failed
+# text extraction / untagged (inaccessible) output. 512m is a safe default for
+# Docker/Compose; on a memory-constrained host lower this via the env var.
+ENV _JAVA_OPTIONS="-Xmx512m"
 # PyMuPDF/MuPDF expects the path to the tessdata folder ITSELF (not its parent),
 # otherwise pix.pdfocr_tobytes() cannot find eng.traineddata and OCR silently fails.
 ENV TESSDATA_PREFIX="/usr/share/tesseract-ocr/4.00/tessdata"

@@ -294,15 +294,38 @@ class PDFAccessibilityAnalyzer:
                         if tag_type not in structure.tag_types:
                             structure.tag_types.append(tag_type)
                         
-                        # Count specific elements
                         if tag_type == 'Figure':
-                            structure.figure_count += 1
-                            if '/Alt' in kid:
-                                alt_text = str(kid.Alt).strip()
-                                if alt_text and alt_text not in ['', 'image', 'figure', 'Image', 'Figure', 'img']:
-                                    structure.figures_with_alt += 1
-                                else:
-                                    structure.figures_with_empty_alt += 1
+                            # Check if the figure covers the entire page
+                            is_full_page = False
+                            try:
+                                page_obj = kid.get("/Pg")
+                                if page_obj:
+                                    pike = self._open_pike()
+                                    page_idx = pike.pages.index(page_obj)
+                                    fitz_doc = self._open_fitz()
+                                    if fitz_doc and page_idx < len(fitz_doc):
+                                        page = fitz_doc[page_idx]
+                                        bbox = None
+                                        if '/A' in kid:
+                                            attr = kid.A
+                                            if hasattr(attr, 'keys') and '/BBox' in attr:
+                                                bbox = [float(x) for x in attr.BBox]
+                                        if bbox:
+                                            width_ratio = (bbox[2] - bbox[0]) / page.rect.width
+                                            height_ratio = (bbox[3] - bbox[1]) / page.rect.height
+                                            if width_ratio > 0.95 and height_ratio > 0.95:
+                                                is_full_page = True
+                            except Exception:
+                                pass
+                            
+                            if not is_full_page:
+                                structure.figure_count += 1
+                                if '/Alt' in kid:
+                                    alt_text = str(kid.Alt).strip()
+                                    if alt_text and alt_text not in ['', 'image', 'figure', 'Image', 'Figure', 'img']:
+                                        structure.figures_with_alt += 1
+                                    else:
+                                        structure.figures_with_empty_alt += 1
                         
                         elif tag_type == 'Table':
                             structure.table_count += 1

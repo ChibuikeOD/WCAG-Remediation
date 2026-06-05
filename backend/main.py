@@ -1271,6 +1271,12 @@ def extract_pdf_images(pdf_path: Path) -> List[DocumentImageItem]:
                         bbox = img_info["bbox"]
                         xref = img_info["xref"]
                         
+                        # Skip full-page background images
+                        width_ratio = (bbox[2] - bbox[0]) / page.rect.width
+                        height_ratio = (bbox[3] - bbox[1]) / page.rect.height
+                        if width_ratio > 0.95 and height_ratio > 0.95:
+                            continue
+                        
                         try:
                             rect = fitz.Rect(bbox)
                             pix = page.get_pixmap(clip=rect, dpi=100)
@@ -1329,43 +1335,56 @@ def extract_pdf_images(pdf_path: Path) -> List[DocumentImageItem]:
                                             bbox = [p_bbox[0], page.rect.height - p_bbox[3], p_bbox[2], page.rect.height - p_bbox[1]]
                                             break
                     
-                    base64_data = ""
+                    # Check if the figure spans the entire page
+                    is_full_page = False
                     try:
                         page = doc[page_num]
                         if bbox:
-                            x0 = max(0, min(bbox[0], page.rect.width))
-                            y0 = max(0, min(page.rect.height - bbox[3], page.rect.height))
-                            x1 = max(0, min(bbox[2], page.rect.width))
-                            y1 = max(0, min(page.rect.height - bbox[1], page.rect.height))
-                            
-                            rect = fitz.Rect(x0, y0, x1, y1)
-                            if rect.is_empty or rect.width < 5 or rect.height < 5:
-                                pix = page.get_pixmap(dpi=72)
-                            else:
-                                pix = page.get_pixmap(clip=rect, dpi=120)
-                        else:
-                            img_list = page.get_images()
-                            if img_list:
-                                xref = img_list[0][0]
-                                base_img = doc.extract_image(xref)
-                                base64_data = base64.b64encode(base_img["image"]).decode("utf-8")
-                            else:
-                                pix = page.get_pixmap(dpi=50)
+                            width_ratio = (bbox[2] - bbox[0]) / page.rect.width
+                            height_ratio = (bbox[3] - bbox[1]) / page.rect.height
+                            if width_ratio > 0.95 and height_ratio > 0.95:
+                                is_full_page = True
+                    except Exception:
+                        pass
+                    
+                    if not is_full_page:
+                        base64_data = ""
+                        try:
+                            page = doc[page_num]
+                            if bbox:
+                                x0 = max(0, min(bbox[0], page.rect.width))
+                                y0 = max(0, min(page.rect.height - bbox[3], page.rect.height))
+                                x1 = max(0, min(bbox[2], page.rect.width))
+                                y1 = max(0, min(page.rect.height - bbox[1], page.rect.height))
                                 
-                        if not base64_data:
-                            if pix.alpha:
-                                pix = fitz.Pixmap(pix, 0)
-                            img_bytes = pix.tobytes("png")
-                            base64_data = base64.b64encode(img_bytes).decode("utf-8")
-                    except Exception as e:
-                        logger.error(f"Error rendering figure crop: {e}")
-                        
-                    figures.append(DocumentImageItem(
-                        id="-".join(map(str, path)),
-                        page_num=page_num + 1,
-                        current_alt=current_alt,
-                        image_url=f"data:image/png;base64,{base64_data}" if base64_data else None
-                    ))
+                                rect = fitz.Rect(x0, y0, x1, y1)
+                                if rect.is_empty or rect.width < 5 or rect.height < 5:
+                                    pix = page.get_pixmap(dpi=72)
+                                else:
+                                    pix = page.get_pixmap(clip=rect, dpi=120)
+                            else:
+                                img_list = page.get_images()
+                                if img_list:
+                                    xref = img_list[0][0]
+                                    base_img = doc.extract_image(xref)
+                                    base64_data = base64.b64encode(base_img["image"]).decode("utf-8")
+                                else:
+                                    pix = page.get_pixmap(dpi=50)
+                                    
+                            if not base64_data:
+                                if pix.alpha:
+                                    pix = fitz.Pixmap(pix, 0)
+                                img_bytes = pix.tobytes("png")
+                                base64_data = base64.b64encode(img_bytes).decode("utf-8")
+                        except Exception as e:
+                            logger.error(f"Error rendering figure crop: {e}")
+                            
+                        figures.append(DocumentImageItem(
+                            id="-".join(map(str, path)),
+                            page_num=page_num + 1,
+                            current_alt=current_alt,
+                            image_url=f"data:image/png;base64,{base64_data}" if base64_data else None
+                        ))
                     
                 if "/K" in node:
                     kids = node["/K"]

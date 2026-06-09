@@ -572,6 +572,116 @@ private:
     int array_depth;
 };
 
+class SanitizePathFilter : public QPDFObjectHandle::TokenFilter {
+public:
+    SanitizePathFilter() : in_path(false) {}
+    virtual ~SanitizePathFilter() = default;
+
+    virtual void handleToken(QPDFTokenizer::Token const& token) override {
+        QPDFTokenizer::token_type_e type = token.getType();
+        std::string value = token.getValue();
+
+        if (!in_path) {
+            bool is_path_start = (type == QPDFTokenizer::tt_word &&
+                                  (value == "m" || value == "re"));
+            if (is_path_start) {
+                // Move buffered operands to path_tokens
+                path_tokens.insert(path_tokens.end(), operand_buffer.begin(), operand_buffer.end());
+                operand_buffer.clear();
+                
+                in_path = true;
+                path_tokens.push_back(token);
+            } else {
+                bool is_numeric = (type == QPDFTokenizer::tt_integer || type == QPDFTokenizer::tt_real);
+                bool is_space_comment = (type == QPDFTokenizer::tt_space || type == QPDFTokenizer::tt_comment);
+
+                if (is_numeric) {
+                    operand_buffer.push_back(token);
+                } else if (is_space_comment && !operand_buffer.empty()) {
+                    operand_buffer.push_back(token);
+                } else {
+                    // Flush buffer
+                    flushOperandBuffer();
+                    writeToken(token);
+                }
+            }
+        } else {
+            path_tokens.push_back(token);
+            bool is_path_end = (type == QPDFTokenizer::tt_word &&
+                                (value == "S" || value == "s" || value == "f" || value == "F" || value == "f*" ||
+                                 value == "B" || value == "B*" || value == "b" || value == "b*" || value == "sh" || value == "n"));
+            if (is_path_end) {
+                flushPath();
+                in_path = false;
+            }
+        }
+    }
+
+    virtual void handleEOF() override {
+        flushOperandBuffer();
+        if (in_path) {
+            flushPath();
+            in_path = false;
+        }
+    }
+
+private:
+    void flushOperandBuffer() {
+        for (auto const& t : operand_buffer) {
+            writeToken(t);
+        }
+        operand_buffer.clear();
+    }
+
+    void flushPath() {
+        std::vector<QPDFTokenizer::Token> current_op;
+        std::vector<std::vector<QPDFTokenizer::Token>> disallowed_ops;
+        std::vector<std::vector<QPDFTokenizer::Token>> clean_path_ops;
+
+        for (auto const& t : path_tokens) {
+            current_op.push_back(t);
+            if (t.getType() == QPDFTokenizer::tt_word) {
+                std::string op = t.getValue();
+                bool is_allowed = (op == "m" || op == "l" || op == "c" || op == "v" || op == "y" || op == "h" ||
+                                   op == "re" || op == "W" || op == "W*" ||
+                                   op == "S" || op == "s" || op == "f" || op == "F" || op == "f*" ||
+                                   op == "B" || op == "B*" || op == "b" || op == "b*" || op == "sh" || op == "n");
+                if (is_allowed) {
+                    clean_path_ops.push_back(current_op);
+                } else {
+                    disallowed_ops.push_back(current_op);
+                }
+                current_op.clear();
+            }
+        }
+
+        if (!current_op.empty()) {
+            clean_path_ops.push_back(current_op);
+        }
+
+        // Write disallowed operators first (before the path starts)
+        for (auto const& op_tokens : disallowed_ops) {
+            for (auto const& t : op_tokens) {
+                writeToken(t);
+            }
+            writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+        }
+
+        // Write the clean path operators
+        for (auto const& op_tokens : clean_path_ops) {
+            for (auto const& t : op_tokens) {
+                writeToken(t);
+            }
+        }
+
+        path_tokens.clear();
+    }
+
+    bool in_path;
+    std::vector<QPDFTokenizer::Token> operand_buffer;
+    std::vector<QPDFTokenizer::Token> path_tokens;
+};
+
 std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
                                            std::map<int, std::set<int>>& page_figure_mcids,
                                            std::map<int, std::map<int, MCIDInfo>>& page_mcid_info) {
@@ -592,6 +702,18 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
         delete sb;
         pages[i].getObjectHandle().replaceKey("/Contents",
                                               QPDFObjectHandle::newStream(&pdf, stripped_str));
+
+        // Pass 1.5: sanitize path operators (move disallowed graphics state/color
+        // operators out of path definition blocks)
+        SanitizePathFilter sanitize;
+        Pl_Buffer sanitize_buf("sanitized contents");
+        pages[i].filterPageContents(&sanitize, &sanitize_buf);
+        sanitize_buf.finish();
+        Buffer* sab = sanitize_buf.getBuffer();
+        std::string sanitized_str(reinterpret_cast<char const*>(sab->getBuffer()), sab->getSize());
+        delete sab;
+        pages[i].getObjectHandle().replaceKey("/Contents",
+                                              QPDFObjectHandle::newStream(&pdf, sanitized_str));
 
         // Pass 2: inject fresh MCIDs and marked content on the cleaned stream.
         std::vector<QPDFObjectHandle> link_rects;

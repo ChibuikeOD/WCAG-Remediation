@@ -25,6 +25,50 @@ from .rules_engine import ColorUtils
 logger = logging.getLogger(__name__)
 
 
+def normalize_language_code(lang: Optional[str]) -> str:
+    """Normalize language name/code to standard ISO 639-1 or BCP 47 format."""
+    if not lang:
+        return "en"
+    
+    lang = lang.strip().lower()
+    
+    # Common language name to code mapping
+    name_to_code = {
+        "english": "en",
+        "french": "fr",
+        "spanish": "es",
+        "german": "de",
+        "portuguese": "pt",
+        "italian": "it",
+        "chinese": "zh",
+        "japanese": "ja",
+        "russian": "ru",
+        "arabic": "ar",
+        "hindi": "hi",
+        "nepali": "ne",
+        "khmer": "km",
+        "burmese": "my",
+        "korean": "ko",
+        "dutch": "nl",
+        "swedish": "sv",
+        "polish": "pl",
+        "turkish": "tr"
+    }
+    
+    if lang in name_to_code:
+        return name_to_code[lang]
+    
+    # Standardize separator to hyphen for BCP 47 (e.g. en_US -> en-US)
+    lang = lang.replace("_", "-")
+    
+    # Check if it matches ISO 639-1 (2 letters), ISO 639-2 (3 letters), or BCP 47
+    if re.match(r"^[a-z]{2,3}(-[a-z0-9]+)*$", lang):
+        return lang
+        
+    return "en"
+
+
+
 class HTMLRemediator:
     """
     Applies automated fixes to HTML documents.
@@ -460,14 +504,17 @@ class PDFRemediator:
                 
                 # Fix language
                 if language:
-                    pdf.Root.Lang = language
+                    norm_lang = normalize_language_code(language)
+                    pdf.Root.Lang = norm_lang
+                    with pdf.open_metadata(set_pikepdf_as_editor=True, update_docinfo=True) as meta:
+                        meta['dc:language'] = [norm_lang]
                     results.append(RemediationResult(
                         issue_id="pdf-lang",
                         success=True,
-                        message=f"Added document language: {language}",
-                        new_value=language
+                        message=f"Added document language: {norm_lang}",
+                        new_value=norm_lang
                     ))
-                    self.changes.append({"type": "add_lang", "lang": language})
+                    self.changes.append({"type": "add_lang", "lang": norm_lang})
                 
                 pdf.save()
                 
@@ -697,12 +744,13 @@ class PDFRemediator:
                 # XMP metadata stream + dc:title (also synced into /Info via
                 # update_docinfo). Creating the metadata context guarantees an
                 # XMP packet is written on save.
+                norm_lang = normalize_language_code(pdf_lang) if pdf_lang else "en"
                 with pdf.open_metadata(set_pikepdf_as_editor=True, update_docinfo=True) as meta:
                     if pdf_title:
                         meta["dc:title"] = pdf_title
+                    meta["dc:language"] = [norm_lang]
 
-                if pdf_lang:
-                    pdf.Root.Lang = _pk.String(pdf_lang)
+                pdf.Root.Lang = _pk.String(norm_lang)
 
                 # DisplayDocTitle makes conforming viewers show the title rather
                 # than the filename (required by PDF/UA, checked by PAC).

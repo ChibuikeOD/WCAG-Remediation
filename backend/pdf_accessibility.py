@@ -22,6 +22,52 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_language_code(lang: Optional[str]) -> str:
+    """Normalize language name/code to standard ISO 639-1 or BCP 47 format."""
+    if not lang:
+        return "en"
+    
+    lang = lang.strip().lower()
+    
+    # Common language name to code mapping
+    name_to_code = {
+        "english": "en",
+        "french": "fr",
+        "spanish": "es",
+        "german": "de",
+        "portuguese": "pt",
+        "italian": "it",
+        "chinese": "zh",
+        "japanese": "ja",
+        "russian": "ru",
+        "arabic": "ar",
+        "hindi": "hi",
+        "nepali": "ne",
+        "khmer": "km",
+        "burmese": "my",
+        "korean": "ko",
+        "dutch": "nl",
+        "swedish": "sv",
+        "polish": "pl",
+        "turkish": "tr"
+    }
+    
+    if lang in name_to_code:
+        return name_to_code[lang]
+    
+    import re
+    
+    # Standardize separator to hyphen for BCP 47 (e.g. en_US -> en-US)
+    lang = lang.replace("_", "-")
+    
+    # Check if it matches ISO 639-1 (2 letters), ISO 639-2 (3 letters), or BCP 47
+    if re.match(r"^[a-z]{2,3}(-[a-z0-9]+)*$", lang):
+        return lang
+        
+    return "en"
+
+
 try:
     import fitz  # PyMuPDF
     HAS_PYMUPDF = True
@@ -1084,8 +1130,11 @@ class PDFRemediator:
                 
                 # Set language
                 if language:
-                    pdf.Root.Lang = language
-                    self.changes.append({"type": "set_language", "value": language})
+                    norm_lang = normalize_language_code(language)
+                    pdf.Root.Lang = norm_lang
+                    with pdf.open_metadata(set_pikepdf_as_editor=True, update_docinfo=True) as meta:
+                        meta['dc:language'] = [norm_lang]
+                    self.changes.append({"type": "set_language", "value": norm_lang})
                 
                 # Set author
                 if author:

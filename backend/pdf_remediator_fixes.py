@@ -792,28 +792,141 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
             doc.close()
             return _result("pdf-bookmarks", True, "Bookmarks already present")
 
-        toc = []
-        for page_num, page in enumerate(doc):
-            blocks = page.get_text("dict").get("blocks", [])
-            for block in blocks:
+        from collections import Counter
+
+        # Find heading size threshold dynamically based on body size
+        sizes = []
+        for page in doc:
+            for block in page.get_text("dict").get("blocks", []):
                 if "lines" not in block:
                     continue
                 for line in block["lines"]:
                     for span in line.get("spans", []):
-                        size = span.get("size", 12)
                         text = span.get("text", "").strip()
-                        if not text or len(text) < 3 or len(text) > 120:
-                            continue
-                        if size >= 16:
-                            level = 1 if size >= 20 else 2
-                            toc.append([level, text, page_num + 1])
+                        if len(text) > 15:
+                            sizes.append(round(span.get("size", 12), 1))
+        
+        most_common_size = 12.0
+        if sizes:
+            counter = Counter(sizes)
+            most_common_size = counter.most_common(1)[0][0]
+        threshold = max(most_common_size + 1.5, 12.5)
 
-        if not toc:
+        # Collect candidate headings
+        candidates = []
+        for page_num, page in enumerate(doc):
+            blocks = page.get_text("dict", sort=True).get("blocks", [])
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                
+                current_heading_parts = []
+                block_max_size = 0
+                block_is_bold = False
+                
+                for line in block["lines"]:
+                    line_text_parts = []
+                    line_max_size = 0
+                    line_is_bold = False
+                    
+                    for span in line.get("spans", []):
+                        span_text = span.get("text", "").strip()
+                        if not span_text:
+                            continue
+                        
+                        size = span.get("size", 12)
+                        font = span.get("font", "")
+                        flags = span.get("flags", 0)
+                        span_bold = "bold" in font.lower() or (flags & 16)
+                        
+                        line_text_parts.append(span_text)
+                        if size > line_max_size:
+                            line_max_size = size
+                            line_is_bold = span_bold
+                    
+                    line_text = " ".join(line_text_parts).strip()
+                    if not line_text:
+                        continue
+                    
+                    # Line is heading-like if size >= threshold AND (is bold OR size >= 18)
+                    if line_max_size >= threshold and (line_is_bold or line_max_size >= 18.0):
+                        current_heading_parts.append(line_text)
+                        if line_max_size > block_max_size:
+                            block_max_size = line_max_size
+                            block_is_bold = line_is_bold
+                    else:
+                        if current_heading_parts:
+                            heading_text = " ".join(current_heading_parts).strip()
+                            if 3 <= len(heading_text) <= 150:
+                                candidates.append({
+                                    "text": heading_text,
+                                    "page": page_num + 1,
+                                    "size": block_max_size
+                                })
+                            current_heading_parts = []
+                
+                if current_heading_parts:
+                    heading_text = " ".join(current_heading_parts).strip()
+                    if 3 <= len(heading_text) <= 150:
+                        candidates.append({
+                            "text": heading_text,
+                            "page": page_num + 1,
+                            "size": block_max_size
+                        })
+
+        if not candidates:
             doc.close()
             return _result("pdf-bookmarks", True, "No heading text found for bookmarks")
 
-        # PyMuPDF TOC must start with a level 1 item to avoid ValueError
-        if toc[0][0] > 1:
+        # Group size categories to assign logical levels (1, 2, 3...)
+        unique_sizes = sorted(list(set(round(c["size"], 1) for c in candidates)), reverse=True)
+        
+        # Merge sizes within 1.0pt of each other
+        size_groups = []
+        for sz in unique_sizes:
+            added = False
+            for g in size_groups:
+                if abs(g[0] - sz) <= 1.0:
+                    g.append(sz)
+                    added = True
+                    break
+            if not added:
+                size_groups.append([sz])
+                
+        group_avg_sizes = [sum(g) / len(g) for g in size_groups]
+        
+        # Check pages where each size group appears
+        group_pages = []
+        for g in size_groups:
+            pages = set()
+            for c in candidates:
+                if round(c["size"], 1) in g:
+                    pages.add(c["page"])
+            group_pages.append(pages)
+            
+        # Level mapping
+        group_levels = {}
+        current_level = 1
+        for idx, (avg_sz, pages) in enumerate(zip(group_avg_sizes, group_pages)):
+            if idx == 0 and pages == {1} and len(group_avg_sizes) > 1:
+                # Page 1 only -> Cover Title -> Level 1
+                group_levels[idx] = 1
+            else:
+                group_levels[idx] = current_level
+                current_level += 1
+
+        toc = []
+        for c in candidates:
+            c_sz = round(c["size"], 1)
+            group_idx = -1
+            for idx, g in enumerate(size_groups):
+                if c_sz in g:
+                    group_idx = idx
+                    break
+            level = group_levels.get(group_idx, 1)
+            toc.append([level, c["text"], c["page"]])
+
+        if toc and toc[0][0] > 1:
             toc[0][0] = 1
 
         doc.set_toc(toc)
@@ -827,6 +940,7 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"fix_bookmarks: {e}", exc_info=True)
         return _result("pdf-bookmarks", False, str(e))
+
 
 
 # ---------------------------------------------------------------------------

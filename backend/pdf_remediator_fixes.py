@@ -637,13 +637,37 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
     if not HAS_PIKEPDF or not HAS_PYMUPDF:
         return _result("pdf-untagged-urls", False, "pikepdf/PyMuPDF not available")
 
+    import pdfplumber
+
     # 1. First, ensure all text URLs have /Link annotations on the pages
     try:
         inject_link_annotations(pdf_path)
     except Exception as e:
         logger.error(f"fix_untagged_urls - inject_link_annotations failed: {e}")
 
+    # Extract all page characters and close pdfplumber immediately to avoid Windows file locks
+    page_chars = {}
+    try:
+        with pdfplumber.open(str(pdf_path)) as plumb:
+            for i, plumb_page in enumerate(plumb.pages):
+                page_chars[i] = (
+                    [
+                        {
+                            "x0": char["x0"],
+                            "top": char["top"],
+                            "x1": char["x1"],
+                            "bottom": char["bottom"],
+                            "mcid": char.get("mcid"),
+                        }
+                        for char in plumb_page.chars
+                    ],
+                    plumb_page.height
+                )
+    except Exception as e:
+        return _result("pdf-untagged-urls", False, f"Failed to extract characters with pdfplumber: {e}")
+
     # 2. Now check all /Link annotations across all pages to see if they are tagged
+    pdf = None
     try:
         pdf = pikepdf.open(str(pdf_path), allow_overwriting_input=True)
     except Exception as e:
@@ -680,9 +704,15 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
         added = 0
 
         for page_num, page in enumerate(pdf.pages):
+            page_sp = page.get("/StructParents")
+            page_sp_val = int(page_sp) if page_sp is not None else None
+            
             annots = page.get("/Annots")
             if not annots:
                 continue
+
+            chars, page_height = page_chars.get(page_num, ([], 792))
+
             for annot in annots:
                 if annot.get("/Subtype") == "/Link":
                     sp = annot.get("/StructParent")
@@ -690,13 +720,25 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
                     is_tagged = False
                     if sp is not None:
                         sp_val = int(sp)
-                        if sp_val in pt_map:
-                            mapped_obj = pt_map[sp_val]
-                            if isinstance(mapped_obj, pikepdf.Dictionary) and mapped_obj.get("/S") == "/Link":
-                                is_tagged = True
-                    
+                        if page_sp_val is not None and page_sp_val in pt_map:
+                            page_array = pt_map[page_sp_val]
+                            if isinstance(page_array, pikepdf.Array) and sp_val < len(page_array):
+                                mapped_obj = page_array[sp_val]
+                                if isinstance(mapped_obj, pikepdf.Dictionary):
+                                    if mapped_obj.get("/S") == "/Link":
+                                        is_tagged = True
+                                    elif mapped_obj.get("/S") == "/TOCI":
+                                        kids = mapped_obj.get("/K")
+                                        if kids is not None:
+                                            if isinstance(kids, pikepdf.Array):
+                                                for k in kids:
+                                                    if isinstance(k, pikepdf.Dictionary) and k.get("/S") == "/Link":
+                                                        is_tagged = True
+                                            elif isinstance(kids, pikepdf.Dictionary) and kids.get("/S") == "/Link":
+                                                is_tagged = True
+
                     if not is_tagged:
-                        # Find or generate a StructParent key
+                        # Find or generate a StructParent key for the annotation
                         if sp is None:
                             sp_val = next_key
                             next_key += 1
@@ -704,32 +746,106 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
                         else:
                             sp_val = int(sp)
 
-                        # Find a parent structure element. We attach to doc_elem.
-                        link_elem = pdf.make_indirect(pikepdf.Dictionary({
-                            "/Type": pikepdf.Name("/StructElem"),
-                            "/S": pikepdf.Name("/Link"),
-                            "/P": doc_elem,
-                            "/Pg": page.obj,
-                        }))
-                        
-                        # Add /OBJR to Kids of the Link structure element
+                        # Find the overlapping parent element using character MCIDs
+                        annot_rect = annot.get("/Rect")
+                        parent_elem = None
+                        overlapping_mcids = set()
+
+                        if annot_rect and len(annot_rect) == 4:
+                            l1, b1, r1, t1 = [float(x) for x in annot_rect]
+                            
+                            for char in chars:
+                                cx0 = char["x0"]
+                                cy0 = page_height - char["bottom"]
+                                cx1 = char["x1"]
+                                cy1 = page_height - char["top"]
+                                
+                                x_overlap = max(0.0, min(r1, cx1) - max(l1, cx0))
+                                y_overlap = max(0.0, min(t1, cy1) - max(b1, cy0))
+                                
+                                if x_overlap > 0 and y_overlap > 0:
+                                    if char.get("mcid") is not None:
+                                        overlapping_mcids.add(char["mcid"])
+
+                            if overlapping_mcids:
+                                target_mcid = list(overlapping_mcids)[0]
+                                if page_sp_val is not None and page_sp_val in pt_map:
+                                    page_array = pt_map[page_sp_val]
+                                    if isinstance(page_array, pikepdf.Array) and target_mcid < len(page_array):
+                                        parent_elem = page_array[target_mcid]
+                                    elif isinstance(page_array, pikepdf.Dictionary) and target_mcid == 0:
+                                        parent_elem = page_array
+
+                        # Create the OBJR
                         objr = pikepdf.Dictionary({
                             "/Type": pikepdf.Name("/OBJR"),
                             "/Obj": annot,
                             "/Pg": page.obj,
                         })
-                        link_elem["/K"] = pikepdf.Array([objr])
-                        
-                        # Append to doc_elem's kids
-                        if "/K" not in doc_elem:
-                            doc_elem["/K"] = pikepdf.Array()
-                        if isinstance(doc_elem["/K"], pikepdf.Array):
-                            doc_elem["/K"].append(link_elem)
-                        elif isinstance(doc_elem["/K"], pikepdf.Dictionary):
-                            # wrap it in an array
-                            doc_elem["/K"] = pikepdf.Array([doc_elem["/K"], link_elem])
+
+                        if parent_elem is not None:
+                            # Create Link structure element nested inside parent_elem
+                            link_elem = pdf.make_indirect(pikepdf.Dictionary({
+                                "/Type": pikepdf.Name("/StructElem"),
+                                "/S": pikepdf.Name("/Link"),
+                                "/P": parent_elem,
+                                "/Pg": page.obj,
+                            }))
                             
-                        # Add to the new ParentTree mappings
+                            kids = parent_elem.get("/K")
+                            link_mcids = [m for m in overlapping_mcids]
+                            link_elem_kids = pikepdf.Array([objr])
+                            for m in sorted(link_mcids):
+                                link_elem_kids.append(m)
+                            link_elem["/K"] = link_elem_kids
+                            
+                            if isinstance(kids, int):
+                                parent_elem["/K"] = link_elem
+                            elif isinstance(kids, pikepdf.Array):
+                                new_parent_kids = pikepdf.Array()
+                                replaced = False
+                                for k in kids:
+                                    if isinstance(k, int) and k in overlapping_mcids:
+                                        if not replaced:
+                                            new_parent_kids.append(link_elem)
+                                            replaced = True
+                                    else:
+                                        new_parent_kids.append(k)
+                                parent_elem["/K"] = new_parent_kids
+                            else:
+                                parent_elem["/K"] = link_elem
+                                
+                            # Update ParentTree mapping
+                            if page_sp_val is not None and page_sp_val in pt_map:
+                                page_array = pt_map[page_sp_val]
+                                if isinstance(page_array, pikepdf.Array):
+                                    while len(page_array) <= sp_val:
+                                        page_array.append(None)
+                                    page_array[sp_val] = link_elem
+                        else:
+                            # Fallback: attach directly to doc_elem
+                            link_elem = pdf.make_indirect(pikepdf.Dictionary({
+                                "/Type": pikepdf.Name("/StructElem"),
+                                "/S": pikepdf.Name("/Link"),
+                                "/P": doc_elem,
+                                "/Pg": page.obj,
+                            }))
+                            link_elem["/K"] = pikepdf.Array([objr])
+                            
+                            if "/K" not in doc_elem:
+                                doc_elem["/K"] = pikepdf.Array()
+                            if isinstance(doc_elem["/K"], pikepdf.Array):
+                                doc_elem["/K"].append(link_elem)
+                            elif isinstance(doc_elem["/K"], pikepdf.Dictionary):
+                                doc_elem["/K"] = pikepdf.Array([doc_elem["/K"], link_elem])
+                                
+                            if page_sp_val is not None and page_sp_val in pt_map:
+                                page_array = pt_map[page_sp_val]
+                                if isinstance(page_array, pikepdf.Array):
+                                    while len(page_array) <= sp_val:
+                                        page_array.append(None)
+                                    page_array[sp_val] = link_elem
+
                         pt_map[sp_val] = link_elem
                         added += 1
 
@@ -792,139 +908,230 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
             doc.close()
             return _result("pdf-bookmarks", True, "Bookmarks already present")
 
-        from collections import Counter
+        toc = []
 
-        # Find heading size threshold dynamically based on body size
-        sizes = []
-        for page in doc:
-            for block in page.get_text("dict").get("blocks", []):
-                if "lines" not in block:
-                    continue
-                for line in block["lines"]:
-                    for span in line.get("spans", []):
-                        text = span.get("text", "").strip()
-                        if len(text) > 15:
-                            sizes.append(round(span.get("size", 12), 1))
-        
-        most_common_size = 12.0
-        if sizes:
-            counter = Counter(sizes)
-            most_common_size = counter.most_common(1)[0][0]
-        threshold = max(most_common_size + 1.5, 12.5)
-
-        # Collect candidate headings
-        candidates = []
-        for page_num, page in enumerate(doc):
-            blocks = page.get_text("dict", sort=True).get("blocks", [])
-            for block in blocks:
-                if "lines" not in block:
-                    continue
-                
-                current_heading_parts = []
-                block_max_size = 0
-                block_is_bold = False
-                
-                for line in block["lines"]:
-                    line_text_parts = []
-                    line_max_size = 0
-                    line_is_bold = False
+        # Try to extract headings from the structure tree first
+        if HAS_PIKEPDF:
+            try:
+                import re
+                pdf = pikepdf.open(str(pdf_path))
+                if "/StructTreeRoot" in pdf.Root:
+                    struct_root = pdf.Root["/StructTreeRoot"]
+                    struct_headings = []
                     
-                    for span in line.get("spans", []):
-                        span_text = span.get("text", "").strip()
-                        if not span_text:
+                    def traverse(node):
+                        if not hasattr(node, "keys"):
+                            return
+                        if "/S" in node:
+                            tag_type = str(node["/S"])
+                            if tag_type in ['/H1', '/H2', '/H3', '/H4', '/H5', '/H6']:
+                                struct_headings.append(node)
+                        if "/K" in node:
+                            kids = node["/K"]
+                            if isinstance(kids, pikepdf.Array):
+                                for k in kids:
+                                    traverse(k)
+                            else:
+                                traverse(kids)
+                                
+                    traverse(struct_root)
+                    
+                    for node in struct_headings:
+                        tag_type = str(node["/S"])
+                        level = int(tag_type[2:]) # e.g. H1 -> 1
+                        
+                        pg_obj = node.get("/Pg")
+                        if not pg_obj:
                             continue
-                        
-                        size = span.get("size", 12)
-                        font = span.get("font", "")
-                        flags = span.get("flags", 0)
-                        span_bold = "bold" in font.lower() or (flags & 16)
-                        
-                        line_text_parts.append(span_text)
-                        if size > line_max_size:
-                            line_max_size = size
-                            line_is_bold = span_bold
-                    
-                    line_text = " ".join(line_text_parts).strip()
-                    if not line_text:
+                        try:
+                            page_idx = pdf.pages.index(pg_obj)
+                        except Exception:
+                            continue
+                            
+                        text = ""
+                        # 1. Try title /T
+                        if "/T" in node:
+                            text = str(node["/T"]).strip()
+                            
+                        # 2. Try bbox text extraction
+                        if not text:
+                            bbox = None
+                            if "/A" in node:
+                                attr = node["/A"]
+                                if hasattr(attr, "keys") and "/BBox" in attr:
+                                    bbox = attr["/BBox"]
+                                elif isinstance(attr, pikepdf.Array) and len(attr) > 0:
+                                    for item in attr:
+                                        if hasattr(item, "keys") and "/BBox" in item:
+                                            bbox = item["/BBox"]
+                                            break
+                            if bbox is not None and len(bbox) == 4:
+                                left = float(bbox[0])
+                                bottom = float(bbox[1])
+                                right = float(bbox[2])
+                                top = float(bbox[3])
+                                
+                                page = doc[page_idx]
+                                page_height = page.rect.height
+                                
+                                x0 = left
+                                y0 = page_height - top
+                                x1 = right
+                                y1 = page_height - bottom
+                                
+                                rect_margin = fitz.Rect(x0 - 2, y0 - 2, x1 + 2, y1 + 2)
+                                
+                                # Extract via dict to inspect spans for bold text filtering
+                                text_dict = page.get_text("dict", clip=rect_margin)
+                                spans = []
+                                for block in text_dict.get("blocks", []):
+                                    if "lines" in block:
+                                        for line in block["lines"]:
+                                            for span in line.get("spans", []):
+                                                spans.append(span)
+                                                
+                                refined_text_parts = []
+                                has_bold = any("bold" in s.get("font", "").lower() or (s.get("flags", 0) & 16) for s in spans)
+                                
+                                if has_bold:
+                                    collecting = True
+                                    for s in spans:
+                                        is_s_bold = "bold" in s.get("font", "").lower() or (s.get("flags", 0) & 16)
+                                        s_text = s.get("text", "").strip()
+                                        if not s_text:
+                                            continue
+                                        if collecting:
+                                            if is_s_bold:
+                                                refined_text_parts.append(s.get("text", ""))
+                                            else:
+                                                collecting = False
+                                else:
+                                    refined_text_parts = [s.get("text", "") for s in spans]
+                                    
+                                text = " ".join(refined_text_parts).strip()
+                                text = " ".join(text.split())
+                                
+                                # Fallback to intersecting blocks if empty
+                                if not text:
+                                    overlapping_text = []
+                                    for block in page.get_text("blocks"):
+                                        b_rect = fitz.Rect(block[:4])
+                                        if b_rect.intersects(rect_margin):
+                                            lines = [l.strip() for l in block[4].strip().split("\n") if l.strip()]
+                                            if lines:
+                                                overlapping_text.append(lines[0])
+                                    text = " ".join(overlapping_text).strip()
+                                    
+                        text = text.strip()
+                        # Filter out purely decorative/non-alphanumeric text
+                        if text and re.search(r'[A-Za-z0-9]', text):
+                            if len(text) > 120:
+                                text = text[:120] + "..."
+                            toc.append([level, text, page_idx + 1])
+                pdf.close()
+            except Exception as e:
+                logger.error(f"fix_bookmarks: Error reading structure tree: {e}")
+                try:
+                    pdf.close()
+                except Exception:
+                    pass
+
+        # Fall back to size/boldness visual heuristic if no structure headings were found
+        if not toc:
+            from collections import Counter
+            import re
+
+            # Find heading size threshold dynamically based on body size
+            sizes = []
+            for page in doc:
+                for block in page.get_text("dict").get("blocks", []):
+                    if "lines" not in block:
+                        continue
+                    for line in block["lines"]:
+                        for span in line.get("spans", []):
+                            text = span.get("text", "").strip()
+                            if len(text) > 15:
+                                sizes.append(round(span.get("size", 12), 1))
+            
+            most_common_size = 12.0
+            if sizes:
+                counter = Counter(sizes)
+                most_common_size = counter.most_common(1)[0][0]
+            threshold = max(most_common_size + 1.5, 12.5)
+
+            # Heuristics for same-size headings
+            heading_patterns = [
+                r'^(?:[IVXLCDM]+\.)\s+[A-Z\s]+',  # e.g., I. INTRODUCTION
+                r'^(?:\d+(?:\.\d+)*)\s+[A-Z]',    # e.g., 1.1 Background
+                r'^[A-Z\s]{5,80}$',               # UPPERCASE lines
+            ]
+            compiled_patterns = [re.compile(p) for p in heading_patterns]
+
+            # Collect candidate headings
+            for page_num, page in enumerate(doc):
+                blocks = page.get_text("dict", sort=True).get("blocks", [])
+                for block in blocks:
+                    if "lines" not in block:
                         continue
                     
-                    # Line is heading-like if size >= threshold AND (is bold OR size >= 18)
-                    if line_max_size >= threshold and (line_is_bold or line_max_size >= 18.0):
-                        current_heading_parts.append(line_text)
-                        if line_max_size > block_max_size:
-                            block_max_size = line_max_size
-                            block_is_bold = line_is_bold
-                    else:
-                        if current_heading_parts:
-                            heading_text = " ".join(current_heading_parts).strip()
-                            if 3 <= len(heading_text) <= 150:
-                                candidates.append({
-                                    "text": heading_text,
-                                    "page": page_num + 1,
-                                    "size": block_max_size
-                                })
-                            current_heading_parts = []
-                
-                if current_heading_parts:
-                    heading_text = " ".join(current_heading_parts).strip()
-                    if 3 <= len(heading_text) <= 150:
-                        candidates.append({
-                            "text": heading_text,
-                            "page": page_num + 1,
-                            "size": block_max_size
-                        })
-
-        if not candidates:
-            doc.close()
-            return _result("pdf-bookmarks", True, "No heading text found for bookmarks")
-
-        # Group size categories to assign logical levels (1, 2, 3...)
-        unique_sizes = sorted(list(set(round(c["size"], 1) for c in candidates)), reverse=True)
-        
-        # Merge sizes within 1.0pt of each other
-        size_groups = []
-        for sz in unique_sizes:
-            added = False
-            for g in size_groups:
-                if abs(g[0] - sz) <= 1.0:
-                    g.append(sz)
-                    added = True
-                    break
-            if not added:
-                size_groups.append([sz])
-                
-        group_avg_sizes = [sum(g) / len(g) for g in size_groups]
-        
-        # Check pages where each size group appears
-        group_pages = []
-        for g in size_groups:
-            pages = set()
-            for c in candidates:
-                if round(c["size"], 1) in g:
-                    pages.add(c["page"])
-            group_pages.append(pages)
-            
-        # Level mapping
-        group_levels = {}
-        current_level = 1
-        for idx, (avg_sz, pages) in enumerate(zip(group_avg_sizes, group_pages)):
-            if idx == 0 and pages == {1} and len(group_avg_sizes) > 1:
-                # Page 1 only -> Cover Title -> Level 1
-                group_levels[idx] = 1
-            else:
-                group_levels[idx] = current_level
-                current_level += 1
-
-        toc = []
-        for c in candidates:
-            c_sz = round(c["size"], 1)
-            group_idx = -1
-            for idx, g in enumerate(size_groups):
-                if c_sz in g:
-                    group_idx = idx
-                    break
-            level = group_levels.get(group_idx, 1)
-            toc.append([level, c["text"], c["page"]])
+                    for line in block["lines"]:
+                        line_text_parts = []
+                        line_max_size = 0
+                        line_is_bold = False
+                        
+                        for span in line.get("spans", []):
+                            span_text = span.get("text", "")
+                            if not span_text.strip():
+                                continue
+                            
+                            size = span.get("size", 12)
+                            font = span.get("font", "")
+                            flags = span.get("flags", 0)
+                            span_bold = "bold" in font.lower() or (flags & 16)
+                            
+                            line_text_parts.append(span_text)
+                            if size > line_max_size:
+                                line_max_size = size
+                                line_is_bold = span_bold
+                        
+                        line_text = "".join(line_text_parts).strip()
+                        line_text = " ".join(line_text.split())
+                        
+                        if not line_text or len(line_text) < 3 or len(line_text) > 120:
+                            continue
+                        
+                        is_heading = False
+                        level = 1
+                        
+                        # Case A: Larger than threshold
+                        if line_max_size >= threshold:
+                            if line_is_bold or line_max_size >= 18.0:
+                                is_heading = True
+                                if line_max_size >= 16.0:
+                                    level = 1
+                                elif line_max_size >= 14.0:
+                                    level = 2
+                                else:
+                                    level = 3
+                                    
+                        # Case B: Same size as body but bold and matches heading pattern
+                        elif line_is_bold and abs(line_max_size - most_common_size) <= 0.5:
+                            for pattern in compiled_patterns:
+                                if pattern.match(line_text):
+                                    is_heading = True
+                                    # Level by numbering depth
+                                    number_match = re.match(r'^(\d+(?:\.\d+)*)\s+', line_text)
+                                    if number_match:
+                                        dots = number_match.group(1).count('.')
+                                        level = dots + 1
+                                    elif re.match(r'^(?:[IVXLCDM]+\.)\s+', line_text):
+                                        level = 1
+                                    else:
+                                        level = 2
+                                    break
+                                    
+                        if is_heading:
+                            toc.append([level, line_text, page_num + 1])
 
         if toc and toc[0][0] > 1:
             toc[0][0] = 1

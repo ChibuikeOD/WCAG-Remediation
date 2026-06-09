@@ -720,31 +720,27 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
                     is_tagged = False
                     if sp is not None:
                         sp_val = int(sp)
-                        if page_sp_val is not None and page_sp_val in pt_map:
-                            page_array = pt_map[page_sp_val]
-                            if isinstance(page_array, pikepdf.Array) and sp_val < len(page_array):
-                                mapped_obj = page_array[sp_val]
-                                if isinstance(mapped_obj, pikepdf.Dictionary):
-                                    if mapped_obj.get("/S") == "/Link":
-                                        is_tagged = True
-                                    elif mapped_obj.get("/S") == "/TOCI":
-                                        kids = mapped_obj.get("/K")
-                                        if kids is not None:
-                                            if isinstance(kids, pikepdf.Array):
-                                                for k in kids:
-                                                    if isinstance(k, pikepdf.Dictionary) and k.get("/S") == "/Link":
-                                                        is_tagged = True
-                                            elif isinstance(kids, pikepdf.Dictionary) and kids.get("/S") == "/Link":
-                                                is_tagged = True
+                        # Look up sp_val directly in the ParentTree dictionary
+                        if sp_val in pt_map:
+                            mapped_obj = pt_map[sp_val]
+                            if isinstance(mapped_obj, pikepdf.Dictionary):
+                                if mapped_obj.get("/S") == "/Link":
+                                    is_tagged = True
+                                elif mapped_obj.get("/S") == "/TOCI":
+                                    kids = mapped_obj.get("/K")
+                                    if kids is not None:
+                                        if isinstance(kids, pikepdf.Array):
+                                            for k in kids:
+                                                if isinstance(k, pikepdf.Dictionary) and k.get("/S") == "/Link":
+                                                    is_tagged = True
+                                        elif isinstance(kids, pikepdf.Dictionary) and kids.get("/S") == "/Link":
+                                            is_tagged = True
 
                     if not is_tagged:
-                        # Find or generate a StructParent key for the annotation
-                        if sp is None:
-                            sp_val = next_key
-                            next_key += 1
-                            annot["/StructParent"] = sp_val
-                        else:
-                            sp_val = int(sp)
+                        # Find or generate a unique non-conflicting StructParent key for the annotation
+                        sp_val = next_key
+                        next_key += 1
+                        annot["/StructParent"] = sp_val
 
                         # Find the overlapping parent element using character MCIDs
                         annot_rect = annot.get("/Rect")
@@ -815,13 +811,13 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
                             else:
                                 parent_elem["/K"] = link_elem
                                 
-                            # Update ParentTree mapping
+                            # Update Page's ParentTree array at indices corresponding to the MCIDs
                             if page_sp_val is not None and page_sp_val in pt_map:
                                 page_array = pt_map[page_sp_val]
                                 if isinstance(page_array, pikepdf.Array):
-                                    while len(page_array) <= sp_val:
-                                        page_array.append(None)
-                                    page_array[sp_val] = link_elem
+                                    for m in link_mcids:
+                                        if m < len(page_array):
+                                            page_array[m] = link_elem
                         else:
                             # Fallback: attach directly to doc_elem
                             link_elem = pdf.make_indirect(pikepdf.Dictionary({
@@ -838,13 +834,6 @@ def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:
                                 doc_elem["/K"].append(link_elem)
                             elif isinstance(doc_elem["/K"], pikepdf.Dictionary):
                                 doc_elem["/K"] = pikepdf.Array([doc_elem["/K"], link_elem])
-                                
-                            if page_sp_val is not None and page_sp_val in pt_map:
-                                page_array = pt_map[page_sp_val]
-                                if isinstance(page_array, pikepdf.Array):
-                                    while len(page_array) <= sp_val:
-                                        page_array.append(None)
-                                    page_array[sp_val] = link_elem
 
                         pt_map[sp_val] = link_elem
                         added += 1

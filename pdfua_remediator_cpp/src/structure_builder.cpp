@@ -231,35 +231,25 @@ void build_struct_tree(QPDF& pdf,
             }
         }
 
-        // 2. Map each Link annotation to the best MCID on the page
+        // 2. Map each Link annotation to the MCIDs on the page that overlap it
         std::vector<int> mcid_annot(mcid_count, -1);
         if (info_map) {
-            for (int a = 0; a < static_cast<int>(link_annots.size()); ++a) {
-                const auto& info = link_annots[a];
-                int best_mcid = -1;
-                double best_mx = -1.0;
+            for (int mcid = 0; mcid < mcid_count; ++mcid) {
+                auto pit = info_map->find(mcid);
+                if (pit != info_map->end()) {
+                    double mx = pit->second.x;
+                    double my = pit->second.y;
 
-                for (int mcid = 0; mcid < mcid_count; ++mcid) {
-                    auto pit = info_map->find(mcid);
-                    if (pit != info_map->end()) {
-                        double mx = pit->second.x;
-                        double my = pit->second.y;
-
-                        // Check if Y is close (on the same text line)
-                        if (my >= info.bottom - 5.0 && my <= info.top + 5.0) {
-                            // Check if X is to the left of the link start (or close to it)
-                            if (mx <= info.right + 10.0) {
-                                if (mx > best_mx) {
-                                    best_mx = mx;
-                                    best_mcid = mcid;
-                                }
-                            }
+                    // Find if this MCID falls inside any Link annotation's bbox
+                    for (int a = 0; a < static_cast<int>(link_annots.size()); ++a) {
+                        const auto& info = link_annots[a];
+                        // check if Y is close and X is within the horizontal range of the link
+                        if (my >= info.bottom - 5.0 && my <= info.top + 5.0 &&
+                            mx >= info.left - 5.0 && mx <= info.right + 5.0) {
+                            mcid_annot[mcid] = a;
+                            break; // Map to the first overlapping link annotation
                         }
                     }
-                }
-
-                if (best_mcid >= 0) {
-                    mcid_annot[best_mcid] = a;
                 }
             }
         }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cctype>
 
 // Normalize a layout-block tag to a PDF structure type that is valid for a
 // flat leaf element (one StructElem per content MCID). Headings are preserved,
@@ -26,6 +27,95 @@ static std::string normalize_text_role(const std::string& raw) {
     // and anything non-standard collapse to a paragraph so we never emit an
     // invalid role or a Figure over real text.
     return "P";
+}
+
+static std::string trim_ascii(const std::string& raw) {
+    size_t start = 0;
+    while (start < raw.size() && std::isspace(static_cast<unsigned char>(raw[start]))) {
+        ++start;
+    }
+
+    size_t end = raw.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(raw[end - 1]))) {
+        --end;
+    }
+
+    return raw.substr(start, end - start);
+}
+
+static std::string normalize_language_tag(const std::string& raw) {
+    std::string lang = trim_ascii(raw);
+    if (lang.empty()) {
+        return "en-US";
+    }
+
+    std::replace(lang.begin(), lang.end(), '_', '-');
+    std::transform(lang.begin(), lang.end(), lang.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    if (lang == "english") return "en-US";
+    if (lang == "french") return "fr";
+    if (lang == "spanish") return "es";
+    if (lang == "german") return "de";
+    if (lang == "portuguese") return "pt";
+    if (lang == "italian") return "it";
+    if (lang == "chinese") return "zh";
+    if (lang == "japanese") return "ja";
+    if (lang == "russian") return "ru";
+    if (lang == "arabic") return "ar";
+    if (lang == "hindi") return "hi";
+    if (lang == "nepali") return "ne";
+    if (lang == "khmer") return "km";
+    if (lang == "burmese") return "my";
+    if (lang == "korean") return "ko";
+    if (lang == "dutch") return "nl";
+    if (lang == "swedish") return "sv";
+    if (lang == "polish") return "pl";
+    if (lang == "turkish") return "tr";
+
+    std::vector<std::string> parts;
+    size_t pos = 0;
+    while (pos <= lang.size()) {
+        size_t dash = lang.find('-', pos);
+        std::string part = lang.substr(pos, dash == std::string::npos ? std::string::npos : dash - pos);
+        if (part.empty()) {
+            return "en-US";
+        }
+        for (char c : part) {
+            if (!std::isalnum(static_cast<unsigned char>(c))) {
+                return "en-US";
+            }
+        }
+        parts.push_back(part);
+        if (dash == std::string::npos) {
+            break;
+        }
+        pos = dash + 1;
+    }
+
+    if (parts.empty() || parts[0].size() < 2 || parts[0].size() > 3 ||
+        !std::isalpha(static_cast<unsigned char>(parts[0][0])) ||
+        !std::isalpha(static_cast<unsigned char>(parts[0][1]))) {
+        return "en-US";
+    }
+
+    for (size_t i = 1; i < parts.size(); ++i) {
+        if (i == 1 && parts[i].size() == 4) {
+            parts[i][0] = static_cast<char>(std::toupper(static_cast<unsigned char>(parts[i][0])));
+        } else if (i == 1 && parts[i].size() == 2 &&
+                   std::isalpha(static_cast<unsigned char>(parts[i][0])) &&
+                   std::isalpha(static_cast<unsigned char>(parts[i][1]))) {
+            parts[i][0] = static_cast<char>(std::toupper(static_cast<unsigned char>(parts[i][0])));
+            parts[i][1] = static_cast<char>(std::toupper(static_cast<unsigned char>(parts[i][1])));
+        }
+    }
+
+    std::string normalized = parts[0];
+    for (size_t i = 1; i < parts.size(); ++i) {
+        normalized += "-" + parts[i];
+    }
+    return normalized;
 }
 
 // A layout block is usable for positional assignment only when it carries a
@@ -549,8 +639,11 @@ void build_struct_tree(QPDF& pdf,
     mark_info.replaceKey("/Marked", QPDFObjectHandle::newBool(true));
     root.replaceKey("/MarkInfo", mark_info);
 
-    // 7. Set document language — required by PDF/UA and NVDA/JAWS for TTS voice selection
-    if (!root.hasKey("/Lang")) {
-        root.replaceKey("/Lang", QPDFObjectHandle::newUnicodeString("en-US"));
+    // 7. Set document language. PDF/UA requires a valid BCP 47 language tag;
+    // source PDFs sometimes contain names like "English", which PAC rejects.
+    std::string lang = "en-US";
+    if (root.hasKey("/Lang") && root.getKey("/Lang").isString()) {
+        lang = normalize_language_tag(root.getKey("/Lang").getUTF8Value());
     }
+    root.replaceKey("/Lang", QPDFObjectHandle::newUnicodeString(lang));
 }

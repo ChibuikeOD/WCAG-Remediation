@@ -4,6 +4,7 @@ Tests for LayoutLM-backed PDF auto-tagging flow.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -21,9 +22,18 @@ from backend.pdf_auto_tagging import auto_tag_pdf
 from backend.pdf_overlay_debug import build_block_label
 from backend.pdf_structure_builder import TaggingResult
 
+import pikepdf
+
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def make_minimal_pdf(path: Path, language: str = "en") -> None:
+    with pikepdf.Pdf.new() as pdf:
+        pdf.add_blank_page(page_size=(72, 72))
+        pdf.Root.Lang = pikepdf.String(language)
+        pdf.save(path)
 
 
 def test_label_to_tag_mapping():
@@ -212,7 +222,7 @@ def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         captured_blocks.extend(json.loads(Path(cmd[2]).read_text(encoding="utf-8")))
-        Path(cmd[-1]).touch()
+        shutil.copy2(cmd[1], cmd[-1])
         import subprocess
 
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -227,7 +237,7 @@ def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
-    source_path.touch()
+    make_minimal_pdf(source_path)
 
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 
@@ -310,8 +320,7 @@ def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
     called_subprocess = []
     def fake_run(cmd, **kwargs):
         called_subprocess.append(cmd)
-        out_path = cmd[-1]
-        Path(out_path).touch()
+        shutil.copy2(cmd[1], cmd[-1])
         import subprocess
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -325,7 +334,7 @@ def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
-    source_path.touch()
+    make_minimal_pdf(source_path)
 
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 
@@ -334,6 +343,46 @@ def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
     assert len(called_subprocess) == 1
     assert called_subprocess[0][1] == str(source_path)
     assert called_subprocess[0][3] == str(output_path)
+
+
+def test_auto_tag_pdf_normalizes_language_metadata_after_tagging(monkeypatch, tmp_path):
+    mock_layouts = [
+        PageLayout(
+            page_number=0,
+            width=72,
+            height=72,
+            blocks=[],
+        )
+    ]
+
+    def fake_analyze(self, path):
+        return mock_layouts
+
+    def fake_run(cmd, **kwargs):
+        shutil.copy2(cmd[1], cmd[-1])
+        import subprocess
+
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        fake_analyze,
+    )
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("backend.pdf_auto_tagging.HAS_PIKEPDF", True)
+    monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: False)
+
+    source_path = tmp_path / "source.pdf"
+    output_path = tmp_path / "output.pdf"
+    make_minimal_pdf(source_path, language="English")
+
+    result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
+
+    assert result["success"] is True
+    with pikepdf.open(output_path) as pdf:
+        assert str(pdf.Root.Lang) == "en-US"
+        with pdf.open_metadata() as meta:
+            assert meta["dc:language"] == ["en-US"]
 
 
 def test_overlay_labels_use_tag_and_text_only():

@@ -119,3 +119,4 @@ test_overlays/
 test_overlays.zip
 VirtualEnvironment/
 
+.vercel

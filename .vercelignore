@@ -1,0 +1,46 @@
+# Dependency folders
+node_modules/
+frontend/node_modules/
+VirtualEnvironment/
+venv/
+.venv/
+
+# Local/generated build outputs
+frontend/dist/
+dist/
+build/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local model caches and large ML artifacts
+.cache/
+layoutLM_trained/
+layoutlmv3-doclaynet-remediator-model/
+layoutlmv3-doclaynet-remediator-model*/
+*.safetensors
+
+# Local PDF fixtures, uploads, outputs, and scratch artifacts
+uploads/
+output/
+scratch/
+test_odl_output/
+test_overlays/
+Vercel tests/
+*.pdf
+*.zip
+*.db
+*.sqlite
+*.sqlite3
+Remediation_Report_*.json
+
+# Docker/native build artifacts not used by Vercel's static/frontend deploy
+pdfua_remediator_cpp/build/
+pdfua_remediator_cpp/deps/
+
+# Logs and env files
+*.log
+logs/
+.env
+.env.local
+.env.*.local

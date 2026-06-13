@@ -208,6 +208,9 @@ void build_struct_tree(QPDF& pdf,
     // 3. Group the layout blocks by page index for tag lookup
     std::map<int, std::vector<LayoutBlock>> page_blocks;
     for (auto const& block : blocks) {
+        if (block.tag == "Artifact") {
+            continue;
+        }
         page_blocks[block.page].push_back(block);
     }
 
@@ -330,12 +333,14 @@ void build_struct_tree(QPDF& pdf,
                     double mx = pit->second.x;
                     double my = pit->second.y;
 
-                    // Find if this MCID falls inside any Link annotation's bbox
+                    // Find if this MCID falls inside any Link annotation's bbox.
+                    // Keep the tolerance tight so adjacent footer lines are not
+                    // absorbed into the wrong link element.
                     for (int a = 0; a < static_cast<int>(link_annots.size()); ++a) {
                         const auto& info = link_annots[a];
                         // check if Y is close and X is within the horizontal range of the link
-                        if (my >= info.bottom - 5.0 && my <= info.top + 5.0 &&
-                            mx >= info.left - 5.0 && mx <= info.right + 5.0) {
+                        if (my >= info.bottom - 1.0 && my <= info.top + 1.0 &&
+                            mx >= info.left - 2.0 && mx <= info.right + 2.0) {
                             mcid_annot[mcid] = a;
                             break; // Map to the first overlapping link annotation
                         }

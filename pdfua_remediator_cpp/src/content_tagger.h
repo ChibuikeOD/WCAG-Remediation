@@ -39,6 +39,7 @@ struct MCIDInfo {
 // to assign every MCID to its containing layout block and to group the
 // word/run-level MCIDs back into proper paragraph and heading elements.
 std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
+                                           const std::vector<LayoutBlock>& blocks,
                                            std::map<int, std::set<int>>& page_figure_mcids,
                                            std::map<int, std::map<int, MCIDInfo>>& page_mcid_info);
 

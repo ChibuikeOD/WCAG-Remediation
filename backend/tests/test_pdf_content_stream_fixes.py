@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pikepdf
 
-from backend.pdf_remediator_fixes import fix_content_stream_operator_states
+from backend.pdf_remediator_fixes import fix_content_stream_operator_states, _iter_link_candidates
 
 
 PATH_CONSTRUCTION_OPERATORS = {"m", "l", "c", "v", "y", "h", "re"}
@@ -56,3 +56,17 @@ def test_fix_content_stream_operator_states_moves_color_space_before_open_path(t
     assert result["success"] is True
     assert "1" in result["new_value"]
     assert _count_color_space_operators_inside_paths(pdf_path) == 0
+
+
+def test_iter_link_candidates_detects_repository_email_domain_and_cc_license():
+    text = (
+        "Repository homepage: repository.lib.umassd.edu\n"
+        "repository@umassd.edu\n"
+        "CC BY-NC-ND V4.0\n"
+    )
+
+    candidates = dict(_iter_link_candidates(text))
+
+    assert candidates["repository.lib.umassd.edu"] == "https://repository.lib.umassd.edu"
+    assert candidates["repository@umassd.edu"] == "mailto:repository@umassd.edu"
+    assert candidates["CC BY-NC-ND V4.0"] == "https://creativecommons.org/licenses/by-nc-nd/4.0/"

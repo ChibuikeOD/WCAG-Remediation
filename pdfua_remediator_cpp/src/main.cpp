@@ -102,7 +102,7 @@ int main(int argc, char* argv[]) {
         std::map<int, std::set<int>> page_figure_mcids;
         std::map<int, std::map<int, MCIDInfo>> page_mcid_info;
         std::map<int, int> page_mcid_counts =
-            tag_pdf_content_streams(pdf, page_figure_mcids, page_mcid_info);
+            tag_pdf_content_streams(pdf, blocks, page_figure_mcids, page_mcid_info);
         std::cout << "Content streams tagged successfully." << std::endl;
         for (auto const& pair : page_mcid_counts) {
             std::cout << "  Page " << pair.first + 1 << ": " << pair.second << " MCIDs injected." << std::endl;

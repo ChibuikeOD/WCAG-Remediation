@@ -134,9 +134,6 @@ def auto_tag_pdf(
 
         for layout in layouts:
             for block in layout.blocks:
-                if block.tag == "Artifact":
-                    continue
-                
                 # Retrieve raw bounding box in PDF points if available, otherwise fallback to normalized
                 raw_bbox = block.metadata.get("raw_bbox") if block.metadata else None
                 bbox_coords = list(raw_bbox) if raw_bbox else []

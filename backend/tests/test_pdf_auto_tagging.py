@@ -255,6 +255,60 @@ def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
     ]
 
 
+def test_auto_tag_pdf_passes_artifact_blocks_to_cpp(monkeypatch, tmp_path):
+    mock_layouts = [
+        PageLayout(
+            page_number=0,
+            width=612,
+            height=792,
+            blocks=[
+                StructureBlock(
+                    tag="Artifact",
+                    bbox=(60, 744, 550, 760),
+                    page_number=0,
+                    content="Running header",
+                    metadata={"raw_bbox": [60.0, 744.0, 550.0, 760.0]},
+                )
+            ],
+        )
+    ]
+
+    def fake_analyze(self, path):
+        return mock_layouts
+
+    captured_blocks = []
+
+    def fake_run(cmd, **kwargs):
+        captured_blocks.extend(json.loads(Path(cmd[2]).read_text(encoding="utf-8")))
+        shutil.copy2(cmd[1], cmd[-1])
+        import subprocess
+
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        fake_analyze,
+    )
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("backend.pdf_auto_tagging.HAS_PIKEPDF", True)
+    monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: False)
+
+    source_path = tmp_path / "source.pdf"
+    output_path = tmp_path / "output.pdf"
+    make_minimal_pdf(source_path)
+
+    result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
+
+    assert result["success"] is True
+    assert captured_blocks == [
+        {
+            "page": 0,
+            "tag": "Artifact",
+            "bbox": [60.0, 744.0, 550.0, 760.0],
+        }
+    ]
+
+
 def test_auto_tag_pdf_reports_errors_on_failure(monkeypatch, tmp_path):
     def failing_analyze(self, path):
         raise RuntimeError("Layout analyzer failed")

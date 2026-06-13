@@ -34,13 +34,15 @@ public:
         double left, bottom, right, top;
     };
     std::vector<Rect> page_link_rects;
+    std::vector<Rect> page_artifact_rects;
 
     MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
                         marked_content_depth(0), in_path(false), inline_dict_depth(0),
                         text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
                         in_marked_content(false), last_x(0.0), last_y(0.0), last_link_idx(-1) {}
 
-    MCIDTokenFilter(std::vector<QPDFObjectHandle> const& link_rects) 
+    MCIDTokenFilter(std::vector<QPDFObjectHandle> const& link_rects,
+                    std::vector<Rect> const& artifact_rects)
         : mcid_counter(0), in_text_object(false), has_last_name(false),
           marked_content_depth(0), in_path(false), inline_dict_depth(0),
           text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
@@ -55,6 +57,7 @@ public:
                 page_link_rects.push_back(r);
             }
         }
+        page_artifact_rects = artifact_rects;
     }
     virtual ~MCIDTokenFilter() = default;
 
@@ -301,6 +304,31 @@ public:
                 }
 
                 bool start_new_mcid = false;
+                if (point_in_artifact_rect(trm.e, trm.f)) {
+                    if (in_marked_content) {
+                        writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                        writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                        writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                        in_marked_content = false;
+                    }
+
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/Artifact"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "BMC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    write_buffered_text_tokens();
+                    writeToken(token);
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
+                    writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
+
+                    last_x = trm.e;
+                    last_y = trm.f;
+                    last_link_idx = -1;
+                    return;
+                }
+
                 if (!in_marked_content) {
                     start_new_mcid = true;
                 } else {
@@ -476,6 +504,16 @@ private:
             writeToken(t);
         }
         buffered_text_tokens.clear();
+    }
+
+    bool point_in_artifact_rect(double x, double y) const {
+        for (auto const& r : page_artifact_rects) {
+            if (x >= r.left - 3.0 && x <= r.right + 3.0 &&
+                y >= r.bottom - 6.0 && y <= r.top + 6.0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     int mcid_counter;
@@ -683,11 +721,24 @@ private:
 };
 
 std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
+                                           const std::vector<LayoutBlock>& blocks,
                                            std::map<int, std::set<int>>& page_figure_mcids,
                                            std::map<int, std::map<int, MCIDInfo>>& page_mcid_info) {
     std::map<int, int> page_mcid_counts;
     QPDFPageDocumentHelper pdh(pdf);
     std::vector<QPDFPageObjectHelper> pages = pdh.getAllPages();
+
+    std::map<int, std::vector<MCIDTokenFilter::Rect>> page_artifact_rects;
+    for (auto const& block : blocks) {
+        if (block.tag == "Artifact" && block.bbox.size() == 4) {
+            MCIDTokenFilter::Rect r;
+            r.left = block.bbox[0];
+            r.bottom = block.bbox[1];
+            r.right = block.bbox[2];
+            r.top = block.bbox[3];
+            page_artifact_rects[block.page].push_back(r);
+        }
+    }
 
     for (size_t i = 0; i < pages.size(); ++i) {
         // Pass 1: strip any pre-existing marked content (e.g. from OCR output or
@@ -727,7 +778,13 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
             }
         }
 
-        MCIDTokenFilter filter(link_rects);
+        auto artifact_it = page_artifact_rects.find(static_cast<int>(i));
+        std::vector<MCIDTokenFilter::Rect> artifact_rects;
+        if (artifact_it != page_artifact_rects.end()) {
+            artifact_rects = artifact_it->second;
+        }
+
+        MCIDTokenFilter filter(link_rects, artifact_rects);
         Pl_Buffer buf("filtered contents");
         pages[i].filterPageContents(&filter, &buf);
         buf.finish();

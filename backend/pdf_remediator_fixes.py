@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Iterator, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -690,6 +690,62 @@ def _extract_struct_bboxes(pdf_path: Path) -> Dict:
 # ---------------------------------------------------------------------------
 
 URL_RE = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+|www\.[^\s<>"{}|\\^`\[\]]+')
+EMAIL_RE = re.compile(r'(?<![\w.+-])[\w.+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,63}\b')
+DOMAIN_RE = re.compile(
+    r'(?<![@/\w.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+'
+    r'[A-Za-z]{2,63}(?:/[^\s<>"{}|\\^`\[\]]*)?'
+)
+CC_LICENSE_RE = re.compile(r'\bCC\s+((?:BY|NC|ND|SA)(?:-(?:BY|NC|ND|SA))*)\s+V?(\d+(?:\.\d+)?)\b', re.IGNORECASE)
+
+
+def _iter_link_candidates(text: str) -> Iterator[Tuple[str, str]]:
+    """Yield visible text and target URI for link-like text spans."""
+    occupied: List[Tuple[int, int]] = []
+
+    def overlaps(start: int, end: int) -> bool:
+        return any(start < occ_end and end > occ_start for occ_start, occ_end in occupied)
+
+    for match in URL_RE.finditer(text):
+        label = match.group(0).rstrip(".,;:)")
+        uri = label if label.lower().startswith(("http://", "https://")) else f"https://{label}"
+        occupied.append((match.start(), match.start() + len(label)))
+        yield label, uri
+
+    for match in EMAIL_RE.finditer(text):
+        if overlaps(match.start(), match.end()):
+            continue
+        label = match.group(0).rstrip(".,;:)")
+        occupied.append((match.start(), match.start() + len(label)))
+        yield label, f"mailto:{label}"
+
+    for match in CC_LICENSE_RE.finditer(text):
+        if overlaps(match.start(), match.end()):
+            continue
+        label = match.group(0)
+        license_code = match.group(1).lower()
+        version = match.group(2)
+        if "." not in version:
+            version = f"{version}.0"
+        occupied.append((match.start(), match.end()))
+        yield label, f"https://creativecommons.org/licenses/{license_code}/{version}/"
+
+    for match in DOMAIN_RE.finditer(text):
+        if overlaps(match.start(), match.end()):
+            continue
+        label = match.group(0).rstrip(".,;:)")
+        occupied.append((match.start(), match.start() + len(label)))
+        yield label, f"https://{label}"
+
+
+def _rect_covers_link_candidate(existing_rect, candidate_rect) -> bool:
+    """Return true when an existing link annotation meaningfully covers text."""
+    x_overlap = max(0.0, min(existing_rect.x1, candidate_rect.x1) - max(existing_rect.x0, candidate_rect.x0))
+    y_overlap = max(0.0, min(existing_rect.y1, candidate_rect.y1) - max(existing_rect.y0, candidate_rect.y0))
+    if x_overlap <= 0.0 or y_overlap <= 0.0:
+        return False
+
+    candidate_area = max(1.0, float(candidate_rect.width * candidate_rect.height))
+    return (x_overlap * y_overlap) / candidate_area >= 0.5
 
 
 def inject_link_annotations(pdf_path: Path) -> Dict[str, Any]:
@@ -702,22 +758,21 @@ def inject_link_annotations(pdf_path: Path) -> Dict[str, Any]:
         added = 0
         for page_num, page in enumerate(doc):
             text = page.get_text("text")
-            found_urls = URL_RE.findall(text)
-            for url in found_urls:
-                rects = page.search_for(url)
+            for label, uri in _iter_link_candidates(text):
+                rects = page.search_for(label)
                 for rect in rects:
                     # Check if there is already a link annot overlapping this rect
                     already_has = False
                     for link in page.get_links():
                         l_rect = fitz.Rect(link["from"])
-                        if l_rect.intersects(rect):
+                        if _rect_covers_link_candidate(l_rect, rect):
                             already_has = True
                             break
                     if not already_has:
                         page.insert_link({
                             "kind": fitz.LINK_URI,
                             "from": rect,
-                            "uri": url
+                            "uri": uri
                         })
                         added += 1
         if added > 0:

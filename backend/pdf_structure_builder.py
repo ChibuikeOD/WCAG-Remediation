@@ -243,7 +243,7 @@ class PDFStructureBuilder:
             pdf.Root["/StructTreeRoot"] = struct_tree_root
             pdf.Root["/MarkInfo"] = pikepdf.Dictionary({"/Marked": True})
             if "/Lang" not in pdf.Root:
-                pdf.Root["/Lang"] = pikepdf.String("en")
+                pdf.Root["/Lang"] = pikepdf.String("en-US")
 
             for page_num in parent_tree_arrays:
                 pdf.pages[page_num].obj["/StructParents"] = page_num

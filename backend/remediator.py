@@ -26,15 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_language_code(lang: Optional[str]) -> str:
-    """Normalize language name/code to standard ISO 639-1 or BCP 47 format."""
+    """Normalize language name/code to a PAC-friendly BCP 47 language tag."""
     if not lang:
-        return "en"
+        return "en-US"
     
-    lang = lang.strip().lower()
+    lang = lang.strip().replace("_", "-")
+    if not lang:
+        return "en-US"
+    lower = lang.lower()
     
     # Common language name to code mapping
     name_to_code = {
-        "english": "en",
+        "english": "en-US",
         "french": "fr",
         "spanish": "es",
         "german": "de",
@@ -55,17 +58,22 @@ def normalize_language_code(lang: Optional[str]) -> str:
         "turkish": "tr"
     }
     
-    if lang in name_to_code:
-        return name_to_code[lang]
+    if lower in name_to_code:
+        return name_to_code[lower]
     
-    # Standardize separator to hyphen for BCP 47 (e.g. en_US -> en-US)
-    lang = lang.replace("_", "-")
+    if lower == "en":
+        return "en-US"
     
-    # Check if it matches ISO 639-1 (2 letters), ISO 639-2 (3 letters), or BCP 47
-    if re.match(r"^[a-z]{2,3}(-[a-z0-9]+)*$", lang):
-        return lang
+    if re.fullmatch(r"[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{1,8})*", lang):
+        parts = lower.split("-")
+        for index, part in enumerate(parts[1:], start=1):
+            if index == 1 and len(part) == 2 and part.isalpha():
+                parts[index] = part.upper()
+            elif index == 1 and len(part) == 4 and part.isalpha():
+                parts[index] = part.title()
+        return "-".join(parts)
         
-    return "en"
+    return "en-US"
 
 
 
@@ -782,7 +790,6 @@ class PDFRemediator:
             "total_changes": len(self.changes),
             "changes": self.changes
         }
-
 
 
 

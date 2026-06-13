@@ -705,6 +705,7 @@ class PDFRemediator:
 
         # 4-11. Structural / content fixes --------------------------------
         fix_funcs = [
+            fixes.fix_content_stream_operator_states,
             fixes.fix_heading_hierarchy,
             fixes.fix_table_headers,
             fixes.fix_list_structure,
@@ -781,7 +782,6 @@ class PDFRemediator:
             "total_changes": len(self.changes),
             "changes": self.changes
         }
-
 
 
 

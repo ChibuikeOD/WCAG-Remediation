@@ -109,6 +109,107 @@ def _result(issue_id: str, success: bool, message: str, new_value: str = ""):
 
 
 # ---------------------------------------------------------------------------
+# Content stream operator-state repair (ISO 32000-2 Figure 9)
+# ---------------------------------------------------------------------------
+
+PATH_CONSTRUCTION_OPERATORS = {"m", "l", "c", "v", "y", "h", "re"}
+PATH_ENDING_OPERATORS = {
+    "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "sh", "n",
+}
+PATH_ALLOWED_OPERATORS = PATH_CONSTRUCTION_OPERATORS | {"W", "W*"} | PATH_ENDING_OPERATORS
+
+
+def fix_content_stream_operator_states(pdf_path: Path) -> Dict[str, Any]:
+    """Move graphics/color-state operators out of open path objects.
+
+    Some PDFs contain sequences such as ``m ... l /DeviceRGB CS ... S``.
+    Strict processors like PAC reject this because color-space/state operators
+    are not allowed while the current graphics state is inside a path object.
+    """
+    if not HAS_PIKEPDF:
+        return _result("pdf-content-stream-operator-states", False, "pikepdf not available")
+
+    try:
+        with pikepdf.open(str(pdf_path), allow_overwriting_input=True) as pdf:
+            fixed_pages = 0
+            moved_ops = 0
+
+            for page in pdf.pages:
+                try:
+                    instructions = list(pikepdf.parse_content_stream(page))
+                except Exception as e:
+                    logger.warning("Skipping unparsable content stream during operator-state repair: %s", e)
+                    continue
+
+                rewritten, moved = _repair_path_operator_states(instructions)
+                if moved:
+                    page.obj["/Contents"] = pdf.make_stream(
+                        pikepdf.unparse_content_stream(rewritten)
+                    )
+                    fixed_pages += 1
+                    moved_ops += moved
+
+            if moved_ops:
+                pdf.save()
+                return _result(
+                    "pdf-content-stream-operator-states",
+                    True,
+                    f"Moved {moved_ops} graphics/color operator(s) out of open path objects",
+                    f"{moved_ops} operators on {fixed_pages} page(s)",
+                )
+
+            return _result(
+                "pdf-content-stream-operator-states",
+                True,
+                "Content stream operator states already valid",
+            )
+    except Exception as e:
+        logger.error("fix_content_stream_operator_states: %s", e, exc_info=True)
+        return _result("pdf-content-stream-operator-states", False, str(e))
+
+
+def _repair_path_operator_states(instructions):
+    rewritten = []
+    path_buffer = []
+    moved = 0
+    in_path = False
+
+    for instruction in instructions:
+        operator = str(instruction.operator)
+
+        if not in_path:
+            if operator in PATH_CONSTRUCTION_OPERATORS:
+                path_buffer = [instruction]
+                in_path = True
+            else:
+                rewritten.append(instruction)
+            continue
+
+        path_buffer.append(instruction)
+        if operator in PATH_ENDING_OPERATORS:
+            clean_path = []
+            state_ops = []
+            for path_instruction in path_buffer:
+                path_operator = str(path_instruction.operator)
+                if path_operator in PATH_ALLOWED_OPERATORS:
+                    clean_path.append(path_instruction)
+                else:
+                    state_ops.append(path_instruction)
+
+            if state_ops:
+                moved += len(state_ops)
+                rewritten.extend(state_ops)
+            rewritten.extend(clean_path)
+            path_buffer = []
+            in_path = False
+
+    if path_buffer:
+        rewritten.extend(path_buffer)
+
+    return rewritten, moved
+
+
+# ---------------------------------------------------------------------------
 # Helpers for walking the pikepdf structure tree
 # ---------------------------------------------------------------------------
 

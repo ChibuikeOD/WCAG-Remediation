@@ -92,6 +92,159 @@ def test_parse_opendataloader_json_maps_types_and_normalizes_coordinates():
     assert layouts[1].blocks[3].page_number == 1
 
 
+def test_parse_opendataloader_json_infers_likert_table_cells_from_paragraphs():
+    data = {
+        "number of pages": 1,
+        "kids": [
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [72.025, 179.454, 363.601, 214.023],
+                "content": "Table 15 Improving Empirically Validated Assessment Tools (N = 99)",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [234.6, 142.204, 283.068, 168.743],
+                "content": "Definitely False",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [297.63, 142.204, 338.358, 168.743],
+                "content": "Possibly False",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [360.65, 142.204, 449.398, 168.743],
+                "content": "Not Sure Possibly True",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [470.95, 142.204, 519.418, 168.743],
+                "content": "Definitely True",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [68.025, 91.179, 237.225, 130.973],
+                "content": "I would need more explicit training in how to use and apply such techniques.",
+            },
+            {
+                "type": "paragraph",
+                "page number": 1,
+                "bounding box": [240.6, 117.684, 501.946, 130.973],
+                "content": "12.1% 11.1% 15.2% 40.4% 21.2%",
+            },
+        ],
+    }
+
+    layouts = DocumentLayoutAnalyzer.parse_opendataloader_json(
+        data,
+        page_sizes=[(612.0, 792.0)],
+    )
+
+    table_cells = [
+        block
+        for block in layouts[0].blocks
+        if block.metadata.get("table_id") == "p1_table_15"
+    ]
+
+    assert [block.tag for block in table_cells] == [
+        "TH",
+        "TH",
+        "TH",
+        "TH",
+        "TH",
+        "TH",
+        "TH",
+        "TD",
+        "TD",
+        "TD",
+        "TD",
+        "TD",
+    ]
+    assert [block.text for block in table_cells[:6]] == [
+        "Statement",
+        "Definitely False",
+        "Possibly False",
+        "Not Sure",
+        "Possibly True",
+        "Definitely True",
+    ]
+    assert table_cells[6].text == "I would need more explicit training in how to use and apply such techniques."
+    assert [block.text for block in table_cells[7:]] == ["12.1%", "11.1%", "15.2%", "40.4%", "21.2%"]
+    assert table_cells[6].metadata["table_row"] == 1
+    assert table_cells[6].metadata["table_col"] == 0
+    assert table_cells[7].metadata["table_col"] == 1
+
+
+def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
+    mock_layouts = [
+        PageLayout(
+            page_number=0,
+            width=612,
+            height=792,
+            blocks=[
+                StructureBlock(
+                    tag="TH",
+                    bbox=(100, 100, 200, 200),
+                    page_number=0,
+                    content="Statement",
+                    metadata={
+                        "raw_bbox": [10.0, 20.0, 30.0, 40.0],
+                        "table_id": "p1_table_1",
+                        "table_row": 0,
+                        "table_col": 0,
+                        "table_header": True,
+                    },
+                )
+            ],
+        )
+    ]
+
+    def fake_analyze(self, path):
+        return mock_layouts
+
+    captured_blocks = []
+
+    def fake_run(cmd, **kwargs):
+        captured_blocks.extend(json.loads(Path(cmd[2]).read_text(encoding="utf-8")))
+        Path(cmd[-1]).touch()
+        import subprocess
+
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        fake_analyze,
+    )
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("backend.pdf_auto_tagging.HAS_PIKEPDF", True)
+    monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: False)
+
+    source_path = tmp_path / "source.pdf"
+    output_path = tmp_path / "output.pdf"
+    source_path.touch()
+
+    result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
+
+    assert result["success"] is True
+    assert captured_blocks == [
+        {
+            "page": 0,
+            "tag": "TH",
+            "bbox": [10.0, 20.0, 30.0, 40.0],
+            "table_id": "p1_table_1",
+            "table_row": 0,
+            "table_col": 0,
+            "table_header": True,
+        }
+    ]
+
+
 def test_auto_tag_pdf_reports_errors_on_failure(monkeypatch, tmp_path):
     def failing_analyze(self, path):
         raise RuntimeError("Layout analyzer failed")

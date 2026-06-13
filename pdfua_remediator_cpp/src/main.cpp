@@ -28,6 +28,10 @@ std::vector<LayoutBlock> parse_layout_json(const std::string& path) {
     std::regex page_regex("\"page\"\\s*:\\s*(\\d+)");
     std::regex tag_regex("\"tag\"\\s*:\\s*\"([^\"]+)\"");
     std::regex bbox_regex("\"bbox\"\\s*:\\s*\\[\\s*([\\d.-]+)\\s*,\\s*([\\d.-]+)\\s*,\\s*([\\d.-]+)\\s*,\\s*([\\d.-]+)\\s*\\]");
+    std::regex table_id_regex("\"table_id\"\\s*:\\s*\"([^\"]+)\"");
+    std::regex table_row_regex("\"table_row\"\\s*:\\s*(-?\\d+)");
+    std::regex table_col_regex("\"table_col\"\\s*:\\s*(-?\\d+)");
+    std::regex table_header_regex("\"table_header\"\\s*:\\s*(true|false)");
 
     // Scan the JSON array for block objects enclosed in { }
     size_t pos = 0;
@@ -55,6 +59,18 @@ std::vector<LayoutBlock> parse_layout_json(const std::string& path) {
             block.bbox.push_back(std::stod(match[2].str()));
             block.bbox.push_back(std::stod(match[3].str()));
             block.bbox.push_back(std::stod(match[4].str()));
+        }
+        if (std::regex_search(obj_str, match, table_id_regex)) {
+            block.table_id = match[1].str();
+        }
+        if (std::regex_search(obj_str, match, table_row_regex)) {
+            block.table_row = std::stoi(match[1].str());
+        }
+        if (std::regex_search(obj_str, match, table_col_regex)) {
+            block.table_col = std::stoi(match[1].str());
+        }
+        if (std::regex_search(obj_str, match, table_header_regex)) {
+            block.table_header = match[1].str() == "true";
         }
 
         blocks.push_back(block);

@@ -78,11 +78,16 @@ def auto_tag_pdf(
                 raw_bbox = block.metadata.get("raw_bbox") if block.metadata else None
                 bbox_coords = list(raw_bbox) if raw_bbox else []
 
-                blocks_data.append({
+                block_data = {
                     "page": layout.page_number,
                     "tag": block.tag,
                     "bbox": bbox_coords
-                })
+                }
+                for key in ("table_id", "table_row", "table_col", "table_header"):
+                    if key in block.metadata:
+                        block_data[key] = block.metadata[key]
+
+                blocks_data.append(block_data)
                 tag_counts[block.tag] = tag_counts.get(block.tag, 0) + 1
 
         # Step 3: Write layout JSON data to a temporary file

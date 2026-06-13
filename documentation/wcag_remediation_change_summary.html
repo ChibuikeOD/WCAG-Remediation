@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WCAG PDF Remediation Change Summary</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #637083;
+      --line: #dbe3ec;
+      --paper: #fbfcfe;
+      --white: #ffffff;
+      --teal: #0f766e;
+      --teal-soft: #d9f4ef;
+      --coral: #d85c4a;
+      --coral-soft: #ffe4df;
+      --amber: #b7791f;
+      --amber-soft: #fff1c9;
+      --blue: #2f5fbe;
+      --blue-soft: #dfe8ff;
+      --green: #287a45;
+      --green-soft: #ddf5e7;
+      --shadow: 0 18px 48px rgba(23, 32, 42, 0.12);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(15, 118, 110, 0.10), transparent 24rem),
+        radial-gradient(circle at 88% 14%, rgba(216, 92, 74, 0.12), transparent 22rem),
+        linear-gradient(180deg, #f7fafc 0%, #eef4f8 42%, #fbfcfe 100%);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    header {
+      min-height: 92vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+      align-items: center;
+      gap: 48px;
+      padding: 46px 0 34px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      font-size: clamp(42px, 7vw, 86px);
+      line-height: 0.94;
+      letter-spacing: 0;
+      margin-bottom: 28px;
+      max-width: 850px;
+    }
+
+    .lead {
+      font-size: clamp(18px, 2vw, 24px);
+      color: #344357;
+      max-width: 720px;
+      margin-bottom: 34px;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--ink);
+      border-radius: 7px;
+      background: var(--ink);
+      color: white;
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .button.secondary {
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--ink);
+      border-color: rgba(23, 32, 42, 0.18);
+    }
+
+    .hero-panel {
+      background: rgba(255, 255, 255, 0.76);
+      border: 1px solid rgba(23, 32, 42, 0.12);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 26px;
+      backdrop-filter: blur(18px);
+    }
+
+    .pdf-stack {
+      position: relative;
+      height: 520px;
+      overflow: hidden;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, #ffffff, #e8eef5);
+      border: 1px solid var(--line);
+    }
+
+    .page {
+      position: absolute;
+      width: 72%;
+      height: 76%;
+      left: 14%;
+      top: 12%;
+      background: white;
+      border-radius: 6px;
+      border: 1px solid #cfd9e4;
+      box-shadow: 0 22px 42px rgba(23, 32, 42, 0.16);
+      transform: rotate(-3deg);
+      padding: 28px;
+    }
+
+    .page.back {
+      left: 20%;
+      top: 8%;
+      transform: rotate(4deg);
+      background: #f9fbff;
+    }
+
+    .tag-tree {
+      position: absolute;
+      left: 32px;
+      right: 32px;
+      bottom: 28px;
+      background: #16212d;
+      border-radius: 7px;
+      color: white;
+      padding: 18px;
+      box-shadow: 0 16px 36px rgba(23, 32, 42, 0.25);
+    }
+
+    .node-row {
+      display: grid;
+      grid-template-columns: 64px 1fr 52px;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+      font-size: 13px;
+    }
+
+    .node-row:last-child { border-bottom: 0; }
+
+    .pill {
+      display: inline-flex;
+      justify-content: center;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-weight: 800;
+      color: #10212d;
+      background: var(--teal-soft);
+    }
+
+    .pill.table { background: var(--amber-soft); }
+    .pill.test { background: var(--blue-soft); }
+    .pill.fix { background: var(--green-soft); }
+
+    section {
+      padding: 42px 0;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      align-items: end;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+    }
+
+    h2 {
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 1.02;
+      margin-bottom: 0;
+      letter-spacing: 0;
+    }
+
+    .section-note {
+      color: var(--muted);
+      max-width: 420px;
+      margin-bottom: 0;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .metric {
+      background: var(--white);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: 0 10px 26px rgba(23, 32, 42, 0.07);
+      min-height: 150px;
+    }
+
+    .metric .value {
+      font-size: 44px;
+      line-height: 1;
+      font-weight: 850;
+      margin-bottom: 12px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: 0 12px 32px rgba(23, 32, 42, 0.08);
+    }
+
+    .panel h3 {
+      font-size: 21px;
+      margin-bottom: 12px;
+    }
+
+    .panel p,
+    .panel li {
+      color: #344357;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .step {
+      position: relative;
+      padding: 18px;
+      min-height: 180px;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .step::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0 0;
+      height: 6px;
+      background: var(--teal);
+    }
+
+    .step:nth-child(2)::after { background: var(--blue); }
+    .step:nth-child(3)::after { background: var(--amber); }
+    .step:nth-child(4)::after { background: var(--green); }
+    .step:nth-child(5)::after { background: var(--coral); }
+
+    .step-num {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #eef4f8;
+      font-weight: 850;
+      margin-bottom: 14px;
+    }
+
+    .table-demo {
+      display: grid;
+      grid-template-columns: 170px repeat(5, minmax(72px, 1fr));
+      border: 1px solid #cbd6e2;
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: white;
+    }
+
+    .cell {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      border-right: 1px solid #dce4ee;
+      border-bottom: 1px solid #dce4ee;
+      font-size: 13px;
+    }
+
+    .cell:nth-child(6n) { border-right: 0; }
+    .cell.header {
+      background: #e9f3ff;
+      color: #163d73;
+      font-weight: 800;
+    }
+    .cell.rowhead {
+      background: #fff8dd;
+      color: #5f4410;
+      font-weight: 800;
+    }
+    .cell.data { justify-content: center; font-weight: 760; }
+
+    .bars {
+      display: grid;
+      gap: 16px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 150px 1fr 64px;
+      gap: 14px;
+      align-items: center;
+      font-size: 14px;
+    }
+
+    .track {
+      height: 14px;
+      background: #e8eef5;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--teal), #38a169);
+    }
+
+    .file-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .file-list li {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 14px;
+      background: #f7fafc;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
+
+    .tag {
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 800;
+      color: #10212d;
+      border-radius: 5px;
+      padding: 4px 7px;
+      background: var(--teal-soft);
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 18px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 17px;
+      top: 12px;
+      bottom: 12px;
+      width: 2px;
+      background: #c9d6e2;
+    }
+
+    .event {
+      position: relative;
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .dot {
+      position: relative;
+      z-index: 1;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: white;
+      border: 8px solid var(--teal);
+      box-shadow: 0 0 0 4px #f7fafc;
+    }
+
+    .event:nth-child(2) .dot { border-color: var(--blue); }
+    .event:nth-child(3) .dot { border-color: var(--amber); }
+    .event:nth-child(4) .dot { border-color: var(--green); }
+
+    footer {
+      padding: 54px 0 70px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    code {
+      background: #edf3f8;
+      border: 1px solid #d8e2ec;
+      border-radius: 5px;
+      padding: 2px 5px;
+      font-size: 0.92em;
+    }
+
+    @media (max-width: 980px) {
+      header,
+      .grid-two {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .pdf-stack { height: 430px; }
+    }
+
+    @media (max-width: 680px) {
+      main { width: min(100% - 24px, 1180px); }
+      header { min-height: auto; padding-top: 28px; }
+      .metrics { grid-template-columns: 1fr; }
+      .section-title { display: block; }
+      .table-demo {
+        grid-template-columns: 120px repeat(5, 92px);
+        overflow-x: auto;
+      }
+      .bar-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>PDF table remediation moved from guesswork to structure.</h1>
+        <p class="lead">
+          This report summarizes the accessibility remediation changes made after tester feedback on
+          <strong>How do Clinicians Develop Psychotherapeutic Treatment Plans?</strong>. The work turns
+          repeated Likert-style table text into real PDF table tags and keeps the verified heading fixes intact.
+        </p>
+        <div class="hero-actions">
+          <a class="button" href="#verification">View verification</a>
+          <a class="button secondary" href="#files">Review changed files</a>
+        </div>
+      </div>
+
+      <div class="hero-panel" aria-label="Visual summary of remediated PDF structure">
+        <div class="pdf-stack">
+          <div class="page back" aria-hidden="true">
+            <svg width="100%" height="100%" viewBox="0 0 260 340" role="img" aria-label="PDF page lines">
+              <rect x="22" y="34" width="178" height="12" rx="3" fill="#cfd9e4"/>
+              <rect x="22" y="62" width="214" height="8" rx="3" fill="#e0e7ef"/>
+              <rect x="22" y="82" width="190" height="8" rx="3" fill="#e0e7ef"/>
+              <rect x="22" y="120" width="216" height="84" rx="5" fill="#fff4d8" stroke="#d9b45e"/>
+              <rect x="36" y="134" width="188" height="12" rx="3" fill="#c7a44d"/>
+              <rect x="36" y="158" width="188" height="8" rx="3" fill="#e2c979"/>
+              <rect x="36" y="178" width="188" height="8" rx="3" fill="#e2c979"/>
+            </svg>
+          </div>
+          <div class="page" aria-hidden="true">
+            <svg width="100%" height="100%" viewBox="0 0 260 340" role="img" aria-label="Structured PDF page">
+              <rect x="22" y="28" width="206" height="16" rx="3" fill="#102a43"/>
+              <rect x="22" y="62" width="216" height="8" rx="3" fill="#d9e2ec"/>
+              <rect x="22" y="80" width="194" height="8" rx="3" fill="#d9e2ec"/>
+              <g transform="translate(22 116)">
+                <rect width="216" height="138" rx="6" fill="#f8fbff" stroke="#9fb3c8"/>
+                <rect width="216" height="30" rx="6" fill="#dfe8ff"/>
+                <line x1="0" y1="30" x2="216" y2="30" stroke="#9fb3c8"/>
+                <line x1="0" y1="66" x2="216" y2="66" stroke="#d5dde8"/>
+                <line x1="0" y1="102" x2="216" y2="102" stroke="#d5dde8"/>
+                <line x1="72" y1="0" x2="72" y2="138" stroke="#d5dde8"/>
+                <line x1="108" y1="0" x2="108" y2="138" stroke="#d5dde8"/>
+                <line x1="144" y1="0" x2="144" y2="138" stroke="#d5dde8"/>
+                <line x1="180" y1="0" x2="180" y2="138" stroke="#d5dde8"/>
+                <rect x="11" y="10" width="44" height="8" rx="3" fill="#2f5fbe"/>
+                <rect x="84" y="11" width="16" height="7" rx="3" fill="#2f5fbe"/>
+                <rect x="119" y="11" width="16" height="7" rx="3" fill="#2f5fbe"/>
+                <rect x="155" y="11" width="16" height="7" rx="3" fill="#2f5fbe"/>
+                <rect x="191" y="11" width="16" height="7" rx="3" fill="#2f5fbe"/>
+              </g>
+            </svg>
+          </div>
+          <div class="tag-tree">
+            <div class="node-row"><span class="pill">H1</span><span>Title preserved</span><strong>OK</strong></div>
+            <div class="node-row"><span class="pill table">Table</span><span>Nested rows and cells</span><strong>6</strong></div>
+            <div class="node-row"><span class="pill fix">TD</span><span>Data cells populated</span><strong>87</strong></div>
+            <div class="node-row"><span class="pill test">Tests</span><span>Regression suite</span><strong>11</strong></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="impact">
+      <div class="section-title">
+        <h2>Impact At A Glance</h2>
+        <p class="section-note">The remediation now identifies the table pattern testers flagged and emits semantic PDF structure instead of a flat paragraph stream.</p>
+      </div>
+      <div class="metrics">
+        <article class="metric">
+          <div class="value">6</div>
+          <div class="label">PDF /Table structures verified in the regenerated thesis.</div>
+        </article>
+        <article class="metric">
+          <div class="value">24</div>
+          <div class="label">Nested /TR table rows created from inferred table metadata.</div>
+        </article>
+        <article class="metric">
+          <div class="value">141</div>
+          <div class="label">Semantic table cells emitted: 54 /TH and 87 /TD.</div>
+        </article>
+        <article class="metric">
+          <div class="value">0</div>
+          <div class="label">Empty /TD cells on page 29 after structure inspection.</div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>What Changed</h2>
+        <p class="section-note">The implementation spans detection, handoff, and final PDF structure generation.</p>
+      </div>
+      <div class="flow">
+        <article class="step">
+          <div class="step-num">1</div>
+          <h3>Detect</h3>
+          <p>OpenDataLoader paragraph blocks are scanned for repeated Likert headers such as Definitely False, Possibly False, Not Sure, Possibly True, and Definitely True.</p>
+        </article>
+        <article class="step">
+          <div class="step-num">2</div>
+          <h3>Infer</h3>
+          <p>The detector builds table cell blocks with row, column, header, text, and bounding box metadata.</p>
+        </article>
+        <article class="step">
+          <div class="step-num">3</div>
+          <h3>Serialize</h3>
+          <p>The Python remediation service includes table metadata in the temporary layout JSON sent to the C++ remediator.</p>
+        </article>
+        <article class="step">
+          <div class="step-num">4</div>
+          <h3>Structure</h3>
+          <p>The C++ builder groups cells by table id and emits /Table, /TR, /TH, and /TD elements with proper parent-child nesting.</p>
+        </article>
+        <article class="step">
+          <div class="step-num">5</div>
+          <h3>Verify</h3>
+          <p>The real thesis PDF was regenerated and inspected with pikepdf to confirm table roles and populated data cells.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>Before And After</h2>
+        <p class="section-note">The tester's page 29 issue was a reading-order problem caused by table content being exposed as ordinary paragraphs.</p>
+      </div>
+      <div class="grid-two">
+        <article class="panel">
+          <h3>Before</h3>
+          <p>Page 29 was exposed as a stream of paragraph-like blocks. Screen readers had no table structure, no header associations, and no reliable way to connect a response statement to its percentages.</p>
+          <ul>
+            <li>No /Table roles on page 29.</li>
+            <li>Table headers were ordinary /P elements.</li>
+            <li>Percentages could be read before the statement they described.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h3>After</h3>
+          <p>Likert tables are represented as nested table structures. Row headers use /TH with row scope, column headers use /TH with column scope, and percentage values use /TD.</p>
+          <ul>
+            <li>Page 29 has 2 /Table structures.</li>
+            <li>All 20 page-29 /TD cells contain mapped content.</li>
+            <li>The title, Abstract, and Introduction heading fixes remain intact in fresh output.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>Table Model</h2>
+        <p class="section-note">The new inference turns visual alignment into a semantic model that PDF assistive technology can traverse.</p>
+      </div>
+      <div class="panel">
+        <div class="table-demo" role="img" aria-label="Example inferred table cells">
+          <div class="cell header">Statement</div>
+          <div class="cell header">Definitely False</div>
+          <div class="cell header">Possibly False</div>
+          <div class="cell header">Not Sure</div>
+          <div class="cell header">Possibly True</div>
+          <div class="cell header">Definitely True</div>
+          <div class="cell rowhead">I would need more explicit training...</div>
+          <div class="cell data">12.1%</div>
+          <div class="cell data">11.1%</div>
+          <div class="cell data">15.2%</div>
+          <div class="cell data">40.4%</div>
+          <div class="cell data">21.2%</div>
+          <div class="cell rowhead">Tools provide valid information...</div>
+          <div class="cell data">24.2%</div>
+          <div class="cell data">23.2%</div>
+          <div class="cell data">18.2%</div>
+          <div class="cell data">25.3%</div>
+          <div class="cell data">9.1%</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="verification">
+      <div class="section-title">
+        <h2>Verification</h2>
+        <p class="section-note">The checks covered unit behavior, native C++ build output, and generated PDF structure.</p>
+      </div>
+      <div class="grid-two">
+        <article class="panel">
+          <h3>Automated checks</h3>
+          <div class="bars">
+            <div class="bar-row">
+              <strong>Python tests</strong>
+              <div class="track"><div class="fill" style="width: 100%"></div></div>
+              <span>11/11</span>
+            </div>
+            <div class="bar-row">
+              <strong>C++ build</strong>
+              <div class="track"><div class="fill" style="width: 100%"></div></div>
+              <span>Pass</span>
+            </div>
+            <div class="bar-row">
+              <strong>Page 29 TD cells</strong>
+              <div class="track"><div class="fill" style="width: 100%"></div></div>
+              <span>20/20</span>
+            </div>
+          </div>
+          <p style="margin-top: 18px;"><code>python -m pytest -p no:asyncio backend\tests\test_pdf_auto_tagging.py -q</code> passed with 11 tests.</p>
+        </article>
+        <article class="panel">
+          <h3>PDF structure counts</h3>
+          <div class="bars">
+            <div class="bar-row">
+              <strong>/Table</strong>
+              <div class="track"><div class="fill" style="width: 18%"></div></div>
+              <span>6</span>
+            </div>
+            <div class="bar-row">
+              <strong>/TR</strong>
+              <div class="track"><div class="fill" style="width: 48%"></div></div>
+              <span>24</span>
+            </div>
+            <div class="bar-row">
+              <strong>/TH</strong>
+              <div class="track"><div class="fill" style="width: 72%"></div></div>
+              <span>54</span>
+            </div>
+            <div class="bar-row">
+              <strong>/TD</strong>
+              <div class="track"><div class="fill" style="width: 100%"></div></div>
+              <span>87</span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="files">
+      <div class="section-title">
+        <h2>Changed Files</h2>
+        <p class="section-note">Six source files changed, with tests added alongside the remediation logic.</p>
+      </div>
+      <div class="grid-two">
+        <article class="panel">
+          <h3>Python pipeline</h3>
+          <ul class="file-list">
+            <li><span>backend/opendataloader_layout.py</span><span class="tag">detect + infer</span></li>
+            <li><span>backend/pdf_auto_tagging.py</span><span class="tag">serialize</span></li>
+            <li><span>backend/tests/test_pdf_auto_tagging.py</span><span class="tag">regression tests</span></li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h3>C++ PDF writer</h3>
+          <ul class="file-list">
+            <li><span>pdfua_remediator_cpp/src/content_tagger.h</span><span class="tag">metadata fields</span></li>
+            <li><span>pdfua_remediator_cpp/src/main.cpp</span><span class="tag">JSON parse</span></li>
+            <li><span>pdfua_remediator_cpp/src/structure_builder.cpp</span><span class="tag">nested table tags</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>Implementation Timeline</h2>
+        <p class="section-note">The work followed tester feedback into a reproducible, verified fix.</p>
+      </div>
+      <div class="panel timeline">
+        <div class="event">
+          <div class="dot"></div>
+          <div>
+            <h3>Tester feedback reproduced</h3>
+            <p>The attached remediated PDF showed missing or misapplied headings and no table roles on page 29.</p>
+          </div>
+        </div>
+        <div class="event">
+          <div class="dot"></div>
+          <div>
+            <h3>Current build separated from old output</h3>
+            <p>A fresh run confirmed headings were already improved, while tables still needed implementation.</p>
+          </div>
+        </div>
+        <div class="event">
+          <div class="dot"></div>
+          <div>
+            <h3>Table inference added</h3>
+            <p>Likert table headers and percentage rows are converted into explicit cell blocks before the C++ handoff.</p>
+          </div>
+        </div>
+        <div class="event">
+          <div class="dot"></div>
+          <div>
+            <h3>PDF structure verified</h3>
+            <p>The regenerated thesis contains nested tables and zero empty data cells on the target page.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>Generated for the WCAG Project remediation review. Source sample: <code>Check PDFs\Marques F.M. Honors APEX 2024.pdf</code>.</p>
+    </footer>
+  </main>
+</body>
+</html>

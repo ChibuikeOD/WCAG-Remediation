@@ -8,6 +8,7 @@ import importlib.metadata
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -38,6 +39,15 @@ class RuntimeResolution:
 
 class OpenDataLoaderLayoutAnalyzer:
     """Analyze PDFs via OpenDataLoader JSON export."""
+
+    LIKERT_HEADERS = [
+        "Definitely False",
+        "Possibly False",
+        "Not Sure",
+        "Possibly True",
+        "Definitely True",
+    ]
+    _PERCENT_RE = re.compile(r"-|\d+(?:\.\d+)?%")
 
     def __init__(self):
         self._runtime: Optional[RuntimeResolution] = None
@@ -324,6 +334,224 @@ class OpenDataLoaderLayoutAnalyzer:
         )
 
     @classmethod
+    def _is_likert_header_run(cls, blocks: List[StructureBlock], start: int) -> bool:
+        if start + 3 >= len(blocks):
+            return False
+        if re.match(r"^\s*Table\s+\d+\b", blocks[start].text, re.IGNORECASE):
+            return False
+        combined = " ".join(block.text for block in blocks[start:start + 5])
+        return sum(header in combined for header in cls.LIKERT_HEADERS) >= 4
+
+    @classmethod
+    def _table_id_for_header(
+        cls,
+        blocks: List[StructureBlock],
+        header_start: int,
+        page_number: int,
+        fallback_index: int,
+    ) -> str:
+        for idx in range(header_start - 1, max(-1, header_start - 4), -1):
+            match = re.search(r"\bTable\s+(\d+)\b", blocks[idx].text, re.IGNORECASE)
+            if match:
+                return f"p{page_number + 1}_table_{match.group(1)}"
+        return f"p{page_number + 1}_table_{fallback_index}"
+
+    @classmethod
+    def _percent_values(cls, text: str) -> List[str]:
+        return cls._PERCENT_RE.findall(text)
+
+    @staticmethod
+    def _raw_bbox(block: StructureBlock) -> Optional[List[float]]:
+        raw_bbox = block.metadata.get("raw_bbox") if block.metadata else None
+        if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
+            return [float(value) for value in raw_bbox]
+        return None
+
+    @classmethod
+    def _make_table_cell(
+        cls,
+        *,
+        text: str,
+        raw_bbox: List[float],
+        layout: PageLayout,
+        table_id: str,
+        row: int,
+        col: int,
+        header: bool,
+    ) -> StructureBlock:
+        normalized = cls._normalize_bbox(raw_bbox, layout.width, layout.height)
+        return StructureBlock(
+            tag="TH" if header else "TD",
+            bbox=normalized,
+            page_number=layout.page_number,
+            content=text,
+            metadata={
+                "source_type": "inferred table cell",
+                "provider": "opendataloader",
+                "raw_bbox": raw_bbox,
+                "table_id": table_id,
+                "table_row": row,
+                "table_col": col,
+                "table_header": header,
+            },
+        )
+
+    @classmethod
+    def _split_value_bboxes(cls, value_bbox: List[float], count: int = 5) -> List[List[float]]:
+        left, bottom, right, top = value_bbox
+        left -= 8.0
+        right += 4.0
+        width = (right - left) / count if count else 0
+        return [
+            [left + width * idx, bottom, left + width * (idx + 1), top]
+            for idx in range(count)
+        ]
+
+    @classmethod
+    def _infer_table_cells_at(
+        cls,
+        layout: PageLayout,
+        header_start: int,
+        table_index: int,
+    ) -> Tuple[List[StructureBlock], int]:
+        blocks = layout.blocks
+        header_blocks = blocks[header_start:header_start + 4]
+        header_bboxes = [bbox for block in header_blocks if (bbox := cls._raw_bbox(block))]
+        if not header_bboxes:
+            return [], header_start
+
+        table_id = cls._table_id_for_header(
+            blocks,
+            header_start,
+            layout.page_number,
+            table_index,
+        )
+
+        rows: List[Tuple[str, List[str], List[float], List[float]]] = []
+        consumed_until = header_start + 4
+        idx = consumed_until
+        while idx < len(blocks):
+            text = blocks[idx].text
+            if re.match(r"^\s*Table\s+\d+\b", text, re.IGNORECASE):
+                break
+            if cls._is_likert_header_run(blocks, idx):
+                break
+
+            values = cls._percent_values(text)
+            current_bbox = cls._raw_bbox(blocks[idx])
+            if current_bbox and len(values) >= 3:
+                label = cls._PERCENT_RE.sub("", text).strip()
+                if label:
+                    rows.append((label, values[:5], current_bbox, current_bbox))
+                    idx += 1
+                    consumed_until = idx
+                    continue
+
+            if idx + 1 < len(blocks):
+                next_values = cls._percent_values(blocks[idx + 1].text)
+                label_bbox = cls._raw_bbox(blocks[idx])
+                value_bbox = cls._raw_bbox(blocks[idx + 1])
+                if (
+                    label_bbox
+                    and value_bbox
+                    and len(next_values) >= 3
+                    and not cls._percent_values(blocks[idx].text)
+                ):
+                    rows.append((text, next_values[:5], label_bbox, value_bbox))
+                    idx += 2
+                    consumed_until = idx
+                    continue
+
+            idx += 1
+
+        if not rows:
+            return [], header_start
+
+        cells: List[StructureBlock] = []
+        min_label_left = min(row[2][0] for row in rows)
+        max_label_top = max(bbox[3] for bbox in header_bboxes)
+        min_header_bottom = min(bbox[1] for bbox in header_bboxes)
+        first_value_bbox = rows[0][3]
+        value_bboxes = cls._split_value_bboxes(first_value_bbox)
+        header_value_bboxes = [
+            [bbox[0], min_header_bottom, bbox[2], max_label_top]
+            for bbox in value_bboxes
+        ]
+        statement_header_bbox = [
+            min_label_left,
+            min_header_bottom,
+            first_value_bbox[0] - 12.0,
+            max_label_top,
+        ]
+
+        header_labels = ["Statement", *cls.LIKERT_HEADERS]
+        header_cell_bboxes = [statement_header_bbox, *header_value_bboxes]
+        for col, (label, raw_bbox) in enumerate(zip(header_labels, header_cell_bboxes)):
+            cells.append(
+                cls._make_table_cell(
+                    text=label,
+                    raw_bbox=raw_bbox,
+                    layout=layout,
+                    table_id=table_id,
+                    row=0,
+                    col=col,
+                    header=True,
+                )
+            )
+
+        for row_number, (label, values, label_bbox, value_bbox) in enumerate(rows, start=1):
+            row_value_bboxes = cls._split_value_bboxes(value_bbox, len(values))
+            label_cell_bbox = [
+                label_bbox[0],
+                label_bbox[1],
+                min(value_bbox[0] - 12.0, label_bbox[2]),
+                label_bbox[3],
+            ]
+            cells.append(
+                cls._make_table_cell(
+                    text=label,
+                    raw_bbox=label_cell_bbox,
+                    layout=layout,
+                    table_id=table_id,
+                    row=row_number,
+                    col=0,
+                    header=True,
+                )
+            )
+            for col, (value, raw_bbox) in enumerate(zip(values, row_value_bboxes), start=1):
+                cells.append(
+                    cls._make_table_cell(
+                        text=value,
+                        raw_bbox=raw_bbox,
+                        layout=layout,
+                        table_id=table_id,
+                        row=row_number,
+                        col=col,
+                        header=False,
+                    )
+                )
+
+        return cells, consumed_until
+
+    @classmethod
+    def _infer_likert_tables(cls, layouts: List[PageLayout]) -> None:
+        for layout in layouts:
+            enhanced_blocks: List[StructureBlock] = []
+            idx = 0
+            table_index = 1
+            while idx < len(layout.blocks):
+                if cls._is_likert_header_run(layout.blocks, idx):
+                    cells, next_idx = cls._infer_table_cells_at(layout, idx, table_index)
+                    if cells:
+                        enhanced_blocks.extend(cells)
+                        idx = next_idx
+                        table_index += 1
+                        continue
+                enhanced_blocks.append(layout.blocks[idx])
+                idx += 1
+            layout.blocks = enhanced_blocks
+
+    @classmethod
     def parse_opendataloader_json(
         cls,
         json_data: Dict[str, Any],
@@ -340,6 +568,8 @@ class OpenDataLoaderLayoutAnalyzer:
             if block is None:
                 continue
             layouts[block.page_number].blocks.append(block)
+
+        cls._infer_likert_tables(layouts)
 
         return layouts
 

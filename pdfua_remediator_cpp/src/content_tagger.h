@@ -13,6 +13,10 @@ struct LayoutBlock {
     std::string tag;
     std::string text;
     std::vector<double> bbox;
+    std::string table_id;
+    int table_row = -1;
+    int table_col = -1;
+    bool table_header = false;
 };
 
 // Geometry of a single injected MCID, expressed in PDF default user space

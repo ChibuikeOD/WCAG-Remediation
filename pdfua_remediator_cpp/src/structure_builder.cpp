@@ -254,10 +254,103 @@ void build_struct_tree(QPDF& pdf,
             }
         }
 
-        // 3. Pre-create the parent structure elements for all layout blocks on this page
+        // 3. Pre-create the parent structure elements for all layout blocks on this page.
+        // Table cells are grouped into a real /Table -> /TR -> /TH|/TD hierarchy;
+        // non-table blocks keep the existing flat paragraph/heading structure.
         std::vector<QPDFObjectHandle> block_struct_elems(num_blocks);
         std::vector<QPDFObjectHandle> block_kids_arrays(num_blocks);
+
+        auto attach_bbox_attr = [](QPDFObjectHandle& se, const std::vector<double>& bbox) {
+            if (bbox.size() != 4) {
+                return;
+            }
+            QPDFObjectHandle attr = QPDFObjectHandle::newDictionary();
+            attr.replaceKey("/O", QPDFObjectHandle::newName("/Layout"));
+            QPDFObjectHandle bbox_array = QPDFObjectHandle::newArray();
+            for (double val : bbox) {
+                bbox_array.appendItem(QPDFObjectHandle::newReal(val));
+            }
+            attr.replaceKey("/BBox", bbox_array);
+            se.replaceKey("/A", attr);
+        };
+
+        std::map<std::string, std::vector<int>> table_groups;
         for (int b = 0; b < num_blocks; ++b) {
+            const LayoutBlock& block = blocks_on_page[b];
+            if (!block.table_id.empty() && block.table_row >= 0 && block.table_col >= 0) {
+                table_groups[block.table_id].push_back(b);
+            }
+        }
+
+        for (auto& group : table_groups) {
+            auto& cell_indices = group.second;
+            std::sort(cell_indices.begin(), cell_indices.end(), [&](int lhs, int rhs) {
+                const LayoutBlock& a = blocks_on_page[lhs];
+                const LayoutBlock& b = blocks_on_page[rhs];
+                if (a.table_row != b.table_row) return a.table_row < b.table_row;
+                return a.table_col < b.table_col;
+            });
+
+            QPDFObjectHandle table_kids = QPDFObjectHandle::newArray();
+            QPDFObjectHandle table_se = QPDFObjectHandle::newDictionary();
+            table_se.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));
+            table_se.replaceKey("/S",    QPDFObjectHandle::newName("/Table"));
+            table_se.replaceKey("/P",    doc_elem_indirect);
+            table_se.replaceKey("/Pg",   page.getObjectHandle());
+            table_se.replaceKey("/K",    table_kids);
+            QPDFObjectHandle table_indirect = pdf.makeIndirectObject(table_se);
+            doc_kids.appendItem(table_indirect);
+
+            std::map<int, QPDFObjectHandle> row_struct_elems;
+            std::map<int, QPDFObjectHandle> row_kids_arrays;
+
+            for (int block_idx : cell_indices) {
+                const LayoutBlock& cell_block = blocks_on_page[block_idx];
+                int row = cell_block.table_row;
+
+                if (!row_struct_elems[row].isInitialized()) {
+                    QPDFObjectHandle row_kids = QPDFObjectHandle::newArray();
+                    QPDFObjectHandle row_se = QPDFObjectHandle::newDictionary();
+                    row_se.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));
+                    row_se.replaceKey("/S",    QPDFObjectHandle::newName("/TR"));
+                    row_se.replaceKey("/P",    table_indirect);
+                    row_se.replaceKey("/Pg",   page.getObjectHandle());
+                    row_se.replaceKey("/K",    row_kids);
+                    QPDFObjectHandle row_indirect = pdf.makeIndirectObject(row_se);
+                    table_kids.appendItem(row_indirect);
+                    row_struct_elems[row] = row_indirect;
+                    row_kids_arrays[row] = row_kids;
+                }
+
+                QPDFObjectHandle cell_kids = QPDFObjectHandle::newArray();
+                QPDFObjectHandle cell_se = QPDFObjectHandle::newDictionary();
+                cell_se.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));
+                cell_se.replaceKey(
+                    "/S",
+                    QPDFObjectHandle::newName(cell_block.table_header ? "/TH" : "/TD")
+                );
+                cell_se.replaceKey("/P",    row_struct_elems[row]);
+                cell_se.replaceKey("/Pg",   page.getObjectHandle());
+                cell_se.replaceKey("/K",    cell_kids);
+                if (cell_block.table_header) {
+                    cell_se.replaceKey(
+                        "/Scope",
+                        QPDFObjectHandle::newName(cell_block.table_col == 0 ? "/Row" : "/Column")
+                    );
+                }
+                attach_bbox_attr(cell_se, cell_block.bbox);
+
+                QPDFObjectHandle cell_indirect = pdf.makeIndirectObject(cell_se);
+                row_kids_arrays[row].appendItem(cell_indirect);
+                block_struct_elems[block_idx] = cell_indirect;
+                block_kids_arrays[block_idx] = cell_kids;
+            }
+        }
+
+        for (int b = 0; b < num_blocks; ++b) {
+            if (block_struct_elems[b].isInitialized()) {
+                continue;
+            }
             std::string raw_tag = blocks_on_page[b].tag;
             std::string tag = normalize_text_role(raw_tag);
 
@@ -270,17 +363,7 @@ void build_struct_tree(QPDF& pdf,
             QPDFObjectHandle kids = QPDFObjectHandle::newArray();
             se.replaceKey("/K", kids);
 
-            std::vector<double> bbox = blocks_on_page[b].bbox;
-            if (bbox.size() == 4) {
-                QPDFObjectHandle attr = QPDFObjectHandle::newDictionary();
-                attr.replaceKey("/O", QPDFObjectHandle::newName("/Layout"));
-                QPDFObjectHandle bbox_array = QPDFObjectHandle::newArray();
-                for (double val : bbox) {
-                    bbox_array.appendItem(QPDFObjectHandle::newReal(val));
-                }
-                attr.replaceKey("/BBox", bbox_array);
-                se.replaceKey("/A", attr);
-            }
+            attach_bbox_attr(se, blocks_on_page[b].bbox);
 
             if (tag == "Figure") {
                 se.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString("[Image requires alt text]"));

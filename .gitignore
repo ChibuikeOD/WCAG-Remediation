@@ -33,6 +33,7 @@ yarn-error.log*
 
 # Build outputs
 frontend/dist/
+pdfua_remediator_cpp/build*/
 *.local
 
 # IDE

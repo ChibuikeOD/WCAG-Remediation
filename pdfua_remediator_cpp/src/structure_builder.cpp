@@ -355,7 +355,25 @@ void build_struct_tree(QPDF& pdf,
         std::vector<QPDFObjectHandle> block_struct_elems(num_blocks);
         std::vector<QPDFObjectHandle> block_kids_arrays(num_blocks);
 
-        auto attach_bbox_attr = [](QPDFObjectHandle& se, const std::vector<double>& bbox) {
+        auto append_attr = [](QPDFObjectHandle& se, QPDFObjectHandle attr) {
+            if (!se.hasKey("/A")) {
+                se.replaceKey("/A", attr);
+                return;
+            }
+
+            QPDFObjectHandle existing = se.getKey("/A");
+            if (existing.isArray()) {
+                existing.appendItem(attr);
+                return;
+            }
+
+            QPDFObjectHandle attrs = QPDFObjectHandle::newArray();
+            attrs.appendItem(existing);
+            attrs.appendItem(attr);
+            se.replaceKey("/A", attrs);
+        };
+
+        auto attach_bbox_attr = [&append_attr](QPDFObjectHandle& se, const std::vector<double>& bbox) {
             if (bbox.size() != 4) {
                 return;
             }
@@ -366,7 +384,14 @@ void build_struct_tree(QPDF& pdf,
                 bbox_array.appendItem(QPDFObjectHandle::newReal(val));
             }
             attr.replaceKey("/BBox", bbox_array);
-            se.replaceKey("/A", attr);
+            append_attr(se, attr);
+        };
+
+        auto attach_table_scope_attr = [&append_attr](QPDFObjectHandle& se, const std::string& scope) {
+            QPDFObjectHandle attr = QPDFObjectHandle::newDictionary();
+            attr.replaceKey("/O", QPDFObjectHandle::newName("/Table"));
+            attr.replaceKey("/Scope", QPDFObjectHandle::newName(scope));
+            append_attr(se, attr);
         };
 
         std::map<std::string, std::vector<int>> table_groups;
@@ -428,10 +453,7 @@ void build_struct_tree(QPDF& pdf,
                 cell_se.replaceKey("/Pg",   page.getObjectHandle());
                 cell_se.replaceKey("/K",    cell_kids);
                 if (cell_block.table_header) {
-                    cell_se.replaceKey(
-                        "/Scope",
-                        QPDFObjectHandle::newName(cell_block.table_col == 0 ? "/Row" : "/Column")
-                    );
+                    attach_table_scope_attr(cell_se, cell_block.table_col == 0 ? "/Row" : "/Column");
                 }
                 attach_bbox_attr(cell_se, cell_block.bbox);
 

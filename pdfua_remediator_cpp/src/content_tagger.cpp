@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#include <set>
 
 // A 2x3 affine matrix [a b c d e f] mapping a row-vector point (x, y, 1):
 //   x' = a*x + c*y + e
@@ -35,6 +36,7 @@ public:
     };
     std::vector<Rect> page_link_rects;
     std::vector<Rect> page_artifact_rects;
+    std::set<std::string> artifact_xobject_names;
 
     MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
                         marked_content_depth(0), in_path(false), inline_dict_depth(0),
@@ -42,7 +44,8 @@ public:
                         in_marked_content(false), last_x(0.0), last_y(0.0), last_link_idx(-1) {}
 
     MCIDTokenFilter(std::vector<QPDFObjectHandle> const& link_rects,
-                    std::vector<Rect> const& artifact_rects)
+                    std::vector<Rect> const& artifact_rects,
+                    std::set<std::string> const& artifact_xobjects)
         : mcid_counter(0), in_text_object(false), has_last_name(false),
           marked_content_depth(0), in_path(false), inline_dict_depth(0),
           text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
@@ -58,6 +61,7 @@ public:
             }
         }
         page_artifact_rects = artifact_rects;
+        artifact_xobject_names = artifact_xobjects;
     }
     virtual ~MCIDTokenFilter() = default;
 
@@ -201,6 +205,17 @@ public:
 
             if (type == QPDFTokenizer::tt_word && value == "Do") {
                 if (has_last_name) {
+                    if (artifact_xobject_names.count(last_name_token.getValue()) > 0) {
+                        writeToken(last_name_token);
+                        for (auto const& s : spaces_after_name) {
+                            writeToken(s);
+                        }
+                        has_last_name = false;
+                        spaces_after_name.clear();
+                        writeToken(token);
+                        return;
+                    }
+
                     // Wrap the Do operator in a BDC/EMC block representing a Figure
                     writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
                     writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_name, "/Figure"));
@@ -545,6 +560,35 @@ private:
     int last_link_idx;
 };
 
+static bool is_artifact_only_form_xobject(QPDFObjectHandle xobject) {
+    if (!xobject.isStream()) {
+        return false;
+    }
+    QPDFObjectHandle dict = xobject.getDict();
+    QPDFObjectHandle subtype = dict.getKey("/Subtype");
+    if (!subtype.isName() || subtype.getName() != "/Form") {
+        return false;
+    }
+
+    try {
+        std::shared_ptr<Buffer> data = xobject.getStreamData();
+        std::string content(
+            reinterpret_cast<char const*>(data->getBuffer()),
+            data->getSize()
+        );
+        if (content.find("/Artifact") == std::string::npos) {
+            return false;
+        }
+
+        // A form with its own MCIDs is real tagged content. Artifact-only
+        // forms, such as DocuSign page furniture, should not be wrapped by a
+        // parent /Figure MCID or PAC reports "artifact inside tagged content".
+        return content.find("/MCID") == std::string::npos;
+    } catch (std::exception const&) {
+        return false;
+    }
+}
+
 // Removes any pre-existing marked-content operators (BDC/BMC/EMC/DP/MP) and
 // their operands from a content stream, leaving the drawing operators intact.
 // This makes re-tagging idempotent and, crucially, cleans up the marked content
@@ -784,7 +828,26 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
             artifact_rects = artifact_it->second;
         }
 
-        MCIDTokenFilter filter(link_rects, artifact_rects);
+        std::set<std::string> artifact_xobject_names;
+        QPDFObjectHandle resources = pages[i].getObjectHandle().getKey("/Resources");
+        if (resources.isDictionary()) {
+            QPDFObjectHandle xobjects = resources.getKey("/XObject");
+            if (xobjects.isDictionary()) {
+                for (auto const& name : xobjects.getKeys()) {
+                    QPDFObjectHandle xobject = xobjects.getKey(name);
+                    if (is_artifact_only_form_xobject(xobject)) {
+                        artifact_xobject_names.insert(name);
+                        if (!name.empty() && name[0] == '/') {
+                            artifact_xobject_names.insert(name.substr(1));
+                        } else {
+                            artifact_xobject_names.insert("/" + name);
+                        }
+                    }
+                }
+            }
+        }
+
+        MCIDTokenFilter filter(link_rects, artifact_rects, artifact_xobject_names);
         Pl_Buffer buf("filtered contents");
         pages[i].filterPageContents(&filter, &buf);
         buf.finish();

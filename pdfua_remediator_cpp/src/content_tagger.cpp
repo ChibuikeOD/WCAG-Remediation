@@ -571,7 +571,7 @@ static bool is_artifact_only_form_xobject(QPDFObjectHandle xobject) {
     }
 
     try {
-        std::shared_ptr<Buffer> data = xobject.getStreamData();
+        auto data = xobject.getStreamData();
         std::string content(
             reinterpret_cast<char const*>(data->getBuffer()),
             data->getSize()

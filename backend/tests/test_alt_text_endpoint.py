@@ -53,7 +53,10 @@ def test_generate_alt_text_endpoint_returns_context_used(monkeypatch, tmp_path: 
 
     monkeypatch.setattr(main, "call_deepseek_vision_or_ocr_fallback", fake_legacy_call)
 
+    monkeypatch.setattr(main.settings, "DEEPSEEK_API_KEY", "env-key")
+
     async def fake_contextual_call(image_url, api_key, context, tessdata):
+        assert api_key == "env-key"
         assert context.caption == "Figure 2. Priority adaptation investments by region."
         return "Map of regional adaptation investment priorities"
 
@@ -62,7 +65,7 @@ def test_generate_alt_text_endpoint_returns_context_used(monkeypatch, tmp_path: 
     response = asyncio.run(
         main.generate_alt_text_endpoint(
             "report-1",
-            AltTextGenerateRequest(image_id="html_img_0", api_key="test-key"),
+            AltTextGenerateRequest(image_id="html_img_0", api_key="request-key"),
             user=SimpleNamespace(id="dev_user_001"),
         )
     )
@@ -70,3 +73,7 @@ def test_generate_alt_text_endpoint_returns_context_used(monkeypatch, tmp_path: 
     assert response["alt_text"] == "Map of regional adaptation investment priorities"
     assert response["context_used"]["caption"] is True
     assert response["context_used"]["mode"] == "balanced"
+
+
+def test_alt_text_generate_request_does_not_expose_api_key_field():
+    assert "api_key" not in AltTextGenerateRequest.model_fields

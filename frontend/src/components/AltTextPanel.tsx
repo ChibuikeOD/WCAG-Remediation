@@ -8,7 +8,6 @@ import {
   Check,
   EyeOff,
   Save,
-  HelpCircle,
 } from 'lucide-react';
 import type { AccessibilityReport, DocumentImageItem, AltTextResolution, AltTextContextUsed } from '../types';
 import { getDocumentImages, generateAltText, resolveAltText } from '../api';
@@ -46,9 +45,6 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
   const [altText, setAltText] = useState('');
   const [isDecorative, setIsDecorative] = useState(false);
 
-  // DeepSeek API key state (saved in localStorage)
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('accesspdf_deepseek_key') || '');
-
   // Local modifications map to track changes before saving
   const [pendingChanges, setPendingChanges] = useState<Record<string, { altText: string; isDecorative: boolean }>>({});
   const [generationContext, setGenerationContext] = useState<Record<string, AltTextContextUsed>>({});
@@ -71,16 +67,6 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
     }
     loadImages();
   }, [report.id]);
-
-  // Save DeepSeek API key to localStorage when changed
-  const handleApiKeyChange = (val: string) => {
-    setApiKey(val);
-    if (val.trim()) {
-      localStorage.setItem('accesspdf_deepseek_key', val.trim());
-    } else {
-      localStorage.removeItem('accesspdf_deepseek_key');
-    }
-  };
 
   // Update form values when selected image changes
   useEffect(() => {
@@ -129,7 +115,7 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
     setGenerating(true);
 
     try {
-      const res = await generateAltText(report.id, selectedImage.id, apiKey || undefined);
+      const res = await generateAltText(report.id, selectedImage.id);
       setAltText(res.alt_text);
       setIsDecorative(false);
       setGenerationContext((prev) => ({
@@ -418,35 +404,6 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
                   className="w-full md:w-96 p-6 flex flex-col flex-shrink-0 space-y-6"
                   style={{ borderLeft: '1px solid #1a2840', background: '#0a0f18' }}
                 >
-                  {/* Settings / API Key */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-semibold text-[#7a90a8] uppercase tracking-wide">
-                        DeepSeek API Key
-                      </label>
-                      <span className="text-[10px] text-[#4a607a] flex items-center gap-1">
-                        <HelpCircle className="w-3 h-3" /> Saved in browser
-                      </span>
-                    </div>
-                    <input
-                      type="password"
-                      placeholder="sk-..."
-                      value={apiKey}
-                      onChange={(e) => handleApiKeyChange(e.target.value)}
-                      className="w-full px-3 py-2 text-xs rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-                      style={{
-                        background: '#111c2d',
-                        border: '1px solid #1a2840',
-                        color: '#e8edf4',
-                      }}
-                    />
-                    <p className="text-[10px] text-[#4a607a] leading-relaxed">
-                      If left blank, the application will fall back to the server environment's `DEEPSEEK_API_KEY`.
-                    </p>
-                  </div>
-
-                  <hr style={{ borderColor: '#162238' }} />
-
                   {/* Alt text options */}
                   <div className="space-y-4 flex-1">
                     <span className="text-xs font-semibold text-[#7a90a8] uppercase tracking-wide block">

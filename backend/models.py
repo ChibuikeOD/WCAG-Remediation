@@ -238,7 +238,6 @@ class AltTextResolutionRequest(BaseModel):
 class AltTextGenerateRequest(BaseModel):
     """Payload to request AI alt-text generation."""
     image_id: str
-    api_key: Optional[str] = None
     context_mode: Literal["minimal", "balanced", "maximum"] = "balanced"
 
 

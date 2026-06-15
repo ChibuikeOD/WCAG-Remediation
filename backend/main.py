@@ -1578,11 +1578,11 @@ async def generate_alt_text_endpoint(
     if not target_image or not target_image.image_url:
         raise HTTPException(status_code=404, detail="Image not found or has no content to describe")
         
-    api_key = request.api_key or settings.DEEPSEEK_API_KEY
+    api_key = settings.DEEPSEEK_API_KEY
     if not api_key:
         raise HTTPException(
             status_code=400,
-            detail="DeepSeek API key is required. Please set it in system environment or provide it in settings."
+            detail="DeepSeek API key is required. Please set DEEPSEEK_API_KEY in the server environment."
         )
         
     from .pdf_remediator_fixes import _resolve_tessdata

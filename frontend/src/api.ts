@@ -237,12 +237,11 @@ export async function getDocumentImages(reportId: string): Promise<DocumentImage
 // Generate alt-text using DeepSeek AI
 export async function generateAltText(
   reportId: string,
-  imageId: string,
-  apiKey?: string
+  imageId: string
 ): Promise<AltTextGenerateResponse> {
   return fetchJSON<AltTextGenerateResponse>(`${API_BASE}/report/${reportId}/generate-alt-text`, {
     method: 'POST',
-    body: JSON.stringify({ image_id: imageId, api_key: apiKey, context_mode: 'balanced' }),
+    body: JSON.stringify({ image_id: imageId, context_mode: 'balanced' }),
   });
 }
 

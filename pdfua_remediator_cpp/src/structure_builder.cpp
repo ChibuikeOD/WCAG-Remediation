@@ -291,6 +291,17 @@ void build_struct_tree(QPDF& pdf,
             if (block_idx >= 0) prev_block = block_idx;
         }
 
+        std::vector<bool> block_has_content(num_blocks, false);
+        for (int mcid = 0; mcid < mcid_count; ++mcid) {
+            if (figure_mcids.count(mcid) > 0) {
+                continue;
+            }
+            int block_idx = mcid_block[mcid];
+            if (block_idx >= 0 && block_idx < num_blocks) {
+                block_has_content[block_idx] = true;
+            }
+        }
+
         // 4b. Walk the MCIDs and build nested structure elements, including Links
         std::vector<QPDFObjectHandle> mcid_parent(mcid_count);
 
@@ -394,10 +405,19 @@ void build_struct_tree(QPDF& pdf,
             append_attr(se, attr);
         };
 
+        auto make_mcr = [&](int mcid) {
+            QPDFObjectHandle mcr = QPDFObjectHandle::newDictionary();
+            mcr.replaceKey("/Type", QPDFObjectHandle::newName("/MCR"));
+            mcr.replaceKey("/Pg", page.getObjectHandle());
+            mcr.replaceKey("/MCID", QPDFObjectHandle::newInteger(mcid));
+            return mcr;
+        };
+
         std::map<std::string, std::vector<int>> table_groups;
         for (int b = 0; b < num_blocks; ++b) {
             const LayoutBlock& block = blocks_on_page[b];
-            if (!block.table_id.empty() && block.table_row >= 0 && block.table_col >= 0) {
+            if (block_has_content[b] &&
+                !block.table_id.empty() && block.table_row >= 0 && block.table_col >= 0) {
                 table_groups[block.table_id].push_back(b);
             }
         }
@@ -468,6 +488,9 @@ void build_struct_tree(QPDF& pdf,
             if (block_struct_elems[b].isInitialized()) {
                 continue;
             }
+            if (!block_has_content[b]) {
+                continue;
+            }
             std::string raw_tag = blocks_on_page[b].tag;
             std::string tag = normalize_text_role(raw_tag);
 
@@ -521,7 +544,7 @@ void build_struct_tree(QPDF& pdf,
                 se.replaceKey("/S",    QPDFObjectHandle::newName("/Figure"));
                 se.replaceKey("/P",    doc_elem_indirect);
                 se.replaceKey("/Pg",   page.getObjectHandle());
-                se.replaceKey("/K",    QPDFObjectHandle::newInteger(mcid));
+                se.replaceKey("/K",    make_mcr(mcid));
                 se.replaceKey("/Alt",  QPDFObjectHandle::newUnicodeString("[Image requires alt text]"));
 
                 // Attach /BBox attribute to Figure structure element
@@ -578,10 +601,10 @@ void build_struct_tree(QPDF& pdf,
 
                     parent_kids.appendItem(link_se_indirect);
                 }
-                link_kids_arrays[annot_idx].appendItem(QPDFObjectHandle::newInteger(mcid));
+                link_kids_arrays[annot_idx].appendItem(make_mcr(mcid));
                 mcid_parent[mcid] = link_struct_elems[annot_idx];
             } else {
-                parent_kids.appendItem(QPDFObjectHandle::newInteger(mcid));
+                parent_kids.appendItem(make_mcr(mcid));
                 mcid_parent[mcid] = parent_se;
             }
         }
@@ -600,6 +623,10 @@ void build_struct_tree(QPDF& pdf,
                 QPDFObjectHandle parent_kids = (block_idx >= 0 && block_idx < num_blocks) 
                                                ? block_kids_arrays[block_idx] 
                                                : fallback_kids;
+                if (!parent_se.isInitialized()) {
+                    parent_se = get_fallback_se();
+                    parent_kids = fallback_kids;
+                }
 
                 QPDFObjectHandle link_se = QPDFObjectHandle::newDictionary();
                 link_se.replaceKey("/Type", QPDFObjectHandle::newName("/StructElem"));

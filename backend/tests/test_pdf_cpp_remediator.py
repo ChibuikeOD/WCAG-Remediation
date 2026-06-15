@@ -72,6 +72,36 @@ def _write_pdf_with_table_text(path: Path) -> None:
         pdf.save(path)
 
 
+def _write_pdf_with_figure_form_xobject(path: Path) -> None:
+    with pikepdf.Pdf.new() as pdf:
+        page = pdf.add_blank_page(page_size=(612, 792))
+        form = pdf.make_stream(b"0 0 120 40 re f")
+        form["/Type"] = pikepdf.Name("/XObject")
+        form["/Subtype"] = pikepdf.Name("/Form")
+        form["/BBox"] = pikepdf.Array([0, 0, 120, 40])
+        page.obj["/Resources"] = pikepdf.Dictionary({
+            "/XObject": pikepdf.Dictionary({"/X1": form}),
+        })
+        page.obj["/Contents"] = pdf.make_stream(b"q 1 0 0 1 60 690 cm /X1 Do Q")
+        pdf.save(path)
+
+
+def _write_pdf_with_single_text_run(path: Path) -> None:
+    with pikepdf.Pdf.new() as pdf:
+        page = pdf.add_blank_page(page_size=(612, 792))
+        page.obj["/Resources"] = pikepdf.Dictionary({
+            "/Font": pikepdf.Dictionary({
+                "/F1": pikepdf.Dictionary({
+                    "/Type": pikepdf.Name("/Font"),
+                    "/Subtype": pikepdf.Name("/Type1"),
+                    "/BaseFont": pikepdf.Name("/Helvetica"),
+                })
+            })
+        })
+        page.obj["/Contents"] = pdf.make_stream(b"BT /F1 12 Tf 50 720 Td (Readable text) Tj ET")
+        pdf.save(path)
+
+
 def _walk_struct_elems(obj):
     if not hasattr(obj, "get"):
         return
@@ -83,6 +113,16 @@ def _walk_struct_elems(obj):
             yield from _walk_struct_elems(kid)
     elif hasattr(kids, "get"):
         yield from _walk_struct_elems(kids)
+
+
+def _struct_kids(kids):
+    if kids is None:
+        return []
+    return list(kids) if isinstance(kids, pikepdf.Array) else [kids]
+
+
+def _is_integer_obj(obj):
+    return isinstance(obj, int) or (hasattr(obj, "is_integer") and obj.is_integer())
 
 
 def test_artifact_form_xobjects_are_not_wrapped_as_tagged_figures(tmp_path):
@@ -104,6 +144,109 @@ def test_artifact_form_xobjects_are_not_wrapped_as_tagged_figures(tmp_path):
                 and str(ins.operands[0]) == "/Figure"
                 for ins in window
             )
+
+
+def test_struct_tree_uses_explicit_mcr_dictionaries_for_screen_readers(tmp_path):
+    source = tmp_path / "text.pdf"
+    output = tmp_path / "tagged.pdf"
+    _write_pdf_with_single_text_run(source)
+    blocks = [
+        {
+            "page": 0,
+            "tag": "P",
+            "bbox": [45, 710, 220, 735],
+        }
+    ]
+
+    _run_cpp_remediator(source, blocks, output)
+
+    with pikepdf.open(output) as pdf:
+        root_k = pdf.Root["/StructTreeRoot"]["/K"]
+        roots = list(root_k) if isinstance(root_k, pikepdf.Array) else [root_k]
+        struct_elems = [
+            elem
+            for root in roots
+            for elem in _walk_struct_elems(root)
+        ]
+        content_refs = []
+        for elem in struct_elems:
+            for kid in _struct_kids(elem.get("/K")):
+                assert not _is_integer_obj(kid)
+                if hasattr(kid, "get") and kid.get("/Type") == "/MCR":
+                    content_refs.append(kid)
+
+        assert content_refs
+        for ref in content_refs:
+            assert ref.get("/Pg") is not None
+            assert ref.get("/MCID") is not None
+
+
+def test_empty_layout_blocks_are_not_emitted_as_empty_structure_elements(tmp_path):
+    source = tmp_path / "text.pdf"
+    output = tmp_path / "tagged.pdf"
+    _write_pdf_with_single_text_run(source)
+    blocks = [
+        {
+            "page": 0,
+            "tag": "P",
+            "bbox": [45, 710, 220, 735],
+        },
+        {
+            "page": 0,
+            "tag": "P",
+            "bbox": [300, 100, 420, 130],
+        },
+    ]
+
+    _run_cpp_remediator(source, blocks, output)
+
+    with pikepdf.open(output) as pdf:
+        root_k = pdf.Root["/StructTreeRoot"]["/K"]
+        roots = list(root_k) if isinstance(root_k, pikepdf.Array) else [root_k]
+        struct_elems = [
+            elem
+            for root in roots
+            for elem in _walk_struct_elems(root)
+        ]
+        assert struct_elems
+        empty_elems = [
+            elem
+            for elem in struct_elems
+            if elem.get("/Type") == "/StructElem" and not _struct_kids(elem.get("/K"))
+        ]
+        assert empty_elems == []
+
+
+def test_figure_mcids_do_not_keep_overlapping_text_blocks_alive(tmp_path):
+    source = tmp_path / "figure-form.pdf"
+    output = tmp_path / "tagged.pdf"
+    _write_pdf_with_figure_form_xobject(source)
+    blocks = [
+        {
+            "page": 0,
+            "tag": "P",
+            "bbox": [55, 685, 190, 740],
+        },
+    ]
+
+    _run_cpp_remediator(source, blocks, output)
+
+    with pikepdf.open(output) as pdf:
+        root_k = pdf.Root["/StructTreeRoot"]["/K"]
+        roots = list(root_k) if isinstance(root_k, pikepdf.Array) else [root_k]
+        struct_elems = [
+            elem
+            for root in roots
+            for elem in _walk_struct_elems(root)
+        ]
+        roles = [elem.get("/S") for elem in struct_elems]
+        assert "/Figure" in roles
+        empty_elems = [
+            elem
+            for elem in struct_elems
+            if elem.get("/Type") == "/StructElem" and not _struct_kids(elem.get("/K"))
+        ]
+        assert empty_elems == []
 
 
 def test_table_header_scope_is_written_as_table_attribute(tmp_path):

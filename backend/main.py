@@ -765,10 +765,11 @@ async def download_remediated_file(report_id: str, user: User = Depends(require_
     if not output_path.exists():
         raise HTTPException(status_code=404, detail="Remediated file not found")
     
+    media_type = "application/pdf" if output_filename.lower().endswith(".pdf") else "application/octet-stream"
     return FileResponse(
         path=output_path,
         filename=output_filename,
-        media_type="application/octet-stream"
+        media_type=media_type,
     )
 
 

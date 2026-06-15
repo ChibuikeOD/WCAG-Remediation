@@ -8,7 +8,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi.testclient import TestClient
-from backend.main import app
+from backend.main import app, report_storage, settings
+from backend.models import AccessibilityReport, DocumentInfo
 
 
 @pytest.fixture
@@ -181,6 +182,27 @@ class TestReportEndpoint:
         """Test 404 for non-existent report summary."""
         response = client.get('/report/non-existent-id/summary')
         assert response.status_code == 404
+
+
+class TestRemediationDownloadEndpoint:
+    """Tests for remediated file downloads."""
+
+    def test_pdf_download_uses_pdf_media_type(self, client, tmp_path, monkeypatch):
+        """PDF downloads should be served as PDFs, not generic binary blobs."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        filename = "sample.pdf"
+        report_id = "download-media-type-report"
+        (tmp_path / f"remediated_{filename}").write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+        report_storage[report_id] = AccessibilityReport(
+            id=report_id,
+            document=DocumentInfo(filename=filename, file_type="pdf"),
+        )
+
+        response = client.get(f"/remediate/download/{report_id}")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/pdf")
 
 
 if __name__ == '__main__':

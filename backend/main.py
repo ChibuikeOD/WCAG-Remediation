@@ -28,8 +28,11 @@ from .config import settings
 from .models import (
     AccessibilityReport, DocumentInfo, WCAGLevel,
     UploadResponse, AnalyzeRequest, RemediationRequest, RemediationResponse,
-    RemediationResult, DocumentImageItem, AltTextResolutionRequest, AltTextGenerateRequest
+    RemediationResult, DocumentImageItem, AltTextResolutionRequest, AltTextGenerateRequest,
+    AltTextGenerateResponse
 )
+from . import alt_text_context as alt_text_context_service
+from .deepseek_alt_text import call_deepseek_contextual_alt_text
 from .rules_engine import get_rules_engine
 from .parsers import HTMLParser, PDFParser
 from .remediator import HTMLRemediator, PDFRemediator
@@ -1541,27 +1544,27 @@ async def get_document_images(report_id: str, user: User = Depends(require_user)
     file_path, file_type = _resolve_document_from_report(report_id)
     
     if file_type == "html":
-        return await run_in_threadpool(extract_html_images, file_path)
+        return await run_in_threadpool(alt_text_context_service.extract_html_images, file_path)
     elif file_type == "pdf":
-        return await run_in_threadpool(extract_pdf_images, file_path)
+        return await run_in_threadpool(alt_text_context_service.extract_pdf_images, file_path)
     else:
         raise HTTPException(status_code=400, detail="Unsupported document type")
 
 
-@app.post("/report/{report_id}/generate-alt-text")
+@app.post("/report/{report_id}/generate-alt-text", response_model=AltTextGenerateResponse)
 async def generate_alt_text_endpoint(
     report_id: str,
     request: AltTextGenerateRequest,
     user: User = Depends(require_user)
 ):
     """
-    Generate alt-text for an image in the document using DeepSeek API with OCR fallback.
+    Generate context-aware alt-text for an image using DeepSeek API with OCR fallback.
     """
     file_path, file_type = _resolve_document_from_report(report_id)
     if file_type == "html":
-        images = await run_in_threadpool(extract_html_images, file_path)
+        images = await run_in_threadpool(alt_text_context_service.extract_html_images, file_path)
     elif file_type == "pdf":
-        images = await run_in_threadpool(extract_pdf_images, file_path)
+        images = await run_in_threadpool(alt_text_context_service.extract_pdf_images, file_path)
     else:
         raise HTTPException(status_code=400, detail="Unsupported document type")
         
@@ -1583,14 +1586,24 @@ async def generate_alt_text_endpoint(
         
     from .pdf_remediator_fixes import _resolve_tessdata
     tessdata = _resolve_tessdata()
+
+    context = await run_in_threadpool(
+        alt_text_context_service.build_alt_text_context,
+        file_path,
+        file_type,
+        images,
+        target_image,
+        request.context_mode
+    )
     
-    alt_text = await call_deepseek_vision_or_ocr_fallback(
+    alt_text = await call_deepseek_contextual_alt_text(
         target_image.image_url,
         api_key,
+        context,
         tessdata
     )
     
-    return {"alt_text": alt_text}
+    return {"alt_text": alt_text, "context_used": context.context_used()}
 
 
 @app.post("/report/{report_id}/resolve-alt-text", response_model=RemediationResponse)

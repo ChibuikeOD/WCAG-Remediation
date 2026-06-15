@@ -2,7 +2,7 @@
 Pydantic models for the WCAG Accessibility Remediation Platform.
 """
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -216,6 +216,11 @@ class DocumentImageItem(BaseModel):
     page_num: Optional[int] = None  # None for HTML
     current_alt: str
     image_url: Optional[str] = None  # base64 data URL
+    figure_order: Optional[int] = None
+    bbox: Optional[List[float]] = None
+    caption: Optional[str] = None
+    nearby_text: Optional[str] = None
+    neighbor_image_ids: List[str] = Field(default_factory=list)
 
 
 class AltTextResolution(BaseModel):
@@ -234,6 +239,13 @@ class AltTextGenerateRequest(BaseModel):
     """Payload to request AI alt-text generation."""
     image_id: str
     api_key: Optional[str] = None
+    context_mode: Literal["minimal", "balanced", "maximum"] = "balanced"
+
+
+class AltTextGenerateResponse(BaseModel):
+    """Response from AI alt-text generation."""
+    alt_text: str
+    context_used: Dict[str, Any] = Field(default_factory=dict)
 
 
 

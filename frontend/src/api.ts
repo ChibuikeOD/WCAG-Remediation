@@ -9,6 +9,7 @@ import type {
   WCAGRule,
   DocumentImageItem,
   AltTextResolution,
+  AltTextGenerateResponse,
 } from './types';
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || '/api';
@@ -238,10 +239,10 @@ export async function generateAltText(
   reportId: string,
   imageId: string,
   apiKey?: string
-): Promise<{ alt_text: string }> {
-  return fetchJSON<{ alt_text: string }>(`${API_BASE}/report/${reportId}/generate-alt-text`, {
+): Promise<AltTextGenerateResponse> {
+  return fetchJSON<AltTextGenerateResponse>(`${API_BASE}/report/${reportId}/generate-alt-text`, {
     method: 'POST',
-    body: JSON.stringify({ image_id: imageId, api_key: apiKey }),
+    body: JSON.stringify({ image_id: imageId, api_key: apiKey, context_mode: 'balanced' }),
   });
 }
 
@@ -255,7 +256,6 @@ export async function resolveAltText(
     body: JSON.stringify({ resolutions }),
   });
 }
-
 
 
 

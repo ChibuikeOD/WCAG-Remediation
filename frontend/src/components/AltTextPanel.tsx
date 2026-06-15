@@ -10,13 +10,28 @@ import {
   Save,
   HelpCircle,
 } from 'lucide-react';
-import type { AccessibilityReport, DocumentImageItem, AltTextResolution } from '../types';
+import type { AccessibilityReport, DocumentImageItem, AltTextResolution, AltTextContextUsed } from '../types';
 import { getDocumentImages, generateAltText, resolveAltText } from '../api';
 
 interface AltTextPanelProps {
   report: AccessibilityReport;
   onClose: () => void;
   onComplete: (updatedReport: AccessibilityReport) => void;
+}
+
+function summarizeContextUsed(context?: AltTextContextUsed | null): string {
+  if (!context) return '';
+
+  const parts: string[] = [];
+  if (context.caption) parts.push('caption');
+  if (context.page_text) parts.push('same-page text');
+  if (context.previous_page_text || context.next_page_text) parts.push('adjacent pages');
+  if (context.headings && context.headings > 0) parts.push(`${context.headings} heading${context.headings === 1 ? '' : 's'}`);
+  if (context.neighboring_images && context.neighboring_images > 0) {
+    parts.push(`${context.neighboring_images} nearby figure${context.neighboring_images === 1 ? '' : 's'}`);
+  }
+  if (parts.length === 0) return 'target image only';
+  return parts.join(', ');
 }
 
 export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps) {
@@ -36,6 +51,7 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
 
   // Local modifications map to track changes before saving
   const [pendingChanges, setPendingChanges] = useState<Record<string, { altText: string; isDecorative: boolean }>>({});
+  const [generationContext, setGenerationContext] = useState<Record<string, AltTextContextUsed>>({});
 
   useEffect(() => {
     async function loadImages() {
@@ -116,6 +132,10 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
       const res = await generateAltText(report.id, selectedImage.id, apiKey || undefined);
       setAltText(res.alt_text);
       setIsDecorative(false);
+      setGenerationContext((prev) => ({
+        ...prev,
+        [selectedImage.id]: res.context_used,
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'AI Generation failed. Check API Key or OCR backend.');
     } finally {
@@ -199,6 +219,10 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
     }
     return img.current_alt === '';
   };
+
+  const selectedContextSummary = selectedImage
+    ? summarizeContextUsed(generationContext[selectedImage.id])
+    : '';
 
   return (
     <div
@@ -452,6 +476,11 @@ export function AltTextPanel({ report, onClose, onComplete }: AltTextPanelProps)
                           </>
                         )}
                       </button>
+                      {selectedContextSummary ? (
+                        <p className="text-[10px] text-[#7a90a8] leading-relaxed">
+                          Context used: {selectedContextSummary}.
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="flex items-center gap-3 my-4">

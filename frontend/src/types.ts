@@ -146,6 +146,11 @@ export interface DocumentImageItem {
   page_num?: number | null;
   current_alt: string;
   image_url?: string | null;
+  figure_order?: number | null;
+  bbox?: number[] | null;
+  caption?: string | null;
+  nearby_text?: string | null;
+  neighbor_image_ids?: string[];
 }
 
 export interface AltTextResolution {
@@ -154,6 +159,21 @@ export interface AltTextResolution {
   is_decorative: boolean;
 }
 
+export interface AltTextContextUsed {
+  mode?: string;
+  document_title?: boolean;
+  headings?: number;
+  caption?: boolean;
+  page_text?: boolean;
+  previous_page_text?: boolean;
+  next_page_text?: boolean;
+  neighboring_images?: number;
+}
+
+export interface AltTextGenerateResponse {
+  alt_text: string;
+  context_used: AltTextContextUsed;
+}
 
 
 

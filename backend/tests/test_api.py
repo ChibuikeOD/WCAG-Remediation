@@ -1,6 +1,7 @@
 """
 Integration tests for the FastAPI endpoints.
 """
+import asyncio
 import pytest
 from pathlib import Path
 import sys
@@ -8,15 +9,53 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+import backend.database as database
+import backend.main as main_module
 from backend.main import app, report_storage, settings
 from backend.models import AccessibilityReport, DocumentInfo
 
 
 @pytest.fixture
-def client():
-    """Create a test client with application lifespan running."""
-    with TestClient(app) as test_client:
-        yield test_client
+def client(tmp_path, monkeypatch):
+    """Create a test client with isolated storage and lifespan running."""
+    test_engine = create_engine(
+        f"sqlite:///{tmp_path / 'test.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    test_session_local = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=test_engine,
+    )
+    upload_dir = tmp_path / "uploads"
+    output_dir = tmp_path / "output"
+    upload_dir.mkdir()
+    output_dir.mkdir()
+
+    monkeypatch.setattr(database, "engine", test_engine)
+    monkeypatch.setattr(database, "SessionLocal", test_session_local)
+    monkeypatch.setattr(main_module, "SessionLocal", test_session_local)
+    monkeypatch.setattr(settings, "UPLOAD_DIR", upload_dir)
+    monkeypatch.setattr(settings, "OUTPUT_DIR", output_dir)
+
+    async def idle_retention_worker():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(main_module, "clean_expired_documents", idle_retention_worker)
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        test_engine.dispose()
+
+
+def test_client_uses_isolated_storage(client, tmp_path):
+    assert Path(str(database.engine.url.database)).parent == tmp_path
+    assert settings.UPLOAD_DIR == tmp_path / "uploads"
+    assert settings.OUTPUT_DIR == tmp_path / "output"
 
 
 class TestHealthEndpoint:

@@ -102,7 +102,6 @@ export interface RemediationRequest {
   report_id: string;
   issue_ids?: string[];
   apply_all_automatable?: boolean;
-  overwrite_tags?: boolean;
 }
 
 export interface WCAGRule {

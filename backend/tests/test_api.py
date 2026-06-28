@@ -14,8 +14,9 @@ from backend.models import AccessibilityReport, DocumentInfo
 
 @pytest.fixture
 def client():
-    """Create a test client."""
-    return TestClient(app)
+    """Create a test client with application lifespan running."""
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 class TestHealthEndpoint:

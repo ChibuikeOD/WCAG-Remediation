@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Allow the rules engine to evaluate supported CSS `:has(...)` selectors so data tables without headers are reported.
+**Goal:** Report data tables without headers through a narrow static evaluator while keeping unrelated `:has(...)` selectors deferred.
 
-**Architecture:** Add a focused regression test around `_check_selector` using the repository's WCAG 1.3.1 selector, then remove the stale blanket early return. Existing `soup.select()` behavior and exception handling remain responsible for evaluation and graceful failure.
+**Architecture:** Recognize only the exact WCAG 1.3.1 table-header selector and evaluate it through direct DOM traversal. Preserve the general `:has(...)` deferral guard to avoid activating unrelated, semantically incorrect, and potentially quadratic selectors.
 
 **Tech Stack:** Python 3, BeautifulSoup 4.12.3, SoupSieve, Pydantic, pytest
 
@@ -12,8 +12,8 @@
 
 ## File Structure
 
-- Modify `backend/tests/test_rules_engine.py`: add a focused selector-level regression test and imports.
-- Modify `backend/rules_engine.py`: remove only the obsolete `:has(...)` skip guard.
+- Modify `backend/tests/test_rules_engine.py`: cover missing headers, native/ARIA headers, and unrelated-selector deferral.
+- Modify `backend/rules_engine.py`: add the narrow table-header evaluator and retain general `:has(...)` deferral.
 
 ### Task 1: Prove Supported `:has(...)` Selectors Are Suppressed
 
@@ -78,46 +78,135 @@ git add backend/tests/test_rules_engine.py
 git commit -m "test: cover supported has selectors"
 ```
 
-### Task 2: Evaluate `:has(...)` Through SoupSieve
+### Task 2: Bound Static Evaluation to Table Headers
 
 **Files:**
-- Modify: `backend/rules_engine.py:274-284`
+- Modify: `backend/tests/test_rules_engine.py:80-145`
+- Modify: `backend/rules_engine.py:35-50,274-300`
 - Test: `backend/tests/test_rules_engine.py`
 
-- [ ] **Step 1: Remove the obsolete blanket guard**
+- [ ] **Step 1: Add safety regressions before revising the broad fix**
 
-Delete only this block:
-
-```python
-            # Handle :has() pseudo-selector (not natively supported by BeautifulSoup)
-            selector = check.selector
-
-            # Check for :has() - we need to handle this manually
-            if ':has(' in selector or ':not(:has(' in selector:
-                # Skip complex selectors that require JavaScript evaluation
-                # These will be handled by Playwright
-                return issues
-```
-
-Keep a single selector assignment before the existing `:empty` handling:
+Add these methods to `TestRulesEngine`:
 
 ```python
-            selector = check.selector
+    @pytest.mark.parametrize(
+        "header_html",
+        [
+            "<th>Name</th>",
+            "<td role='columnheader'>Name</td>",
+            "<td role='rowheader'>Name</td>",
+        ],
+    )
+    def test_table_header_selector_ignores_tables_with_headers(
+        self,
+        engine,
+        header_html,
+    ):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            f"<table><tr>{header_html}</tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert issues == []
+
+    def test_selector_check_keeps_unrelated_has_selector_deferred(self, engine):
+        rule = engine.get_rule_by_id("3.3.2")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("input[id]:not(:has(~label[for]))")
+        )
+        soup = BeautifulSoup(
+            "<label for='email'>Email</label><input id='email'>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.UNDERSTANDABLE,
+        )
+
+        assert issues == []
 ```
 
-Do not change the surrounding `try`/`except`; it remains the graceful fallback for selector evaluation errors.
-
-- [ ] **Step 2: Verify focused selector behavior is green**
+- [ ] **Step 2: Verify the unrelated-selector test fails under broad evaluation**
 
 Run:
 
 ```powershell
-& 'C:\Users\chibu\OneDrive\Documents\Data Viz\WCAG Project\VirtualEnvironment\Scripts\python.exe' -m pytest -p no:asyncio backend/tests/test_rules_engine.py::TestRulesEngine::test_selector_check_evaluates_supported_has_selector backend/tests/test_rules_engine.py::TestHTMLAnalysis::test_table_without_headers -v
+& 'C:\Users\chibu\OneDrive\Documents\Data Viz\WCAG Project\VirtualEnvironment\Scripts\python.exe' -m pytest -p no:asyncio backend/tests/test_rules_engine.py::TestRulesEngine::test_selector_check_keeps_unrelated_has_selector_deferred -v
 ```
 
-Expected: 2 passed.
+Expected: FAIL because broad SoupSieve evaluation flags the valid preceding-label input.
 
-- [ ] **Step 3: Run the complete rules-engine test file**
+- [ ] **Step 3: Add a constant for the one supported relational rule**
+
+Add after `STATIC_CAPABLE_CHECKS`:
+
+```python
+TABLE_HEADER_SELECTOR = (
+    "table:not(:has(th)):not(:has([role='columnheader'])):"
+    "not(:has([role='rowheader']))"
+)
+```
+
+- [ ] **Step 4: Evaluate only that selector through direct DOM traversal**
+
+At the start of the selector `try` block, use:
+
+```python
+            selector = check.selector
+
+            if selector == TABLE_HEADER_SELECTOR:
+                elements = [
+                    table
+                    for table in soup.select("table")
+                    if table.find("th") is None
+                    and table.find(
+                        attrs={"role": ["columnheader", "rowheader"]}
+                    ) is None
+                ]
+            elif ':has(' in selector:
+                # Other relational selectors remain deferred until they have
+                # dedicated static evaluators or browser-backed checks.
+                return issues
+
+            # Handle :empty pseudo-selector
+            elif ':empty' in selector:
+                base_selector = selector.replace(':empty', '')
+                elements = soup.select(base_selector)
+                elements = [el for el in elements if not el.get_text(strip=True) and not el.find_all()]
+            else:
+                elements = soup.select(selector)
+```
+
+Replace the existing `:empty`/default selection block rather than duplicating it. Do not change the surrounding `try`/`except` or issue mapping.
+
+- [ ] **Step 5: Verify focused selector behavior is green**
+
+Run:
+
+```powershell
+& 'C:\Users\chibu\OneDrive\Documents\Data Viz\WCAG Project\VirtualEnvironment\Scripts\python.exe' -m pytest -p no:asyncio backend/tests/test_rules_engine.py::TestRulesEngine::test_selector_check_evaluates_supported_has_selector backend/tests/test_rules_engine.py::TestRulesEngine::test_table_header_selector_ignores_tables_with_headers backend/tests/test_rules_engine.py::TestRulesEngine::test_selector_check_keeps_unrelated_has_selector_deferred backend/tests/test_rules_engine.py::TestHTMLAnalysis::test_table_without_headers -v
+```
+
+Expected: all focused cases pass, including all three parameterized header variants.
+
+- [ ] **Step 6: Run the complete rules-engine test file**
 
 Run:
 
@@ -127,7 +216,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 4: Check formatting and scope**
+- [ ] **Step 7: Check formatting and scope**
 
 Run:
 
@@ -136,13 +225,13 @@ git diff --check -- backend/rules_engine.py
 git diff HEAD~1 -- backend/rules_engine.py backend/tests/test_rules_engine.py
 ```
 
-Expected: no whitespace errors; the production diff only removes the stale guard and retains selector exception handling.
+Expected: no whitespace errors; the production diff restores general deferral and adds only the table-header evaluator.
 
-- [ ] **Step 5: Commit the production repair**
+- [ ] **Step 8: Commit the bounded repair and safety tests**
 
 ```powershell
-git add backend/rules_engine.py
-git commit -m "fix: evaluate supported has selectors"
+git add backend/rules_engine.py backend/tests/test_rules_engine.py
+git commit -m "fix: bound relational selector evaluation"
 ```
 
 ### Task 3: Verify Both Repairs and the Original Feature

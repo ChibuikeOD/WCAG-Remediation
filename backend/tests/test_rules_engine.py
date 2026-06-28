@@ -8,6 +8,7 @@ Tests cover:
 - HTML analysis
 """
 import pytest
+from bs4 import BeautifulSoup
 from pathlib import Path
 import sys
 
@@ -15,7 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.rules_engine import RulesEngine, ColorUtils, parse_jsonc
-from backend.models import WCAGLevel, DocumentInfo, IssueStatus, Severity
+from backend.models import WCAGLevel, WCAGPrinciple, DocumentInfo, IssueStatus, Severity
 
 
 class TestColorUtils:
@@ -132,6 +133,28 @@ class TestRulesEngine:
         rules = engine.get_rules_by_tag('images')
         assert len(rules) > 0
         assert all('images' in r.tags for r in rules)
+
+    def test_selector_check_evaluates_supported_has_selector(self, engine):
+        """Supported :has() selectors should run during static analysis."""
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            "<table><tr><td>Name</td></tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert len(issues) == 1
+        assert "header" in issues[0].message.lower()
 
 
 class TestHTMLAnalysis:

@@ -12,4 +12,4 @@ def test_frontend_does_not_offer_structure_rebuild_opt_out():
 
     assert "Rebuild structure with OpenDataLoader" not in panel_source
     assert "overwriteTags" not in panel_source
-    assert "overwrite_tags?: boolean" not in api_source
+    assert "overwrite_tags" not in api_source

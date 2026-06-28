@@ -121,3 +121,6 @@ test_overlays.zip
 VirtualEnvironment/
 
 .vercel
+
+# Isolated Codex feature worktrees
+.worktrees/

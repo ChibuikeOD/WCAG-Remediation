@@ -272,14 +272,7 @@ class RulesEngine:
                 return issues
         
         try:
-            # Handle :has() pseudo-selector (not natively supported by BeautifulSoup)
             selector = check.selector
-            
-            # Check for :has() - we need to handle this manually
-            if ':has(' in selector or ':not(:has(' in selector:
-                # Skip complex selectors that require JavaScript evaluation
-                # These will be handled by Playwright
-                return issues
             
             # Handle :empty pseudo-selector
             if ':empty' in selector:

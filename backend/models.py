@@ -156,7 +156,6 @@ class RemediationRequest(BaseModel):
     report_id: str
     issue_ids: Optional[List[str]] = None  # None means apply all automatable
     apply_all_automatable: bool = False
-    overwrite_tags: bool = True  # Always rebuild structure tree by default; pass False to opt out
 
 
 class RemediationResult(BaseModel):

@@ -594,17 +594,11 @@ class PDFRemediator:
         output_path: Optional[Path] = None,
         report: Optional[Any] = None,
         original_filename: str = "",
-        overwrite_tags: bool = True,
     ) -> List[RemediationResult]:
         """
         Run the full PDF remediation pipeline: metadata, auto-tag, structural
         fixes, bookmarks, OCR, and form labels.  Returns a flat list of
         RemediationResult for every fix attempted.
-
-        Args:
-            overwrite_tags: When True (default), always rebuild the PDF structure
-                tree regardless of whether one already exists. Pass False to skip
-                auto-tagging entirely (opt-out).
         """
         from . import pdf_remediator_fixes as fixes
 
@@ -669,15 +663,12 @@ class PDFRemediator:
 
         from .config import settings
 
-        # Always rebuild the structure tree unless the caller explicitly opts out
-        # (overwrite_tags=False) or OpenDataLoader is disabled.
-        should_tag = overwrite_tags and not settings.DISABLE_OPENDATALOADER
-        if should_tag:
+        if not settings.DISABLE_OPENDATALOADER:
             reason = "rebuilding existing structure" if is_tagged else "untagged document"
             logger.info("Running PDF layout tagging using OpenDataLoader (%s)...", reason)
             tag_result = self.auto_tag_document(
                 output_path=target,
-                overwrite_tags=True,  # always overwrite since we decided to rebuild
+                overwrite_tags=True,
                 confidence_threshold=0.0,
             )
             if tag_result.get("success"):
@@ -696,14 +687,7 @@ class PDFRemediator:
                     success=False,
                     message=f"Auto-tagging failed: {tag_result.get('error', 'Unknown')}",
                 ))
-        elif not overwrite_tags:
-            logger.info("PDF layout tagging skipped (opted out via overwrite_tags=False)")
-            results.append(RemediationResult(
-                issue_id="pdf-auto-tag",
-                success=True,
-                message="PDF auto-tagging skipped (opted out by request)",
-            ))
-        elif settings.DISABLE_OPENDATALOADER:
+        else:
             logger.info("PDF layout tagging skipped (DISABLE_OPENDATALOADER is enabled)")
             results.append(RemediationResult(
                 issue_id="pdf-auto-tag",

@@ -697,7 +697,6 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
             output_path=output_path,
             report=report,
             original_filename=file_info["original_filename"],
-            overwrite_tags=request.overwrite_tags,
         )
 
         remediated_path = str(output_path)

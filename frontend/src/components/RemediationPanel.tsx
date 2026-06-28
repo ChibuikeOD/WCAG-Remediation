@@ -44,9 +44,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults]           = useState<RemediationResult[] | null>(null);
   const [error, setError]               = useState<string | null>(null);
-  const [overwriteTags, setOverwriteTags]   = useState(false);
 
-  const isPdf             = report.document.file_type === 'pdf';
   const automatableIssues = report.all_issues.filter((i) => i.automatable_fix && !i.fixed);
 
   /* ── Handlers ─────────────────────────────────────────────── */
@@ -59,7 +57,6 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
       const response = await remediateDocument({
         report_id: report.id,
         apply_all_automatable: true,
-        ...(overwriteTags && { overwrite_tags: true }),
       });
 
       setResults(response.results);
@@ -245,21 +242,6 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                 )}
               </div>
 
-              {/* PDF-specific options */}
-              {isPdf && (
-                <div className="space-y-3 pt-2">
-                  <OptionRow
-                    id="overwrite-tags"
-                    checked={overwriteTags}
-                    onChange={setOverwriteTags}
-                    icon={<Wrench className="w-4 h-4" style={{ color: '#7a90a8' }} aria-hidden="true" />}
-                    label="Rebuild structure with OpenDataLoader"
-                    description="Forces OpenDataLoader to re-tag the entire PDF even if it already has a structure tree. Use for poorly-tagged PDFs."
-                    warningText="This overwrites all existing tags."
-                  />
-                </div>
-              )}
-
               {/* Disclaimer */}
               <div
                 className="p-4 rounded-lg"
@@ -414,55 +396,6 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ── Option Row ─────────────────────────────────────────────── */
-function OptionRow({
-  id,
-  checked,
-  onChange,
-  icon,
-  label,
-  description,
-  warningText,
-}: {
-  id: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  icon: React.ReactNode;
-  label: string;
-  description: string;
-  warningText?: string;
-}) {
-  return (
-    <div
-      className="p-4 rounded-lg"
-      style={{ background: '#111c2d', border: '1px solid #1a2840' }}
-    >
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          id={id}
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="mt-1 w-4 h-4 rounded"
-          style={{ accentColor: '#2563eb' }}
-        />
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            {icon}
-            <span className="text-sm font-medium" style={{ color: '#c8d8e8' }}>{label}</span>
-          </div>
-          <p className="text-xs leading-relaxed" style={{ color: '#4a607a' }}>{description}</p>
-          {warningText && (
-            <p className="text-xs mt-1.5 font-medium" style={{ color: '#fcd34d', opacity: 0.75 }}>
-              {warningText}
-            </p>
-          )}
-        </div>
-      </label>
     </div>
   );
 }

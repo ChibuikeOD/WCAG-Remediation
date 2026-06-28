@@ -115,7 +115,6 @@ export async function remediateDocument(params: {
   report_id: string;
   issue_ids?: string[];
   apply_all_automatable?: boolean;
-  overwrite_tags?: boolean;
 }): Promise<RemediationResponse> {
   return fetchJSON<RemediationResponse>(`${API_BASE}/remediate`, {
     method: 'POST',

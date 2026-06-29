@@ -46,6 +46,11 @@ STATIC_CAPABLE_CHECKS = {
     'link_text_quality', 'link_text_standalone', 'duplicate_id'
 }
 
+TABLE_HEADER_SELECTOR = (
+    "table:not(:has(th)):not(:has([role='columnheader'])):"
+    "not(:has([role='rowheader']))"
+)
+
 
 def parse_jsonc(file_path: Path) -> Dict[str, Any]:
     """Parse a JSONC (JSON with comments) file."""
@@ -274,8 +279,17 @@ class RulesEngine:
         try:
             selector = check.selector
             
-            # Handle :empty pseudo-selector
-            if ':empty' in selector:
+            if selector == TABLE_HEADER_SELECTOR:
+                elements = [
+                    table for table in soup.find_all('table')
+                    if table.find('th') is None
+                    and table.find(attrs={'role': 'columnheader'}) is None
+                    and table.find(attrs={'role': 'rowheader'}) is None
+                ]
+            elif ':has(' in selector:
+                # Defer other relational selectors until their semantics are validated.
+                return issues
+            elif ':empty' in selector:
                 base_selector = selector.replace(':empty', '')
                 elements = soup.select(base_selector)
                 elements = [el for el in elements if not el.get_text(strip=True) and not el.find_all()]

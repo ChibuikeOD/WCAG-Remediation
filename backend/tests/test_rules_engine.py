@@ -156,6 +156,58 @@ class TestRulesEngine:
         assert len(issues) == 1
         assert "header" in issues[0].message.lower()
 
+    @pytest.mark.parametrize(
+        "header_markup",
+        [
+            "<th>Name</th>",
+            "<td role='columnheader'>Name</td>",
+            "<td role='rowheader'>Name</td>",
+        ],
+    )
+    def test_table_header_selector_ignores_tables_with_headers(
+        self,
+        engine,
+        header_markup,
+    ):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            f"<table><tr>{header_markup}</tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert issues == []
+
+    def test_selector_check_keeps_unrelated_has_selector_deferred(self, engine):
+        rule = engine.get_rule_by_id("3.3.2")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("input[id]:not(:has(~label[for]))")
+        )
+        soup = BeautifulSoup(
+            "<label for='email'>Email</label><input id='email'>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.UNDERSTANDABLE,
+        )
+
+        assert issues == []
+
 
 class TestHTMLAnalysis:
     """Tests for HTML accessibility analysis."""

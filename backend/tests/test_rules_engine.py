@@ -208,6 +208,96 @@ class TestRulesEngine:
 
         assert issues == []
 
+    def test_table_header_selector_scopes_headers_to_nearest_table(self, engine):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            "<table id='outer'><tr><td>"
+            "<table id='inner'><tr><th>Inner</th></tr></table>"
+            "</td></tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert len(issues) == 1
+        assert 'id="outer"' in issues[0].element_location.html_snippet
+
+    @pytest.mark.parametrize("table_role", ["presentation", "none"])
+    def test_table_header_selector_ignores_presentational_tables(
+        self,
+        engine,
+        table_role,
+    ):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            f"<table role='{table_role}'><tr><td>Layout</td></tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert issues == []
+
+    def test_table_header_selector_recognizes_header_role_token(self, engine):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            "<table><tr><td role='unsupported columnheader'>Name</td></tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert issues == []
+
+    def test_table_header_selector_reports_only_headerless_sibling(self, engine):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            "<table id='headered'><tr><th>Name</th></tr></table>"
+            "<table id='headerless'><tr><td>Name</td></tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert len(issues) == 1
+        assert 'id="headerless"' in issues[0].element_location.html_snippet
+
 
 class TestHTMLAnalysis:
     """Tests for HTML accessibility analysis."""

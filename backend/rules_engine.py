@@ -216,6 +216,46 @@ class RulesEngine:
             selector=selector,
             html_snippet=html_snippet
         )
+
+    def _tables_missing_owned_headers(self, soup: BeautifulSoup) -> List[Tag]:
+        """Find data tables without headers owned by that same table."""
+        tables = []
+        table_ids_with_headers = set()
+        stack = [(soup, None)]
+
+        while stack:
+            node, table_owner = stack.pop()
+            if not isinstance(node, Tag):
+                continue
+
+            raw_role = node.get('role', [])
+            if isinstance(raw_role, str):
+                role_tokens = set(raw_role.split())
+            else:
+                role_tokens = {
+                    token
+                    for value in raw_role
+                    for token in str(value).split()
+                }
+
+            if node.name == 'table':
+                table_owner = node
+                if not role_tokens.intersection({'presentation', 'none'}):
+                    tables.append(node)
+
+            if table_owner is not None and (
+                node.name == 'th'
+                or role_tokens.intersection({'columnheader', 'rowheader'})
+            ):
+                table_ids_with_headers.add(id(table_owner))
+
+            for child in reversed(node.contents):
+                stack.append((child, table_owner))
+
+        return [
+            table for table in tables
+            if id(table) not in table_ids_with_headers
+        ]
     
     def _check_selector(
         self,
@@ -280,12 +320,7 @@ class RulesEngine:
             selector = check.selector
             
             if selector == TABLE_HEADER_SELECTOR:
-                elements = [
-                    table for table in soup.find_all('table')
-                    if table.find('th') is None
-                    and table.find(attrs={'role': 'columnheader'}) is None
-                    and table.find(attrs={'role': 'rowheader'}) is None
-                ]
+                elements = self._tables_missing_owned_headers(soup)
             elif ':has(' in selector:
                 # Defer other relational selectors until their semantics are validated.
                 return issues

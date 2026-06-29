@@ -228,24 +228,26 @@ class RulesEngine:
             if not isinstance(node, Tag):
                 continue
 
-            raw_role = node.get('role', [])
+            raw_role = node.get('role')
             if isinstance(raw_role, str):
-                role_tokens = set(raw_role.split())
+                normalized_role = raw_role.strip().lower()
+            elif isinstance(raw_role, (list, tuple)):
+                normalized_role = ' '.join(
+                    str(value) for value in raw_role
+                ).strip().lower()
+            elif raw_role is None:
+                normalized_role = ''
             else:
-                role_tokens = {
-                    token
-                    for value in raw_role
-                    for token in str(value).split()
-                }
+                normalized_role = str(raw_role).strip().lower()
 
             if node.name == 'table':
                 table_owner = node
-                if not role_tokens.intersection({'presentation', 'none'}):
+                if normalized_role not in {'presentation', 'none'}:
                     tables.append(node)
 
             if table_owner is not None and (
                 node.name == 'th'
-                or role_tokens.intersection({'columnheader', 'rowheader'})
+                or normalized_role in {'columnheader', 'rowheader'}
             ):
                 table_ids_with_headers.add(id(table_owner))
 

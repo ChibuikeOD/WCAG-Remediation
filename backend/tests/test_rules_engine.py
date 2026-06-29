@@ -256,14 +256,22 @@ class TestRulesEngine:
 
         assert issues == []
 
-    def test_table_header_selector_recognizes_header_role_token(self, engine):
+    @pytest.mark.parametrize(
+        "role_value",
+        ["button columnheader", "unsupported columnheader"],
+    )
+    def test_table_header_selector_requires_exact_header_role(
+        self,
+        engine,
+        role_value,
+    ):
         rule = engine.get_rule_by_id("1.3.1")
         check = next(
             item for item in rule.selector_checks
             if item.selector.startswith("table:not(:has(th))")
         )
         soup = BeautifulSoup(
-            "<table><tr><td role='unsupported columnheader'>Name</td></tr></table>",
+            f"<table><tr><td role='{role_value}'>Name</td></tr></table>",
             "html5lib",
         )
 
@@ -274,7 +282,27 @@ class TestRulesEngine:
             WCAGPrinciple.PERCEIVABLE,
         )
 
-        assert issues == []
+        assert len(issues) == 1
+
+    def test_table_header_selector_requires_exact_presentational_role(self, engine):
+        rule = engine.get_rule_by_id("1.3.1")
+        check = next(
+            item for item in rule.selector_checks
+            if item.selector.startswith("table:not(:has(th))")
+        )
+        soup = BeautifulSoup(
+            "<table role='table none'><tr><td>Data</td></tr></table>",
+            "html5lib",
+        )
+
+        issues = engine._check_selector(
+            soup,
+            check,
+            rule,
+            WCAGPrinciple.PERCEIVABLE,
+        )
+
+        assert len(issues) == 1
 
     def test_table_header_selector_reports_only_headerless_sibling(self, engine):
         rule = engine.get_rule_by_id("1.3.1")

@@ -15,6 +15,7 @@ The example document uses CID `2870` as a superscript digit, but the design must
 - Modify the PDF only when the decision passes strict confidence and consistency gates.
 - Preserve visual rendering and every existing Unicode mapping.
 - Report repaired and unresolved characters with an audit trail.
+- Explicitly disclose whether DeepSeek was invoked and whether its recommendation affected the output.
 
 ## Non-goals
 
@@ -144,14 +145,27 @@ After updates:
 
 ## Reporting
 
-Each result records:
+The remediation summary contains a plainly visible LLM disclosure. It states one of:
+
+- `DeepSeek V4 Pro was not used; all Unicode decisions were deterministic.`
+- `DeepSeek V4 Pro evaluated N ambiguous Unicode mapping(s); M recommendation(s) were applied.`
+- `DeepSeek V4 Pro was requested but unavailable; no ambiguous mappings were changed.`
+
+Invoking the model and applying its recommendation are reported separately. A rejected or unresolved model response must not be described as an LLM-made repair.
+
+Each font/code decision records:
 
 - font object, CID, affected pages, and occurrence count;
 - resolution source (`font-metadata` or `deepseek-v4-pro`);
+- `llm_invoked`, identifying whether DeepSeek evaluated the ambiguity;
+- `llm_recommendation_applied`, identifying whether that evaluation changed the PDF;
+- model name (`deepseek-v4-pro`) and the reason the deterministic resolver classified the mapping as ambiguous;
 - added Unicode sequence;
 - model confidence and summarized evidence when DeepSeek was used;
 - unresolved reason when no change was made;
 - post-write extraction and visual-verification status.
+
+User-facing remediation results use direct language such as `DeepSeek V4 Pro verified CID 2870 as U+0032 using three consistent occurrences` or `DeepSeek V4 Pro evaluated CID 2870 but the mapping remained unresolved`.
 
 The report must never include the API key or full base64 images.
 
@@ -163,6 +177,7 @@ Automated tests use synthetic and fixture PDFs to cover:
 - unique deterministic mappings producing no API calls;
 - ambiguous mappings sending the required images and context;
 - a valid high-confidence DeepSeek response adding one mapping;
+- report disclosure when DeepSeek was not invoked, invoked and accepted, invoked and rejected, or unavailable;
 - low confidence, `ambiguous`, conflicting occurrences, invalid JSON, timeout, and non-vision responses producing no change;
 - shared fonts updating all occurrences once;
 - Form XObject text being detected;
@@ -172,4 +187,3 @@ Automated tests use synthetic and fixture PDFs to cover:
 - the dissertation fixture's missing superscript mapping being detected without hard-coded document knowledge.
 
 Network calls are mocked in the standard suite. An opt-in integration test may exercise a configured DeepSeek API key without becoming a required CI dependency.
-

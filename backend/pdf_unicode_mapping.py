@@ -194,6 +194,20 @@ def _position_label(page: fitz.Page, origin_y: float, target_size: float) -> str
     return "baseline"
 
 
+def _page_glyph_matches(
+    page: fitz.Page, base_font: str, gid: Optional[int]
+) -> list[tuple[dict, tuple[float, float], fitz.Rect]]:
+    matches = []
+    for span in page.get_texttrace():
+        if span.get("font") != base_font:
+            continue
+        for _unicode, char_gid, origin, bbox in span.get("chars", ()):
+            if gid is not None and char_gid != gid:
+                continue
+            matches.append((span, origin, fitz.Rect(bbox)))
+    return matches
+
+
 def build_ambiguity_context(
     pdf_path: Path,
     finding: MissingUnicodeFinding,
@@ -209,24 +223,26 @@ def build_ambiguity_context(
     base_font = finding.base_font.lstrip("/")
     seen_pages: set[int] = set()
     try:
-        for occurrence in finding.occurrences:
-            if len(occurrences) >= max_occurrences:
-                break
-            page = document[occurrence.page_number - 1]
-            matched = None
-            for span in page.get_texttrace():
-                if span.get("font") != base_font:
-                    continue
-                for _unicode, gid, origin, bbox in span.get("chars", ()):
-                    if finding.gid is not None and gid != finding.gid:
-                        continue
-                    matched = (span, origin, fitz.Rect(bbox))
+        page_numbers = list(dict.fromkeys(item.page_number for item in finding.occurrences))
+        matches_by_page: dict[int, list[tuple[dict, tuple[float, float], fitz.Rect]]] = {}
+        selected: list[tuple[int, dict, tuple[float, float], fitz.Rect]] = []
+        for page_number in page_numbers:
+            page = document[page_number - 1]
+            matches = _page_glyph_matches(page, base_font, finding.gid)
+            matches_by_page[page_number] = matches
+            if matches and len(selected) < max_occurrences:
+                selected.append((page_number, *matches[0]))
+        if len(selected) < max_occurrences:
+            for page_number in page_numbers:
+                for match in matches_by_page.get(page_number, [])[1:]:
+                    if len(selected) >= max_occurrences:
+                        break
+                    selected.append((page_number, *match))
+                if len(selected) >= max_occurrences:
                     break
-                if matched:
-                    break
-            if not matched:
-                continue
-            span, origin, bbox = matched
+
+        for page_number, span, origin, bbox in selected:
+            page = document[page_number - 1]
             line_clip = fitz.Rect(
                 max(0, bbox.x0 - 130),
                 max(0, bbox.y0 - 14),
@@ -243,7 +259,7 @@ def build_ambiguity_context(
             paragraph = page.get_text("text", clip=paragraph_clip).strip()
             occurrences.append(
                 {
-                    "page": occurrence.page_number,
+                    "page": page_number,
                     "masked_line": _mask_unknown(line_text),
                     "paragraph": _mask_unknown(paragraph),
                     "position": _position_label(page, float(origin[1]), float(span["size"])),
@@ -258,7 +274,7 @@ def build_ambiguity_context(
                     fitz.Rect(bbox.x0 - 2, bbox.y0 - 2, bbox.x1 + 2, bbox.y1 + 2),
                     dpi=600,
                 )
-            seen_pages.add(occurrence.page_number)
+            seen_pages.add(page_number)
     finally:
         metadata = document.metadata or {}
         document.close()
@@ -282,7 +298,9 @@ def build_ambiguity_context(
         "font": finding.base_font,
         "cid": finding.cid,
         "gid": finding.gid,
-        "glyph_name": evidence.glyph_name_by_gid.get(finding.gid or -1),
+        "glyph_name": evidence.glyph_name_by_gid.get(
+            finding.gid if finding.gid is not None else -1
+        ),
         "candidates": candidate_sequences,
         "deterministic_contradictions": contradictions,
         "occurrences": occurrences,

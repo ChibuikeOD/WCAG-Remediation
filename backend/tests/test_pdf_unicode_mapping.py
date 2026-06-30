@@ -164,6 +164,7 @@ def test_dissertation_ambiguous_glyph_gets_visual_and_text_context() -> None:
     assert resolve_deterministically(finding, evidence) is None
     assert len(context["occurrences"]) == 2
     assert len(context["images"]) == 3
+    assert len({item["page"] for item in context["occurrences"]}) == 2
     assert all("[UNKNOWN]" in item["masked_line"] for item in context["occurrences"])
     assert all(
         item["position"] in {"superscript", "subscript", "baseline"}

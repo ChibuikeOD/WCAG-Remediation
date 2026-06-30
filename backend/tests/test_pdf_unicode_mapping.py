@@ -3,14 +3,18 @@ from pathlib import Path
 import pikepdf
 import pytest
 
+from backend.deepseek_unicode_verifier import DeepSeekDecision
+import backend.pdf_unicode_mapping as unicode_module
 from backend.pdf_unicode_mapping import (
     DeterministicResolution,
     FontEvidence,
+    ParsedToUnicode,
     add_cmap_mappings,
     build_ambiguity_context,
     collect_font_evidence,
     inventory_missing_unicode,
     parse_to_unicode_cmap,
+    repair_missing_unicode,
     resolve_deterministically,
 )
 
@@ -165,3 +169,92 @@ def test_dissertation_ambiguous_glyph_gets_visual_and_text_context() -> None:
         item["position"] in {"superscript", "subscript", "baseline"}
         for item in context["occurrences"]
     )
+
+
+class VerifierSpy:
+    def __init__(self, decision: DeepSeekDecision) -> None:
+        self.decision = decision
+        self.calls: list[dict] = []
+
+    def __call__(self, context: dict) -> DeepSeekDecision:
+        self.calls.append(context)
+        return self.decision
+
+
+def accepted_decision(text: str = "2") -> DeepSeekDecision:
+    return DeepSeekDecision(
+        accepted=True,
+        text=text,
+        confidence=0.99,
+        rejection_reason=None,
+        response={"status": "verified"},
+    )
+
+
+def rejected_decision(reason: str) -> DeepSeekDecision:
+    return DeepSeekDecision(
+        accepted=False,
+        text=None,
+        confidence=0.99,
+        rejection_reason=reason,
+        response={"status": "ambiguous"},
+    )
+
+
+def read_font_cmap(path: Path) -> ParsedToUnicode:
+    with pikepdf.open(path) as pdf:
+        font = pdf.pages[0].Resources.Font.F1
+        return parse_to_unicode_cmap(font.ToUnicode.read_bytes())
+
+
+def test_complete_document_skips_llm(tmp_path: Path) -> None:
+    path = build_type0_pdf(tmp_path / "complete.pdf", shown_cid=0x0374)
+    verifier = VerifierSpy(accepted_decision())
+
+    result = repair_missing_unicode(path, verifier=verifier)
+
+    assert verifier.calls == []
+    assert result["details"]["llm_invoked"] is False
+
+
+def test_ambiguous_accepted_decision_updates_cmap(tmp_path: Path, monkeypatch) -> None:
+    path = build_type0_pdf(tmp_path / "ambiguous.pdf", shown_cid=0x0B36)
+    verifier = VerifierSpy(accepted_decision("2"))
+    monkeypatch.setattr(unicode_module, "verify_repair", lambda *_args: (True, "ok"))
+
+    result = repair_missing_unicode(path, verifier=verifier)
+
+    assert read_font_cmap(path).mappings[0x0B36] == "2"
+    assert result["details"]["llm_invoked"] is True
+    assert result["details"]["llm_recommendation_applied"] is True
+
+
+def test_rejected_decision_does_not_change_pdf(tmp_path: Path) -> None:
+    path = build_type0_pdf(tmp_path / "rejected.pdf", shown_cid=0x0B36)
+    before = path.read_bytes()
+
+    result = repair_missing_unicode(
+        path, verifier=VerifierSpy(rejected_decision("occurrence-conflict"))
+    )
+
+    assert path.read_bytes() == before
+    assert result["details"]["llm_invoked"] is True
+    assert result["details"]["llm_recommendation_applied"] is False
+
+
+def test_failed_post_write_verification_rolls_back(tmp_path: Path, monkeypatch) -> None:
+    path = build_type0_pdf(tmp_path / "rollback.pdf", shown_cid=0x0B36)
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        unicode_module, "verify_repair", lambda *_args: (False, "visual-diff")
+    )
+
+    result = repair_missing_unicode(
+        path, verifier=VerifierSpy(accepted_decision("2"))
+    )
+
+    assert path.read_bytes() == before
+    assert result["success"] is False
+    assert result["details"]["rollback_reason"] == "visual-diff"
+    assert result["details"]["llm_recommendation_applied"] is False
+    assert "0 recommendation(s) were applied" in result["message"]

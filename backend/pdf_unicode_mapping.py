@@ -5,8 +5,10 @@ from dataclasses import dataclass
 import base64
 from io import BytesIO
 from pathlib import Path
+import os
 import re
 from statistics import median
+import tempfile
 from typing import Iterable, Optional
 
 import fitz
@@ -464,3 +466,206 @@ def inventory_missing_unicode(pdf_path: Path) -> list[MissingUnicodeFinding]:
                 )
             )
     return sorted(findings, key=lambda item: (item.font_objgen, item.cid))
+
+
+def _write_unicode_mappings(
+    source: Path,
+    destination: Path,
+    mappings: list[tuple[tuple[int, int], int, str]],
+) -> None:
+    by_font: dict[tuple[int, int], dict[int, str]] = {}
+    for objgen, cid, text in mappings:
+        by_font.setdefault(objgen, {})[cid] = text
+    with pikepdf.open(source) as pdf:
+        for objgen, additions in by_font.items():
+            font = pdf.get_object(objgen)
+            cmap = font.get("/ToUnicode")
+            if not isinstance(cmap, pikepdf.Stream):
+                raise ValueError(f"font {objgen} has no writable ToUnicode stream")
+            cmap.write(add_cmap_mappings(cmap.read_bytes(), additions))
+        pdf.save(destination)
+
+
+def verify_repair(
+    original: Path,
+    candidate: Path,
+    expected: list[tuple[tuple[int, int], int, str]],
+    affected_pages: set[int],
+) -> tuple[bool, str]:
+    """Verify mappings are complete and page pixels are unchanged."""
+    remaining = {
+        (finding.font_objgen, finding.cid)
+        for finding in inventory_missing_unicode(candidate)
+    }
+    for objgen, cid, _text in expected:
+        if (objgen, cid) in remaining:
+            return False, "mapping-still-missing"
+    try:
+        before = fitz.open(original)
+        after = fitz.open(candidate)
+        try:
+            for page_number in sorted(affected_pages):
+                before_pix = before[page_number - 1].get_pixmap(dpi=96, alpha=False)
+                after_pix = after[page_number - 1].get_pixmap(dpi=96, alpha=False)
+                if (
+                    before_pix.width != after_pix.width
+                    or before_pix.height != after_pix.height
+                    or before_pix.samples != after_pix.samples
+                ):
+                    return False, f"visual-diff-page-{page_number}"
+        finally:
+            before.close()
+            after.close()
+    except Exception as exc:
+        return False, f"render-verification-error: {exc}"
+    return True, "ok"
+
+
+def _disclosure(evaluated: int, applied: int, unavailable: bool) -> str:
+    if unavailable:
+        return (
+            "DeepSeek V4 Pro was requested but unavailable; "
+            "no ambiguous mappings were changed."
+        )
+    if evaluated == 0:
+        return "DeepSeek V4 Pro was not used; all Unicode decisions were deterministic."
+    return (
+        f"DeepSeek V4 Pro evaluated {evaluated} ambiguous Unicode mapping(s); "
+        f"{applied} recommendation(s) were applied."
+    )
+
+
+def repair_missing_unicode(
+    pdf_path: Path,
+    *,
+    verifier=None,
+    max_occurrences: int = 3,
+) -> dict:
+    """Resolve missing mappings and atomically install only verified changes."""
+    findings = inventory_missing_unicode(pdf_path)
+    accepted: list[tuple[tuple[int, int], int, str]] = []
+    decisions: list[dict] = []
+    evaluated = 0
+    llm_applied = 0
+    unavailable = False
+    affected_pages: set[int] = set()
+
+    for finding in findings:
+        evidence = collect_font_evidence(pdf_path, finding)
+        deterministic = resolve_deterministically(finding, evidence)
+        if deterministic is not None:
+            accepted.append((finding.font_objgen, finding.cid, deterministic.text))
+            affected_pages.update(finding.pages)
+            decisions.append(
+                {
+                    "font_objgen": list(finding.font_objgen),
+                    "font": finding.base_font,
+                    "cid": finding.cid,
+                    "pages": list(finding.pages),
+                    "occurrence_count": finding.occurrence_count,
+                    "resolution_source": "font-metadata",
+                    "llm_invoked": False,
+                    "llm_recommendation_applied": False,
+                    "unicode_text": deterministic.text,
+                    "evidence": list(deterministic.evidence),
+                }
+            )
+            continue
+
+        if verifier is None:
+            unavailable = True
+            decisions.append(
+                {
+                    "font_objgen": list(finding.font_objgen),
+                    "font": finding.base_font,
+                    "cid": finding.cid,
+                    "pages": list(finding.pages),
+                    "occurrence_count": finding.occurrence_count,
+                    "resolution_source": "unresolved",
+                    "llm_invoked": False,
+                    "llm_recommendation_applied": False,
+                    "unresolved_reason": "deepseek-unavailable",
+                }
+            )
+            continue
+
+        context = build_ambiguity_context(
+            pdf_path, finding, evidence, max_occurrences=max_occurrences
+        )
+        evaluated += 1
+        decision = verifier(context)
+        record = {
+            "font_objgen": list(finding.font_objgen),
+            "font": finding.base_font,
+            "cid": finding.cid,
+            "pages": list(finding.pages),
+            "occurrence_count": finding.occurrence_count,
+            "resolution_source": "deepseek-v4-pro",
+            "llm_invoked": True,
+            "llm_recommendation_applied": bool(decision.accepted),
+            "confidence": decision.confidence,
+        }
+        if decision.accepted and decision.text:
+            accepted.append((finding.font_objgen, finding.cid, decision.text))
+            affected_pages.update(finding.pages)
+            llm_applied += 1
+            record["unicode_text"] = decision.text
+        else:
+            record["unresolved_reason"] = decision.rejection_reason or "rejected"
+        decisions.append(record)
+
+    details = {
+        "llm_invoked": evaluated > 0,
+        "llm_recommendation_applied": llm_applied > 0,
+        "llm_unavailable": unavailable,
+        "model": "deepseek-v4-pro" if evaluated else None,
+        "evaluated": evaluated,
+        "applied": llm_applied,
+        "decisions": decisions,
+    }
+    disclosure = _disclosure(evaluated, llm_applied, unavailable)
+    if not accepted:
+        return {
+            "issue_id": "pdf-unicode-mapping",
+            "success": True,
+            "message": disclosure,
+            "new_value": "0 Unicode mapping(s) added",
+            "details": details,
+        }
+
+    handle = tempfile.NamedTemporaryFile(
+        prefix=f".{pdf_path.stem}.unicode-", suffix=".pdf", dir=pdf_path.parent, delete=False
+    )
+    candidate = Path(handle.name)
+    handle.close()
+    try:
+        _write_unicode_mappings(pdf_path, candidate, accepted)
+        verified, reason = verify_repair(pdf_path, candidate, accepted, affected_pages)
+        if not verified:
+            rollback_disclosure = _disclosure(evaluated, 0, unavailable)
+            details["llm_recommendation_applied"] = False
+            details["applied"] = 0
+            for record in decisions:
+                if record.get("llm_recommendation_applied"):
+                    record["llm_recommendation_applied"] = False
+                    record["unresolved_reason"] = f"rolled-back-{reason}"
+            details["rollback_reason"] = reason
+            return {
+                "issue_id": "pdf-unicode-mapping",
+                "success": False,
+                "message": f"Unicode repair rolled back: {reason}. {rollback_disclosure}",
+                "new_value": "0 Unicode mapping(s) added",
+                "details": details,
+            }
+        os.replace(candidate, pdf_path)
+        details["mappings_added"] = len(accepted)
+        return {
+            "issue_id": "pdf-unicode-mapping",
+            "success": True,
+            "message": disclosure,
+            "new_value": f"{len(accepted)} Unicode mapping(s) added",
+            "details": details,
+        }
+    finally:
+        if candidate.exists():
+            candidate.unlink()

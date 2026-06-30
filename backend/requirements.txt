@@ -13,6 +13,7 @@ cssselect==1.2.0
 PyMuPDF==1.23.8
 pikepdf==8.11.2
 pdfplumber==0.10.3
+fonttools==4.47.2
 
 # Browser automation for computed styles
 playwright==1.41.0

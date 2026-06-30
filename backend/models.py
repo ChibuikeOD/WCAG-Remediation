@@ -165,6 +165,7 @@ class RemediationResult(BaseModel):
     message: str
     original_value: Optional[str] = None
     new_value: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
 
 
 class RemediationResponse(BaseModel):

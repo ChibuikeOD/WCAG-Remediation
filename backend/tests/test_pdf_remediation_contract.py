@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pikepdf
 
-from backend.models import RemediationRequest
+from backend.config import Settings
+from backend.models import RemediationRequest, RemediationResult
 from backend.remediator import PDFRemediator
 
 
@@ -27,6 +28,27 @@ def test_remediation_request_does_not_expose_structure_rebuild_opt_out() -> None
 
 def test_full_pdf_remediation_has_no_structure_rebuild_opt_out() -> None:
     assert "overwrite_tags" not in inspect.signature(PDFRemediator.fix_all).parameters
+
+
+def test_remediation_result_accepts_unicode_decision_details() -> None:
+    result = RemediationResult(
+        issue_id="pdf-unicode-mapping",
+        success=True,
+        message="DeepSeek V4 Pro was not used",
+        details={"llm_invoked": False, "llm_recommendation_applied": False},
+    )
+
+    assert result.details == {
+        "llm_invoked": False,
+        "llm_recommendation_applied": False,
+    }
+
+
+def test_unicode_verifier_model_is_deepseek_v4_pro() -> None:
+    settings = Settings()
+
+    assert settings.PDF_UNICODE_LLM_MODEL == "deepseek-v4-pro"
+    assert settings.PDF_UNICODE_LLM_MIN_CONFIDENCE == 0.98
 
 
 def test_full_pdf_remediation_always_requests_structure_overwrite(

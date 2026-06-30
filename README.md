@@ -136,6 +136,23 @@ Runtime resolution order:
 If you use the local checkout, the extracted source tree must be built first
 because it does not include a bundled CLI JAR by default.
 
+## PDF Unicode Mapping Repair
+
+The remediation pipeline scans actual PDF text-showing operators for character
+codes that are missing from a font's `ToUnicode` map. Authoritative embedded
+font metadata is used first and does not invoke an LLM.
+
+Only ambiguous mappings are sent to `deepseek-v4-pro`. The request includes an
+isolated glyph, representative line crops from distinct pages, masked nearby
+text, typographic position, font metadata, and candidate Unicode values. Set
+`DEEPSEEK_API_KEY` to enable this fallback. The verifier fails closed when
+multimodal input cannot be confirmed, when confidence is below `0.98`, when
+occurrences conflict, or when a credible alternative remains.
+
+Rejected decisions leave the PDF unchanged. Remediation results and generated
+JSON reports separately disclose whether DeepSeek was invoked and whether its
+recommendation was applied.
+
 ## API Endpoints
 
 ### Upload Document

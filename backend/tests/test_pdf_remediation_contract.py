@@ -78,6 +78,7 @@ def test_full_pdf_remediation_always_requests_structure_overwrite(
 
     fix_names = (
         "fix_scanned_pages",
+        "fix_pdf_unicode_mappings",
         "inject_link_annotations",
         "fix_content_stream_operator_states",
         "fix_heading_hierarchy",
@@ -107,3 +108,48 @@ def test_full_pdf_remediation_always_requests_structure_overwrite(
     assert any(
         result.issue_id == "pdf-auto-tag" and result.success for result in results
     )
+
+
+def test_fix_all_runs_unicode_repair_immediately_after_ocr(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from backend import config
+    from backend import pdf_remediator_fixes as fixes
+
+    pdf_path = tmp_path / "minimal.pdf"
+    _make_minimal_pdf(pdf_path)
+    remediator = PDFRemediator(pdf_path)
+    calls: list[str] = []
+
+    monkeypatch.setattr(config.settings, "DISABLE_OPENDATALOADER", True)
+    monkeypatch.setattr(remediator, "fix_metadata", lambda **_kwargs: [])
+
+    def recording_fix(name: str):
+        def run(_path: Path):
+            calls.append(name)
+            return {"issue_id": f"test-{name}", "success": True, "message": "ok"}
+
+        return run
+
+    monkeypatch.setattr(fixes, "fix_scanned_pages", recording_fix("ocr"))
+    monkeypatch.setattr(
+        fixes, "fix_pdf_unicode_mappings", recording_fix("unicode")
+    )
+    for fix_name in (
+        "inject_link_annotations",
+        "fix_content_stream_operator_states",
+        "fix_heading_hierarchy",
+        "fix_table_headers",
+        "fix_list_structure",
+        "fix_span_overuse",
+        "fix_reading_order",
+        "fix_untagged_urls",
+        "fix_bookmarks",
+        "fix_form_labels",
+        "fix_tab_order",
+    ):
+        monkeypatch.setattr(fixes, fix_name, recording_fix(fix_name))
+
+    remediator.fix_all()
+
+    assert calls[:2] == ["ocr", "unicode"]

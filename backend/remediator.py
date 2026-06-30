@@ -636,6 +636,30 @@ class PDFRemediator:
                 message=str(e),
             ))
 
+        # 2a. Repair used font codes missing from ToUnicode. Deterministic
+        # evidence is preferred; DeepSeek V4 Pro is called only for ambiguity.
+        try:
+            r = fixes.fix_pdf_unicode_mappings(target)
+            results.append(RemediationResult(
+                issue_id=r["issue_id"],
+                success=r["success"],
+                message=r["message"],
+                new_value=r.get("new_value", ""),
+                details=r.get("details"),
+            ))
+        except Exception as e:
+            logger.error(f"fix_pdf_unicode_mappings raised: {e}", exc_info=True)
+            results.append(RemediationResult(
+                issue_id="pdf-unicode-mapping",
+                success=False,
+                message=str(e),
+                details={
+                    "llm_invoked": False,
+                    "llm_recommendation_applied": False,
+                    "llm_unavailable": True,
+                },
+            ))
+
         # 2b. Inject link annotations for plain text URLs so they exist before tagging
         try:
             r = fixes.inject_link_annotations(target)

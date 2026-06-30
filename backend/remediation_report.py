@@ -464,6 +464,28 @@ def generate_remediation_report_for_api(
     fixed = [r for r in remediation_results if r.get("success")]
     failed = [r for r in remediation_results if not r.get("success")]
 
+    unicode_result = next(
+        (r for r in remediation_results if r.get("issue_id") == "pdf-unicode-mapping"),
+        None,
+    )
+    unicode_details = (unicode_result or {}).get("details") or {}
+    if unicode_details.get("llm_unavailable"):
+        llm_disclosure = (
+            "DeepSeek V4 Pro was requested but unavailable; "
+            "no ambiguous mappings were changed."
+        )
+    elif unicode_details.get("llm_invoked"):
+        evaluated = int(unicode_details.get("evaluated", 0))
+        applied = int(unicode_details.get("applied", 0))
+        llm_disclosure = (
+            f"DeepSeek V4 Pro evaluated {evaluated} ambiguous Unicode mapping(s); "
+            f"{applied} recommendation(s) were applied."
+        )
+    else:
+        llm_disclosure = (
+            "DeepSeek V4 Pro was not used; all Unicode decisions were deterministic."
+        )
+
     manual_remaining = [
         {
             "id": i.get("id"),
@@ -493,6 +515,7 @@ def generate_remediation_report_for_api(
             "fixed": len(fixed),
             "failed": len(failed),
             "manual_remaining": len(manual_remaining),
+            "llm_disclosure": llm_disclosure,
         },
         "results": remediation_results,
         "manual_fixes_needed": manual_remaining,

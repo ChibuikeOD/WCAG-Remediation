@@ -1299,6 +1299,28 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 # 8. Scanned pages / OCR (WCAG 1.4.5)
 # ---------------------------------------------------------------------------
 
+def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
+    """Repair incomplete ToUnicode maps, using DeepSeek only for ambiguity."""
+    from .config import settings
+    from .deepseek_unicode_verifier import verify_ambiguous_unicode
+    from .pdf_unicode_mapping import repair_missing_unicode
+
+    verifier = None
+    if settings.PDF_UNICODE_LLM_ENABLED and settings.DEEPSEEK_API_KEY:
+        def verifier(context: Dict[str, Any]):
+            return verify_ambiguous_unicode(
+                context,
+                api_key=settings.DEEPSEEK_API_KEY or "",
+                min_confidence=settings.PDF_UNICODE_LLM_MIN_CONFIDENCE,
+                timeout=settings.PDF_UNICODE_LLM_TIMEOUT_SECONDS,
+            )
+
+    return repair_missing_unicode(
+        Path(pdf_path),
+        verifier=verifier,
+        max_occurrences=settings.PDF_UNICODE_LLM_MAX_OCCURRENCES,
+    )
+
 def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
     """Run OCR on image-only pages to insert a searchable text layer."""
     from .config import settings

@@ -141,10 +141,16 @@ def test_conflicting_font_evidence_stays_ambiguous(tmp_path: Path) -> None:
 
 
 LOCAL_DISSERTATION = (
-    Path(__file__).parents[4]
+    Path(__file__).parents[2]
     / "Check PDFs"
     / "Duseau K.L. CAS PhD Dissertation 2025.pdf"
 )
+if not LOCAL_DISSERTATION.exists():
+    LOCAL_DISSERTATION = (
+        Path(__file__).parents[4]
+        / "Check PDFs"
+        / "Duseau K.L. CAS PhD Dissertation 2025.pdf"
+    )
 
 
 @pytest.mark.skipif(

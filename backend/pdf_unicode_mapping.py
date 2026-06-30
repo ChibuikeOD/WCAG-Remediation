@@ -7,7 +7,9 @@ from io import BytesIO
 from pathlib import Path
 import os
 import re
+import shutil
 from statistics import median
+import subprocess
 import tempfile
 from typing import Iterable, Optional
 
@@ -536,7 +538,40 @@ def verify_repair(
             after.close()
     except Exception as exc:
         return False, f"render-verification-error: {exc}"
+    qpdf_ok, qpdf_reason = _qpdf_check(candidate)
+    if not qpdf_ok:
+        return False, qpdf_reason
     return True, "ok"
+
+
+def _qpdf_check(pdf_path: Path) -> tuple[bool, str]:
+    workspace_qpdf = (
+        Path(__file__).resolve().parents[1]
+        / "pdfua_remediator_cpp"
+        / "deps"
+        / "qpdf-12.3.2-msvc64"
+        / "bin"
+        / "qpdf.exe"
+    )
+    executable = shutil.which("qpdf")
+    if executable is None and workspace_qpdf.exists():
+        executable = str(workspace_qpdf)
+    if executable is None:
+        return True, "qpdf-unavailable"
+    try:
+        completed = subprocess.run(
+            [executable, "--check", str(pdf_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"qpdf-check-error: {exc}"
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "qpdf check failed").strip()
+        return False, f"qpdf-check-failed: {detail}"
+    return True, "qpdf-ok"
 
 
 def _disclosure(evaluated: int, applied: int, unavailable: bool) -> str:

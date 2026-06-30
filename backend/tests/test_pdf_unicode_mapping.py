@@ -16,6 +16,7 @@ from backend.pdf_unicode_mapping import (
     parse_to_unicode_cmap,
     repair_missing_unicode,
     resolve_deterministically,
+    verify_repair,
 )
 
 
@@ -259,3 +260,20 @@ def test_failed_post_write_verification_rolls_back(tmp_path: Path, monkeypatch) 
     assert result["details"]["rollback_reason"] == "visual-diff"
     assert result["details"]["llm_recommendation_applied"] is False
     assert "0 recommendation(s) were applied" in result["message"]
+
+
+def test_verify_repair_rejects_qpdf_failure(tmp_path: Path, monkeypatch) -> None:
+    original = build_type0_pdf(tmp_path / "original.pdf", shown_cid=0x0374)
+    candidate = tmp_path / "candidate.pdf"
+    candidate.write_bytes(original.read_bytes())
+    monkeypatch.setattr(
+        unicode_module,
+        "_qpdf_check",
+        lambda _path: (False, "qpdf-check-failed"),
+        raising=False,
+    )
+
+    verified, reason = verify_repair(original, candidate, [], set())
+
+    assert verified is False
+    assert reason == "qpdf-check-failed"

@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
+from io import BytesIO
 from pathlib import Path
 import re
+from statistics import median
 from typing import Iterable, Optional
 
+import fitz
+from fontTools import agl
+from fontTools.ttLib import TTFont
+from PIL import Image, ImageDraw
 import pikepdf
 
 
@@ -44,6 +51,242 @@ class MissingUnicodeFinding:
 class ParsedToUnicode:
     code_width: int
     mappings: dict[int, str]
+
+
+@dataclass(frozen=True)
+class FontEvidence:
+    unicode_by_gid: dict[int, tuple[str, ...]]
+    glyph_name_by_gid: dict[int, str]
+    unicode_by_glyph_name: dict[str, str]
+
+
+@dataclass(frozen=True)
+class DeterministicResolution:
+    text: str
+    evidence: tuple[str, ...]
+
+
+def resolve_deterministically(
+    finding: MissingUnicodeFinding, evidence: FontEvidence
+) -> Optional[DeterministicResolution]:
+    """Resolve only when every authoritative font signal agrees."""
+    if finding.gid is None:
+        return None
+    candidates: dict[str, set[str]] = {}
+    cmap_values = evidence.unicode_by_gid.get(finding.gid, ())
+    for value in cmap_values:
+        candidates.setdefault(value, set()).add("font-cmap")
+    glyph_name = evidence.glyph_name_by_gid.get(finding.gid)
+    if glyph_name:
+        value = evidence.unicode_by_glyph_name.get(glyph_name)
+        if value:
+            candidates.setdefault(value, set()).add("glyph-name")
+    if len(candidates) != 1:
+        return None
+    text, sources = next(iter(candidates.items()))
+    return DeterministicResolution(text=text, evidence=tuple(sorted(sources)))
+
+
+def collect_font_evidence(
+    pdf_path: Path, finding: MissingUnicodeFinding
+) -> FontEvidence:
+    """Collect authoritative Unicode and glyph-name evidence from an embedded font."""
+    unicode_by_gid: dict[int, set[str]] = {}
+    glyph_name_by_gid: dict[int, str] = {}
+    unicode_by_glyph_name: dict[str, str] = {}
+    with pikepdf.open(pdf_path) as pdf:
+        try:
+            font = pdf.get_object(finding.font_objgen)
+            descendant = font.get("/DescendantFonts", [])[0]
+            descriptor = descendant.get("/FontDescriptor")
+            font_stream = None
+            if descriptor:
+                for key in ("/FontFile2", "/FontFile3", "/FontFile"):
+                    candidate = descriptor.get(key)
+                    if isinstance(candidate, pikepdf.Stream):
+                        font_stream = candidate
+                        break
+            if font_stream is None:
+                return FontEvidence({}, {}, {})
+            ttfont = TTFont(BytesIO(font_stream.read_bytes()), lazy=False)
+        except Exception:
+            return FontEvidence({}, {}, {})
+
+    glyph_order = ttfont.getGlyphOrder()
+    name_to_gid = {name: index for index, name in enumerate(glyph_order)}
+    glyph_name_by_gid = {index: name for index, name in enumerate(glyph_order)}
+    if "cmap" in ttfont:
+        for table in ttfont["cmap"].tables:
+            if not table.isUnicode():
+                continue
+            for codepoint, glyph_name in table.cmap.items():
+                gid = name_to_gid.get(glyph_name)
+                if gid is not None:
+                    unicode_by_gid.setdefault(gid, set()).add(chr(codepoint))
+    for glyph_name in glyph_order:
+        try:
+            value = agl.toUnicode(glyph_name)
+        except Exception:
+            value = ""
+        if value:
+            unicode_by_glyph_name[glyph_name] = value
+    ttfont.close()
+    return FontEvidence(
+        unicode_by_gid={gid: tuple(sorted(values)) for gid, values in unicode_by_gid.items()},
+        glyph_name_by_gid=glyph_name_by_gid,
+        unicode_by_glyph_name=unicode_by_glyph_name,
+    )
+
+
+def _png_data_url(image: Image.Image) -> str:
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def _render_crop(
+    page: fitz.Page,
+    clip: fitz.Rect,
+    *,
+    dpi: int,
+    target: Optional[fitz.Rect] = None,
+) -> str:
+    clip = clip & page.rect
+    pix = page.get_pixmap(clip=clip, dpi=dpi, alpha=False)
+    image = Image.open(BytesIO(pix.tobytes("png"))).convert("RGB")
+    if target is not None:
+        scale = dpi / 72.0
+        left = int((target.x0 - clip.x0) * scale) - 3
+        top = int((target.y0 - clip.y0) * scale) - 3
+        right = int((target.x1 - clip.x0) * scale) + 3
+        bottom = int((target.y1 - clip.y0) * scale) + 3
+        ImageDraw.Draw(image).rectangle((left, top, right, bottom), outline="red", width=2)
+    return _png_data_url(image)
+
+
+def _unicode_notation(text: str) -> list[str]:
+    return [f"U+{ord(char):04X}" for char in text]
+
+
+def _mask_unknown(text: str) -> str:
+    masked = text.replace("\ufffd", "[UNKNOWN]").strip()
+    return masked if "[UNKNOWN]" in masked else masked + " [UNKNOWN]"
+
+
+def _position_label(page: fitz.Page, origin_y: float, target_size: float) -> str:
+    nearby_origins: list[float] = []
+    nearby_sizes: list[float] = []
+    for span in page.get_texttrace():
+        for _unicode, _gid, origin, _bbox in span.get("chars", ()):
+            if abs(origin[1] - origin_y) <= max(8.0, target_size):
+                nearby_origins.append(float(origin[1]))
+                nearby_sizes.append(float(span.get("size", target_size)))
+    if not nearby_origins:
+        return "baseline"
+    baseline = median(nearby_origins)
+    normal_size = median(nearby_sizes)
+    if target_size < normal_size * 0.9 and origin_y < baseline - 1.0:
+        return "superscript"
+    if target_size < normal_size * 0.9 and origin_y > baseline + 1.0:
+        return "subscript"
+    return "baseline"
+
+
+def build_ambiguity_context(
+    pdf_path: Path,
+    finding: MissingUnicodeFinding,
+    evidence: FontEvidence,
+    *,
+    max_occurrences: int = 3,
+) -> dict:
+    """Build visual, textual, and typographic evidence for the LLM fallback."""
+    document = fitz.open(pdf_path)
+    occurrences: list[dict] = []
+    images: list[str] = []
+    isolated: Optional[str] = None
+    base_font = finding.base_font.lstrip("/")
+    seen_pages: set[int] = set()
+    try:
+        for occurrence in finding.occurrences:
+            if len(occurrences) >= max_occurrences:
+                break
+            page = document[occurrence.page_number - 1]
+            matched = None
+            for span in page.get_texttrace():
+                if span.get("font") != base_font:
+                    continue
+                for _unicode, gid, origin, bbox in span.get("chars", ()):
+                    if finding.gid is not None and gid != finding.gid:
+                        continue
+                    matched = (span, origin, fitz.Rect(bbox))
+                    break
+                if matched:
+                    break
+            if not matched:
+                continue
+            span, origin, bbox = matched
+            line_clip = fitz.Rect(
+                max(0, bbox.x0 - 130),
+                max(0, bbox.y0 - 14),
+                min(page.rect.width, bbox.x1 + 130),
+                min(page.rect.height, bbox.y1 + 14),
+            )
+            paragraph_clip = fitz.Rect(
+                0,
+                max(0, bbox.y0 - 35),
+                page.rect.width,
+                min(page.rect.height, bbox.y1 + 35),
+            )
+            line_text = page.get_text("text", clip=line_clip)
+            paragraph = page.get_text("text", clip=paragraph_clip).strip()
+            occurrences.append(
+                {
+                    "page": occurrence.page_number,
+                    "masked_line": _mask_unknown(line_text),
+                    "paragraph": _mask_unknown(paragraph),
+                    "position": _position_label(page, float(origin[1]), float(span["size"])),
+                    "font_size": round(float(span["size"]), 3),
+                    "baseline_y": round(float(origin[1]), 3),
+                }
+            )
+            images.append(_render_crop(page, line_clip, dpi=300, target=bbox))
+            if isolated is None:
+                isolated = _render_crop(
+                    page,
+                    fitz.Rect(bbox.x0 - 2, bbox.y0 - 2, bbox.x1 + 2, bbox.y1 + 2),
+                    dpi=600,
+                )
+            seen_pages.add(occurrence.page_number)
+    finally:
+        metadata = document.metadata or {}
+        document.close()
+
+    candidate_texts: set[str] = set()
+    if finding.gid is not None:
+        candidate_texts.update(evidence.unicode_by_gid.get(finding.gid, ()))
+        glyph_name = evidence.glyph_name_by_gid.get(finding.gid)
+        if glyph_name and evidence.unicode_by_glyph_name.get(glyph_name):
+            candidate_texts.add(evidence.unicode_by_glyph_name[glyph_name])
+    candidate_sequences = [
+        notation
+        for text in sorted(candidate_texts)
+        for notation in _unicode_notation(text)
+    ]
+    contradictions = sorted(candidate_texts) if len(candidate_texts) > 1 else []
+    if isolated:
+        images.insert(0, isolated)
+    return {
+        "document_title": metadata.get("title") or pdf_path.stem,
+        "font": finding.base_font,
+        "cid": finding.cid,
+        "gid": finding.gid,
+        "glyph_name": evidence.glyph_name_by_gid.get(finding.gid or -1),
+        "candidates": candidate_sequences,
+        "deterministic_contradictions": contradictions,
+        "occurrences": occurrences,
+        "images": images,
+        "sampled_pages": sorted(seen_pages),
+    }
 
 
 def _decode_utf16be(value: bytes) -> str:

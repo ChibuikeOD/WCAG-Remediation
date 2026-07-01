@@ -1314,6 +1314,7 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
                 min_confidence=settings.PDF_UNICODE_LLM_MIN_CONFIDENCE,
                 model=settings.PDF_UNICODE_LLM_MODEL,
                 vision_fallback_model=settings.PDF_UNICODE_LLM_VISION_FALLBACK_MODEL,
+                use_vision=settings.PDF_UNICODE_LLM_USE_VISION,
                 timeout=settings.PDF_UNICODE_LLM_TIMEOUT_SECONDS,
             )
 
@@ -1327,6 +1328,7 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
         details["min_confidence"] = settings.PDF_UNICODE_LLM_MIN_CONFIDENCE
         details["max_occurrences"] = settings.PDF_UNICODE_LLM_MAX_OCCURRENCES
         details["vision_fallback_model"] = settings.PDF_UNICODE_LLM_VISION_FALLBACK_MODEL
+        details["use_vision"] = settings.PDF_UNICODE_LLM_USE_VISION
         if settings.PDF_UNICODE_LLM_MODEL:
             details["model"] = settings.PDF_UNICODE_LLM_MODEL
     return result

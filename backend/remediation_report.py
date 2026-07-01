@@ -620,6 +620,11 @@ def generate_remediation_report_for_api(
         )
         _add_key_value_rows(
             summary_rows,
+            "Vision requests enabled",
+            details.get("use_vision"),
+        )
+        _add_key_value_rows(
+            summary_rows,
             "Minimum confidence threshold",
             details.get("min_confidence"),
         )
@@ -666,6 +671,9 @@ def generate_remediation_report_for_api(
             )
             _add_key_value_rows(
                 decision_rows, "Model used", decision.get("llm_model_used")
+            )
+            _add_key_value_rows(
+                decision_rows, "Evidence mode", decision.get("llm_evidence_mode")
             )
             _add_key_value_rows(
                 decision_rows,

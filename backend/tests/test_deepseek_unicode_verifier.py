@@ -5,6 +5,7 @@ import pytest
 
 from backend.deepseek_unicode_verifier import (
     build_deepseek_request,
+    build_deepseek_text_request,
     validate_deepseek_response,
     verify_ambiguous_unicode,
 )
@@ -98,6 +99,28 @@ def test_acceptance_gate_accepts_verified_consistent_character() -> None:
     assert decision.rejection_reason is None
 
 
+def test_acceptance_gate_ignores_vision_probe_in_text_only_mode() -> None:
+    response = valid_response() | {"vision_probe": ""}
+    decision = validate_deepseek_response(
+        response,
+        ambiguity_context(),
+        "K7M4Q2",
+        0.98,
+        require_vision_probe=False,
+    )
+
+    assert decision.accepted is True
+    assert decision.text == "2"
+
+
+def test_text_request_uses_plain_string_user_content() -> None:
+    request = build_deepseek_text_request(ambiguity_context(), model="deepseek-v4-pro")
+
+    assert request["model"] == "deepseek-v4-pro"
+    assert isinstance(request["messages"][1]["content"], str)
+    assert "No glyph images are available" in request["messages"][1]["content"]
+
+
 def test_acceptance_gate_rejects_invalid_unicode_sequence() -> None:
     response = valid_response() | {
         "unicode_sequence": ["U+D800"],
@@ -116,11 +139,13 @@ def test_verifier_calls_deepseek_and_accepts_strict_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         assert payload["model"] == "deepseek-v4-pro"
+        assert isinstance(payload["messages"][1]["content"], str)
+        text_response = valid_response() | {"vision_probe": ""}
         return httpx.Response(
             200,
             json={
                 "choices": [
-                    {"message": {"content": json.dumps(valid_response())}}
+                    {"message": {"content": json.dumps(text_response)}}
                 ]
             },
         )
@@ -137,6 +162,7 @@ def test_verifier_calls_deepseek_and_accepts_strict_json() -> None:
 
     assert decision.accepted is True
     assert decision.text == "2"
+    assert decision.evidence_mode == "text-only"
 
 
 def test_verifier_fails_closed_on_api_error() -> None:
@@ -161,22 +187,30 @@ def test_verifier_fails_closed_on_api_error() -> None:
     assert decision.response["api_error"]["status_code"] == 429
 
 
-def test_verifier_retries_with_vision_fallback_after_400() -> None:
-    models: list[str] = []
+def test_verifier_falls_back_to_text_only_when_vision_rejected() -> None:
+    modes: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        models.append(payload["model"])
-        if payload["model"] == "deepseek-v4-pro":
+        user_content = payload["messages"][1]["content"]
+        if isinstance(user_content, list):
+            modes.append(f"vision:{payload['model']}")
             return httpx.Response(
                 400,
-                json={"error": {"message": "vision not supported", "type": "invalid_request_error"}},
+                json={
+                    "error": {
+                        "message": "unknown variant `image_url`, expected `text`",
+                        "type": "invalid_request_error",
+                    }
+                },
             )
+        modes.append("text-only")
+        text_response = valid_response() | {"vision_probe": ""}
         return httpx.Response(
             200,
             json={
                 "choices": [
-                    {"message": {"content": json.dumps(valid_response())}}
+                    {"message": {"content": json.dumps(text_response)}}
                 ]
             },
         )
@@ -187,14 +221,20 @@ def test_verifier_retries_with_vision_fallback_after_400() -> None:
         min_confidence=0.98,
         model="deepseek-v4-pro",
         vision_fallback_model="deepseek-chat",
+        use_vision=True,
         transport=httpx.MockTransport(handler),
         probe_token="K7M4Q2",
         probe_image="data:image/png;base64,PROBE",
     )
 
-    assert models == ["deepseek-v4-pro", "deepseek-chat"]
+    assert modes == [
+        "vision:deepseek-v4-pro",
+        "vision:deepseek-chat",
+        "text-only",
+    ]
     assert decision.accepted is True
-    assert decision.model_used == "deepseek-chat"
+    assert decision.model_used == "deepseek-v4-pro"
+    assert decision.evidence_mode == "text-only"
 
 
 def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
@@ -224,3 +264,4 @@ def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
     assert decision.rejection_reason == "invalid-json"
     assert decision.response is not None
     assert "raw_content" in decision.response
+    assert decision.evidence_mode == "text-only"

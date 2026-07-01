@@ -663,6 +663,7 @@ def repair_missing_unicode(
             "confidence": decision.confidence,
             "llm_context": context_for_record,
             "llm_model_used": decision.model_used,
+            "llm_evidence_mode": decision.evidence_mode,
         }
         if decision.response is not None:
             record["llm_response"] = decision.response

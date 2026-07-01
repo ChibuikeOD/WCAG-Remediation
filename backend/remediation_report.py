@@ -21,6 +21,8 @@ try:
         PageBreak, Image
     )
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -502,9 +504,13 @@ def generate_remediation_report_for_api(
     ]
 
     styles = getSampleStyleSheet()
+    unicode_font_name = "STSong-Light"
+    if unicode_font_name not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(UnicodeCIDFont(unicode_font_name))
     title_style = ParagraphStyle(
         "ApiReportTitle",
         parent=styles["Title"],
+        fontName=unicode_font_name,
         fontSize=20,
         leading=24,
         textColor=HexColor("#0e7490"),
@@ -513,6 +519,7 @@ def generate_remediation_report_for_api(
     section_style = ParagraphStyle(
         "ApiReportSection",
         parent=styles["Heading2"],
+        fontName=unicode_font_name,
         fontSize=14,
         leading=17,
         textColor=HexColor("#164e63"),
@@ -522,6 +529,7 @@ def generate_remediation_report_for_api(
     item_style = ParagraphStyle(
         "ApiReportItem",
         parent=styles["BodyText"],
+        fontName=unicode_font_name,
         fontSize=10,
         leading=14,
         spaceAfter=4,
@@ -540,7 +548,13 @@ def generate_remediation_report_for_api(
             story.append(dynamic_paragraph(f"Issue ID: {result.get('issue_id', 'N/A')}"))
             story.append(dynamic_paragraph(f"Message: {result.get('message', 'N/A')}"))
             details = result.get("details") or {}
-            old_value = result.get("old_value", details.get("old_value"))
+            details_old_value = details.get(
+                "original_value", details.get("old_value")
+            )
+            old_value = result.get(
+                "original_value",
+                result.get("old_value", details_old_value),
+            )
             new_value = result.get("new_value", details.get("new_value"))
             if old_value is not None:
                 story.append(dynamic_paragraph(f"Previous value: {old_value}"))

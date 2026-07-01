@@ -55,7 +55,7 @@ def test_api_report_is_readable_pdf_with_remediation_sections(tmp_path: Path) ->
                 "issue_id": "fixed-1",
                 "success": True,
                 "message": "Document language was set successfully",
-                "old_value": "unset",
+                "original_value": "unset",
                 "new_value": "en-US",
             },
             {
@@ -77,10 +77,58 @@ def test_api_report_is_readable_pdf_with_remediation_sections(tmp_path: Path) ->
     assert "accessible-source.pdf" in text
     assert "Successful Fixes" in text
     assert "Document language was set successfully" in text
+    assert "Previous value: unset" in text
     assert "Failed Fixes" in text
     assert "Could not create a bookmark hierarchy" in text
     assert "Remaining Manual Work" in text
     assert "Add concise alternative text manually" in text
+
+
+def test_api_report_preserves_multilingual_dynamic_text(tmp_path: Path) -> None:
+    path = generate_remediation_report_for_api(
+        original_filename="中文报告.pdf",
+        file_id="文件-1",
+        report_id="报告-1",
+        file_type="pdf",
+        analysis_report={"all_issues": []},
+        remediation_results=[
+            {
+                "issue_id": "语言-1",
+                "success": True,
+                "message": "修复成功：中文内容已保留",
+            }
+        ],
+        remediated_file_path="输出.pdf",
+        output_dir=tmp_path,
+    )
+
+    text = extract_pdf_text(path)
+    assert "中文报告.pdf" in text
+    assert "文件-1" in text
+    assert "修复成功：中文内容已保留" in text
+
+
+def test_api_report_treats_hostile_markup_as_literal_text(tmp_path: Path) -> None:
+    hostile = "Literal <b>bold</b> <font>color</font> & &copy;"
+    path = generate_remediation_report_for_api(
+        original_filename="markup.pdf",
+        file_id="file-1",
+        report_id="report-1",
+        file_type="pdf",
+        analysis_report={"all_issues": []},
+        remediation_results=[
+            {
+                "issue_id": "markup-1",
+                "success": True,
+                "message": hostile,
+            }
+        ],
+        remediated_file_path=None,
+        output_dir=tmp_path,
+    )
+
+    text = extract_pdf_text(path)
+    assert hostile in text
 
 
 @pytest.mark.parametrize(

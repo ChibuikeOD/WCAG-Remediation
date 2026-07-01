@@ -307,6 +307,51 @@ class TestRemediationReportDownloadEndpoint:
 
         assert response.status_code == 403
 
+    def test_download_remediation_report_returns_404_for_orphaned_report(self, client):
+        report_id = "orphaned-report"
+        db = main_module.SessionLocal()
+        try:
+            db.add(database.AccessibilityReport(
+                id=report_id,
+                file_id="missing-file",
+                report_json="{}",
+            ))
+            db.commit()
+        finally:
+            db.close()
+        (settings.OUTPUT_DIR / f"Remediation_Report_{report_id}_result.pdf").write_bytes(b"orphaned")
+
+        response = client.get(f"/remediate/report/{report_id}")
+
+        assert response.status_code == 404
+
+    def test_download_remediation_report_rejects_ownerless_report(self, client):
+        report_id = "ownerless-report"
+        db = main_module.SessionLocal()
+        try:
+            uploaded_file = database.UploadedFile(
+                id=f"file-{report_id}",
+                filename="source.pdf",
+                file_type="pdf",
+                file_path="unused/source.pdf",
+                file_size=1,
+                owner_id=None,
+            )
+            db.add(uploaded_file)
+            db.add(database.AccessibilityReport(
+                id=report_id,
+                file_id=uploaded_file.id,
+                report_json="{}",
+            ))
+            db.commit()
+        finally:
+            db.close()
+        (settings.OUTPUT_DIR / f"Remediation_Report_{report_id}_result.pdf").write_bytes(b"ownerless")
+
+        response = client.get(f"/remediate/report/{report_id}")
+
+        assert response.status_code == 403
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

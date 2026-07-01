@@ -796,7 +796,9 @@ async def download_remediation_report_by_id(
             raise HTTPException(status_code=404, detail="Report not found")
 
         file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
-        if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+        if not file_rec:
+            raise HTTPException(status_code=404, detail="Associated file not found")
+        if file_rec.owner_id != user.id:
             raise HTTPException(status_code=403, detail="Access denied to this report.")
     finally:
         db_conn.close()

@@ -17,6 +17,7 @@ import type {
 import {
   remediateDocument,
   getRemediatedFileURL,
+  getRemediationReportURL,
 } from '../api';
 
 interface RemediationPanelProps {
@@ -353,7 +354,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
 
         {/* Modal footer */}
         <div
-          className="px-6 py-4 flex justify-end gap-3"
+          className="px-6 py-4 flex flex-wrap justify-end gap-3"
           style={{ borderTop: '1px solid #1a2840' }}
         >
           {!results ? (
@@ -384,6 +385,14 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
               <button onClick={onClose} className="btn btn-secondary">
                 Close
               </button>
+              <a
+                href={getRemediationReportURL(report.id)}
+                download
+                className="btn btn-secondary"
+              >
+                <Download className="w-4 h-4" aria-hidden="true" />
+                Download Remediation Report
+              </a>
               <a
                 href={getRemediatedFileURL(report.id)}
                 download

@@ -177,6 +177,10 @@ export function getRemediatedFileURL(reportId: string): string {
   return `${API_BASE}/remediate/download/${reportId}`;
 }
 
+export function getRemediationReportURL(reportId: string): string {
+  return `${API_BASE}/remediate/report/${reportId}`;
+}
+
 // Compare LayoutLM vs OpenDataLoader tagging (JSON report, or ZIP with overlays)
 export async function compareTaggingPipelines(
   reportId: string,

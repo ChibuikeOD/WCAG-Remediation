@@ -15,3 +15,16 @@ def test_frontend_does_not_offer_structure_rebuild_opt_out():
     assert "overwriteTags" not in panel_source
     assert "overwrite_tags" not in api_source
     assert "overwrite_tags" not in types_source
+
+
+def test_frontend_offers_remediation_report_download_after_remediation():
+    panel_source = (
+        REPO_ROOT / "frontend/src/components/RemediationPanel.tsx"
+    ).read_text(encoding="utf-8")
+    api_source = (REPO_ROOT / "frontend/src/api.ts").read_text(encoding="utf-8")
+
+    assert "getRemediationReportURL" in api_source
+    assert "`${API_BASE}/remediate/report/${reportId}`" in api_source
+    assert "getRemediationReportURL(report.id)" in panel_source
+    assert "Download Remediation Report" in panel_source
+    assert "flex-wrap" in panel_source

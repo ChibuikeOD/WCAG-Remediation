@@ -446,17 +446,19 @@ def generate_remediation_report_for_api(
     output_dir: Path,
 ) -> Path:
     """
-    Generate a remediation report for the main `/remediate` API.
-
-    This always generates a JSON report (even if reportlab is installed) because the
-    remediation pipeline returns `RemediationResult` objects rather than the legacy
-    `changes[]` shape used by `generate_remediation_report()`.
+    Generate a human-readable PDF remediation report for the main `/remediate` API.
     """
-    import json
+    if not HAS_REPORTLAB:
+        raise RuntimeError(
+            "ReportLab is required to generate PDF remediation reports."
+        )
+
+    from html import escape
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"Remediation_Report_{report_id}_{timestamp}.json"
+    generated_at = datetime.now()
+    timestamp = generated_at.strftime("%Y%m%d_%H%M%S")
+    filename = f"Remediation_Report_{report_id}_{timestamp}.pdf"
     output_path = output_dir / filename
 
     # Minimal before/after summary using what the API already has
@@ -499,30 +501,132 @@ def generate_remediation_report_for_api(
         if not i.get("automatable_fix", False)
     ]
 
-    report_obj = {
-        "report_type": "remediation",
-        "generated_at": datetime.now().isoformat(),
-        "report_id": report_id,
-        "document": {
-            "original_filename": original_filename,
-            "file_id": file_id,
-            "file_type": file_type,
-            "remediated_file_path": remediated_file_path,
-        },
-        "summary": {
-            "issues_before": issues_before,
-            "results_total": len(remediation_results),
-            "fixed": len(fixed),
-            "failed": len(failed),
-            "manual_remaining": len(manual_remaining),
-            "llm_disclosure": llm_disclosure,
-        },
-        "results": remediation_results,
-        "manual_fixes_needed": manual_remaining,
-    }
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ApiReportTitle",
+        parent=styles["Title"],
+        fontSize=20,
+        leading=24,
+        textColor=HexColor("#0e7490"),
+        spaceAfter=18,
+    )
+    section_style = ParagraphStyle(
+        "ApiReportSection",
+        parent=styles["Heading2"],
+        fontSize=14,
+        leading=17,
+        textColor=HexColor("#164e63"),
+        spaceBefore=14,
+        spaceAfter=8,
+    )
+    item_style = ParagraphStyle(
+        "ApiReportItem",
+        parent=styles["BodyText"],
+        fontSize=10,
+        leading=14,
+        spaceAfter=4,
+    )
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(report_obj, f, indent=2)
+    def dynamic_paragraph(value: Any, style: ParagraphStyle = item_style) -> Paragraph:
+        """Create a Paragraph whose dynamic content cannot be parsed as markup."""
+        return Paragraph(escape(str(value), quote=True), style)
+
+    def add_result_details(story: List[Any], results: List[Dict[str, Any]]) -> None:
+        if not results:
+            story.append(Paragraph("None.", item_style))
+            return
+
+        for result in results:
+            story.append(dynamic_paragraph(f"Issue ID: {result.get('issue_id', 'N/A')}"))
+            story.append(dynamic_paragraph(f"Message: {result.get('message', 'N/A')}"))
+            details = result.get("details") or {}
+            old_value = result.get("old_value", details.get("old_value"))
+            new_value = result.get("new_value", details.get("new_value"))
+            if old_value is not None:
+                story.append(dynamic_paragraph(f"Previous value: {old_value}"))
+            if new_value is not None:
+                story.append(dynamic_paragraph(f"New value: {new_value}"))
+            story.append(Spacer(1, 6))
+
+    doc = SimpleDocTemplate(
+        str(output_path),
+        pagesize=letter,
+        rightMargin=0.7 * inch,
+        leftMargin=0.7 * inch,
+        topMargin=0.7 * inch,
+        bottomMargin=0.7 * inch,
+        title="PDF Accessibility Remediation Report",
+    )
+    story: List[Any] = [
+        Paragraph("PDF Accessibility Remediation Report", title_style),
+        Paragraph("Document Information", section_style),
+        dynamic_paragraph(f"Document name: {original_filename}"),
+        dynamic_paragraph(f"Report ID: {report_id}"),
+        dynamic_paragraph(f"File ID: {file_id}"),
+        dynamic_paragraph(f"File type: {file_type}"),
+        dynamic_paragraph(f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S')}"),
+        dynamic_paragraph(
+            f"Remediated file: {remediated_file_path or 'Not available'}"
+        ),
+        Paragraph("Summary", section_style),
+    ]
+
+    summary_rows = [
+        ("Issues before remediation", issues_before),
+        ("Successful fixes", len(fixed)),
+        ("Failed fixes", len(failed)),
+        ("Manual work remaining", len(manual_remaining)),
+    ]
+    summary_table = Table(
+        [
+            [dynamic_paragraph(label), dynamic_paragraph(value)]
+            for label, value in summary_rows
+        ],
+        colWidths=[3.8 * inch, 1.4 * inch],
+    )
+    summary_table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#cbd5e1")),
+                ("BACKGROUND", (0, 0), (0, -1), HexColor("#f1f5f9")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    story.extend(
+        [
+            summary_table,
+            Paragraph("AI-Use Disclosure", section_style),
+            dynamic_paragraph(llm_disclosure),
+            Paragraph("Successful Fixes", section_style),
+        ]
+    )
+    add_result_details(story, fixed)
+    story.append(Paragraph("Failed Fixes", section_style))
+    add_result_details(story, failed)
+
+    story.append(Paragraph("Remaining Manual Work", section_style))
+    if not manual_remaining:
+        story.append(Paragraph("None.", item_style))
+    else:
+        for issue in manual_remaining:
+            story.append(dynamic_paragraph(f"Issue ID: {issue.get('id', 'N/A')}"))
+            story.append(dynamic_paragraph(f"Rule: {issue.get('rule_id', 'N/A')}"))
+            story.append(dynamic_paragraph(f"Name: {issue.get('rule_name', 'N/A')}"))
+            story.append(dynamic_paragraph(f"Severity: {issue.get('severity', 'N/A')}"))
+            story.append(dynamic_paragraph(f"Message: {issue.get('message', 'N/A')}"))
+            story.append(
+                dynamic_paragraph(
+                    f"Suggested manual fix: {issue.get('fix_suggestion', 'N/A')}"
+                )
+            )
+            story.append(Spacer(1, 6))
+
+    doc.build(story)
 
     logger.info(f"Generated remediation report: {output_path}")
     return output_path

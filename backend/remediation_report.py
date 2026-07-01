@@ -635,6 +635,9 @@ def generate_remediation_report_for_api(
             details.get("min_confidence"),
         )
         _add_key_value_rows(
+            summary_rows, "Retry attempts per request", details.get("max_attempts")
+        )
+        _add_key_value_rows(
             summary_rows,
             "Occurrence samples per glyph",
             details.get("max_occurrences"),
@@ -801,11 +804,26 @@ def generate_remediation_report_for_api(
                         mono=True,
                     )
                     _append_decision_table(story, error_rows)
-                elif raw_content:
+                elif raw_content is not None or llm_response.get("finish_reason"):
                     story.append(Spacer(1, 4))
                     story.append(Paragraph("Unparseable DeepSeek output", subsection_style))
-                    story.append(dynamic_paragraph(raw_content, mono_style))
-                if not api_error and not raw_content:
+                    unparseable_rows: List[List[Any]] = []
+                    _add_key_value_rows(
+                        unparseable_rows,
+                        "Finish reason",
+                        llm_response.get("finish_reason"),
+                    )
+                    _append_decision_table(story, unparseable_rows)
+                    if raw_content:
+                        story.append(dynamic_paragraph(raw_content, mono_style))
+                    else:
+                        story.append(
+                            dynamic_paragraph(
+                                "(DeepSeek returned an empty message body.)",
+                                mono_style,
+                            )
+                        )
+                if llm_response.get("status") in {"verified", "ambiguous"}:
                     story.append(Spacer(1, 4))
                     story.append(Paragraph("DeepSeek response", subsection_style))
                     response_rows: List[List[Any]] = []
@@ -841,6 +859,9 @@ def generate_remediation_report_for_api(
                     )
                     _add_key_value_rows(
                         response_rows, "Vision probe", llm_response.get("vision_probe")
+                    )
+                    _add_key_value_rows(
+                        response_rows, "Finish reason", llm_response.get("finish_reason")
                     )
                     _append_decision_table(story, response_rows)
                     story.append(Spacer(1, 2))

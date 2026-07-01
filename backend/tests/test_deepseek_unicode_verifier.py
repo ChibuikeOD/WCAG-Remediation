@@ -4,6 +4,8 @@ import httpx
 import pytest
 
 from backend.deepseek_unicode_verifier import (
+    _parse_chat_response,
+    _parse_json_object,
     build_deepseek_request,
     build_deepseek_text_request,
     validate_deepseek_response,
@@ -119,6 +121,8 @@ def test_text_request_uses_plain_string_user_content() -> None:
     assert request["model"] == "deepseek-v4-pro"
     assert isinstance(request["messages"][1]["content"], str)
     assert "No glyph images are available" in request["messages"][1]["content"]
+    assert request["response_format"] == {"type": "json_object"}
+    assert request["thinking"] == {"type": "disabled"}
 
 
 def test_acceptance_gate_rejects_invalid_unicode_sequence() -> None:
@@ -237,13 +241,18 @@ def test_verifier_falls_back_to_text_only_when_vision_rejected() -> None:
     assert decision.evidence_mode == "text-only"
 
 
-def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
+def test_verifier_extracts_json_from_prose_wrapped_response() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(
             200,
             json={
                 "choices": [
-                    {"message": {"content": "Here is the answer: " + json.dumps(valid_response())}}
+                    {
+                        "message": {
+                            "content": "Here is the answer: "
+                            + json.dumps(valid_response() | {"vision_probe": ""})
+                        }
+                    }
                 ]
             },
         )
@@ -260,8 +269,76 @@ def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
         probe_image="data:image/png;base64,PROBE",
     )
 
-    assert decision.accepted is False
-    assert decision.rejection_reason == "invalid-json"
-    assert decision.response is not None
-    assert "raw_content" in decision.response
+    assert decision.accepted is True
+    assert decision.text == "2"
     assert decision.evidence_mode == "text-only"
+
+
+def test_verifier_retries_empty_content_then_succeeds() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}]},
+            )
+        text_response = valid_response() | {"vision_probe": ""}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps(text_response)}}
+                ]
+            },
+        )
+
+    decision = verify_ambiguous_unicode(
+        ambiguity_context(),
+        api_key="secret",
+        min_confidence=0.98,
+        model="deepseek-v4-pro",
+        max_attempts=3,
+        transport=httpx.MockTransport(handler),
+        probe_token="K7M4Q2",
+        probe_image="data:image/png;base64,PROBE",
+    )
+
+    assert attempts["count"] == 2
+    assert decision.accepted is True
+    assert decision.text == "2"
+
+
+def test_parse_json_object_extracts_from_reasoning_content() -> None:
+    response = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "reasoning_content": json.dumps(
+                            valid_response() | {"vision_probe": ""}
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+    )
+
+    parsed, raw_text, finish_reason = _parse_chat_response(response)
+
+    assert parsed is not None
+    assert parsed["rendered_text"] == "2"
+    assert raw_text is not None
+    assert finish_reason == "stop"
+
+
+def test_parse_json_object_extracts_fenced_json() -> None:
+    payload = "```json\n" + json.dumps(valid_response()) + "\n```"
+    parsed = _parse_json_object(payload)
+
+    assert parsed is not None
+    assert parsed["rendered_text"] == "2"

@@ -45,6 +45,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults]           = useState<RemediationResult[] | null>(null);
   const [error, setError]               = useState<string | null>(null);
+  const [remediationReportAvailable, setRemediationReportAvailable] = useState(false);
 
   const automatableIssues = report.all_issues.filter((i) => i.automatable_fix && !i.fixed);
 
@@ -61,6 +62,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
       });
 
       setResults(response.results);
+      setRemediationReportAvailable(Boolean(response.remediation_report_filename));
 
       const successfulResults = response.results.filter((r) => r.success);
       const fixedRuleIds      = new Set<string>();
@@ -348,6 +350,27 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
               <p className="text-xs leading-relaxed" style={{ color: '#4a607a' }}>
                 The remediated file is ready to download. Re-upload it to verify all changes have been applied correctly.
               </p>
+
+              {!remediationReportAvailable && (
+                <div
+                  role="status"
+                  className="p-4 rounded-lg flex items-start gap-3"
+                  style={{
+                    background: 'rgba(245,158,11,0.06)',
+                    border: '1px solid rgba(245,158,11,0.15)',
+                  }}
+                >
+                  <AlertTriangle
+                    className="w-4 h-4 flex-shrink-0 mt-0.5"
+                    style={{ color: '#fcd34d' }}
+                    aria-hidden="true"
+                  />
+                  <p className="text-sm" style={{ color: '#fcd34d', opacity: 0.85 }}>
+                    Remediation succeeded, but the remediation report could not be generated or downloaded.
+                    The fixed PDF is still available below.
+                  </p>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -385,14 +408,16 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
               <button onClick={onClose} className="btn btn-secondary">
                 Close
               </button>
-              <a
-                href={getRemediationReportURL(report.id)}
-                download
-                className="btn btn-secondary"
-              >
-                <Download className="w-4 h-4" aria-hidden="true" />
-                Download Remediation Report
-              </a>
+              {remediationReportAvailable && (
+                <a
+                  href={getRemediationReportURL(report.id)}
+                  download
+                  className="btn btn-secondary"
+                >
+                  <Download className="w-4 h-4" aria-hidden="true" />
+                  Download Remediation Report
+                </a>
+              )}
               <a
                 href={getRemediatedFileURL(report.id)}
                 download

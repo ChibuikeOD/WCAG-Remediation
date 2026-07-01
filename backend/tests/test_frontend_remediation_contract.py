@@ -28,3 +28,16 @@ def test_frontend_offers_remediation_report_download_after_remediation():
     assert "getRemediationReportURL(report.id)" in panel_source
     assert "Download Remediation Report" in panel_source
     assert "flex-wrap" in panel_source
+    assert "const [remediationReportAvailable, setRemediationReportAvailable]" in panel_source
+    assert "useState(false)" in panel_source
+    assert (
+        "setRemediationReportAvailable(Boolean(response.remediation_report_filename))"
+        in panel_source
+    )
+    assert "{remediationReportAvailable && (" in panel_source
+    assert "{!remediationReportAvailable && (" in panel_source
+    assert 'role="status"' in panel_source
+    assert (
+        "Remediation succeeded, but the remediation report could not be generated or downloaded."
+        in panel_source
+    )

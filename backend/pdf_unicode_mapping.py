@@ -10,6 +10,7 @@ import re
 import shutil
 from statistics import median
 import subprocess
+import sys
 import tempfile
 from typing import Iterable, Optional
 
@@ -210,6 +211,18 @@ def _page_glyph_matches(
     return matches
 
 
+def _infer_typographic_candidates(occurrences: list[dict]) -> tuple[str, ...]:
+    """Suggest digit candidates when font metadata does not provide any."""
+    if not occurrences:
+        return ()
+    positions = {item["position"] for item in occurrences}
+    if positions == {"superscript"}:
+        return tuple(str(digit) for digit in range(10)) + ("²", "³", "ⁿ")
+    if positions == {"subscript"}:
+        return tuple(str(digit) for digit in range(10))
+    return ()
+
+
 def build_ambiguity_context(
     pdf_path: Path,
     finding: MissingUnicodeFinding,
@@ -292,6 +305,17 @@ def build_ambiguity_context(
         for text in sorted(candidate_texts)
         for notation in _unicode_notation(text)
     ]
+    candidate_source = "font-metadata"
+    if not candidate_sequences:
+        inferred = _infer_typographic_candidates(occurrences)
+        if inferred:
+            candidate_texts.update(inferred)
+            candidate_sequences = [
+                notation
+                for text in sorted(candidate_texts)
+                for notation in _unicode_notation(text)
+            ]
+            candidate_source = "typographic-inference"
     contradictions = sorted(candidate_texts) if len(candidate_texts) > 1 else []
     if isolated:
         images.insert(0, isolated)
@@ -304,6 +328,7 @@ def build_ambiguity_context(
             finding.gid if finding.gid is not None else -1
         ),
         "candidates": candidate_sequences,
+        "candidate_source": candidate_source,
         "deterministic_contradictions": contradictions,
         "occurrences": occurrences,
         "images": images,
@@ -544,18 +569,29 @@ def verify_repair(
     return True, "ok"
 
 
-def _qpdf_check(pdf_path: Path) -> tuple[bool, str]:
-    workspace_qpdf = (
-        Path(__file__).resolve().parents[1]
-        / "pdfua_remediator_cpp"
-        / "deps"
-        / "qpdf-12.3.2-msvc64"
-        / "bin"
-        / "qpdf.exe"
-    )
+def _resolve_qpdf_executable() -> Optional[str]:
+    configured = os.environ.get("QPDF_PATH", "").strip()
+    if configured:
+        return configured
     executable = shutil.which("qpdf")
-    if executable is None and workspace_qpdf.exists():
-        executable = str(workspace_qpdf)
+    if executable:
+        return executable
+    if sys.platform == "win32":
+        workspace_qpdf = (
+            Path(__file__).resolve().parents[1]
+            / "pdfua_remediator_cpp"
+            / "deps"
+            / "qpdf-12.3.2-msvc64"
+            / "bin"
+            / "qpdf.exe"
+        )
+        if workspace_qpdf.exists():
+            return str(workspace_qpdf)
+    return None
+
+
+def _qpdf_check(pdf_path: Path) -> tuple[bool, str]:
+    executable = _resolve_qpdf_executable()
     if executable is None:
         return True, "qpdf-unavailable"
     try:
@@ -706,7 +742,7 @@ def repair_missing_unicode(
         _write_unicode_mappings(pdf_path, candidate, accepted)
         verified, reason = verify_repair(pdf_path, candidate, accepted, affected_pages)
         if not verified:
-            rollback_disclosure = _disclosure(evaluated, 0, unavailable)
+            accepted_before_rollback = llm_applied
             details["llm_recommendation_applied"] = False
             details["applied"] = 0
             for record in decisions:
@@ -714,10 +750,16 @@ def repair_missing_unicode(
                     record["llm_recommendation_applied"] = False
                     record["unresolved_reason"] = f"rolled-back-{reason}"
             details["rollback_reason"] = reason
+            details["accepted_before_rollback"] = accepted_before_rollback
+            rollback_message = (
+                f"Unicode repair rolled back: {reason}. "
+                f"DeepSeek V4 Pro evaluated {evaluated} ambiguous Unicode mapping(s); "
+                f"{accepted_before_rollback} recommendation(s) were accepted before rollback."
+            )
             return {
                 "issue_id": "pdf-unicode-mapping",
                 "success": False,
-                "message": f"Unicode repair rolled back: {reason}. {rollback_disclosure}",
+                "message": rollback_message,
                 "new_value": "0 Unicode mapping(s) added",
                 "details": details,
             }

@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pikepdf
 import pytest
@@ -264,8 +265,62 @@ def test_failed_post_write_verification_rolls_back(tmp_path: Path, monkeypatch) 
     assert path.read_bytes() == before
     assert result["success"] is False
     assert result["details"]["rollback_reason"] == "visual-diff"
+    assert result["details"]["accepted_before_rollback"] == 1
     assert result["details"]["llm_recommendation_applied"] is False
-    assert "0 recommendation(s) were applied" in result["message"]
+    assert "1 recommendation(s) were accepted before rollback" in result["message"]
+
+
+def test_qpdf_check_skips_windows_bundle_when_not_on_windows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(unicode_module.sys, "platform", "linux")
+    monkeypatch.setattr(unicode_module.shutil, "which", lambda _name: None)
+    monkeypatch.delenv("QPDF_PATH", raising=False)
+
+    ok, reason = unicode_module._qpdf_check(tmp_path / "missing.pdf")
+
+    assert ok is True
+    assert reason == "qpdf-unavailable"
+
+
+def test_qpdf_check_uses_system_qpdf(tmp_path: Path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(unicode_module.shutil, "which", lambda name: "/usr/bin/qpdf")
+    monkeypatch.setattr(unicode_module.subprocess, "run", fake_run)
+
+    ok, reason = unicode_module._qpdf_check(tmp_path / "candidate.pdf")
+
+    assert ok is True
+    assert reason == "qpdf-ok"
+    assert calls[0][0] == "/usr/bin/qpdf"
+    assert calls[0][1] == "--check"
+
+
+def test_infer_typographic_candidates_for_uniform_superscript() -> None:
+    occurrences = [
+        {"position": "superscript"},
+        {"position": "superscript"},
+    ]
+
+    inferred = unicode_module._infer_typographic_candidates(occurrences)
+
+    assert "2" in inferred
+    assert "²" in inferred
+    assert "baseline" not in inferred
+
+
+def test_infer_typographic_candidates_skips_mixed_positions() -> None:
+    occurrences = [
+        {"position": "superscript"},
+        {"position": "subscript"},
+    ]
+
+    assert unicode_module._infer_typographic_candidates(occurrences) == ()
 
 
 def test_verify_repair_rejects_qpdf_failure(tmp_path: Path, monkeypatch) -> None:

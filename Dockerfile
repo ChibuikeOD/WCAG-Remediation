@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     build-essential \
     libqpdf-dev \
+    qpdf \
     tesseract-ocr \
     tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
@@ -41,6 +42,9 @@ RUN tesseract --version && \
     test -f "$TESSDATA_PREFIX/eng.traineddata" \
     || (echo "ERROR: eng.traineddata not found at $TESSDATA_PREFIX" && \
         find /usr -name 'eng.traineddata' 2>/dev/null; exit 1)
+
+# Verify qpdf CLI is available for post-repair structural validation.
+RUN qpdf --version
 
 # Copy requirements file first to cache package dependencies
 COPY backend/requirements.txt /app/backend/requirements.txt

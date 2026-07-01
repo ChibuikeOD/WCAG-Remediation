@@ -654,6 +654,11 @@ def generate_remediation_report_for_api(
         _add_key_value_rows(
             summary_rows, "Rollback reason", details.get("rollback_reason")
         )
+        _add_key_value_rows(
+            summary_rows,
+            "Accepted before rollback",
+            details.get("accepted_before_rollback"),
+        )
         if summary_rows:
             _append_decision_table(story, summary_rows)
             story.append(Spacer(1, 8))
@@ -729,6 +734,11 @@ def generate_remediation_report_for_api(
                 )
                 _add_key_value_rows(
                     context_rows, "Candidate Unicode", llm_context.get("candidates")
+                )
+                _add_key_value_rows(
+                    context_rows,
+                    "Candidate source",
+                    llm_context.get("candidate_source"),
                 )
                 _add_key_value_rows(
                     context_rows,

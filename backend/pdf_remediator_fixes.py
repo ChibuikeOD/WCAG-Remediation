@@ -1315,11 +1315,18 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
                 timeout=settings.PDF_UNICODE_LLM_TIMEOUT_SECONDS,
             )
 
-    return repair_missing_unicode(
+    result = repair_missing_unicode(
         Path(pdf_path),
         verifier=verifier,
         max_occurrences=settings.PDF_UNICODE_LLM_MAX_OCCURRENCES,
     )
+    details = result.get("details")
+    if isinstance(details, dict):
+        details["min_confidence"] = settings.PDF_UNICODE_LLM_MIN_CONFIDENCE
+        details["max_occurrences"] = settings.PDF_UNICODE_LLM_MAX_OCCURRENCES
+        if settings.PDF_UNICODE_LLM_MODEL:
+            details["model"] = settings.PDF_UNICODE_LLM_MODEL
+    return result
 
 def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
     """Run OCR on image-only pages to insert a searchable text layer."""

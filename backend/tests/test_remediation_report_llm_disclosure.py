@@ -172,3 +172,81 @@ def test_report_contains_llm_disclosure(
     path = generate_report_with_unicode_details(tmp_path, details)
 
     assert expected in extract_pdf_text(path)
+
+
+def test_report_includes_deepseek_response_details(tmp_path: Path) -> None:
+    details = {
+        "llm_invoked": True,
+        "llm_recommendation_applied": False,
+        "evaluated": 1,
+        "applied": 0,
+        "model": "deepseek-v4-pro",
+        "min_confidence": 0.98,
+        "max_occurrences": 3,
+        "decisions": [
+            {
+                "font": "/CIDFont+F6",
+                "cid": 2870,
+                "pages": [30, 171],
+                "occurrence_count": 12,
+                "resolution_source": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_recommendation_applied": False,
+                "confidence": 0.91,
+                "rejection_reason": "confidence-below-threshold",
+                "unresolved_reason": "confidence-below-threshold",
+                "llm_context": {
+                    "document_title": "dissertation.pdf",
+                    "font": "/CIDFont+F6",
+                    "cid": 2870,
+                    "gid": 2870,
+                    "glyph_name": "two.superior",
+                    "candidates": ["U+0032", "U+00B2"],
+                    "deterministic_contradictions": ["2", "²"],
+                    "sampled_pages": [30, 171],
+                    "image_evidence_count": 4,
+                    "occurrences": [
+                        {
+                            "page": 30,
+                            "position": "superscript",
+                            "font_size": 6.5,
+                            "baseline_y": 412.3,
+                            "masked_line": "factor the following polynomial: x[UNKNOWN] - 2x - 3",
+                            "paragraph": "For example, if a question says...",
+                        }
+                    ],
+                },
+                "llm_response": {
+                    "status": "verified",
+                    "unicode_sequence": ["U+0032"],
+                    "rendered_text": "2",
+                    "confidence": 0.91,
+                    "occurrences_consistent": True,
+                    "alternatives": ["U+00B2"],
+                    "evidence": [
+                        "Glyph appears raised relative to baseline in all samples.",
+                        "Surrounding math uses x squared notation.",
+                    ],
+                    "reason": "Superscript styling of digit two in polynomial expression.",
+                    "vision_probe": "A1B2C3",
+                },
+            }
+        ],
+    }
+    path = generate_report_with_unicode_details(tmp_path, details)
+    text = extract_pdf_text(path)
+
+    assert "DeepSeek Unicode Mapping Review" in text
+    assert "Minimum confidence threshold" in text
+    assert "0.98" in text
+    assert "Glyph decision 1: /CIDFont+F6 / CID 2870" in text
+    assert "Evidence sent to DeepSeek" in text
+    assert "U+0032" in text
+    assert "U+00B2" in text
+    assert "confidence-below-threshold" in text
+    assert "DeepSeek response" in text
+    assert "Superscript styling of digit two" in text
+    assert "Raw JSON response" in text
+    assert "vision_probe" in text
+    assert "Masked line" in text
+    assert "superscript" in text

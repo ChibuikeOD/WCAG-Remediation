@@ -456,6 +456,7 @@ def generate_remediation_report_for_api(
         )
 
     from html import escape
+    import json
 
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now()
@@ -534,10 +535,283 @@ def generate_remediation_report_for_api(
         leading=14,
         spaceAfter=4,
     )
+    subsection_style = ParagraphStyle(
+        "ApiReportSubsection",
+        parent=styles["Heading3"],
+        fontName=unicode_font_name,
+        fontSize=11,
+        leading=14,
+        textColor=HexColor("#334155"),
+        spaceBefore=10,
+        spaceAfter=6,
+    )
+    mono_style = ParagraphStyle(
+        "ApiReportMono",
+        parent=item_style,
+        fontName="Courier",
+        fontSize=8,
+        leading=10,
+        spaceAfter=3,
+    )
 
     def dynamic_paragraph(value: Any, style: ParagraphStyle = item_style) -> Paragraph:
         """Create a Paragraph whose dynamic content cannot be parsed as markup."""
         return Paragraph(escape(str(value), quote=True), style)
+
+    def _format_scalar(value: Any) -> str:
+        if value is None:
+            return "N/A"
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return "(none)"
+            return "; ".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        return str(value)
+
+    def _add_key_value_rows(
+        rows: List[List[Any]],
+        label: str,
+        value: Any,
+        *,
+        mono: bool = False,
+    ) -> None:
+        if value is None:
+            return
+        style = mono_style if mono else item_style
+        rows.append([dynamic_paragraph(label), dynamic_paragraph(_format_scalar(value), style)])
+
+    def _build_decision_table(rows: List[List[Any]]) -> Table:
+        table = Table(rows, colWidths=[2.0 * inch, 4.3 * inch])
+        table.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#cbd5e1")),
+                    ("BACKGROUND", (0, 0), (0, -1), HexColor("#f8fafc")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        return table
+
+    def add_unicode_deepseek_details(
+        story: List[Any], details: Dict[str, Any]
+    ) -> None:
+        decisions = details.get("decisions") or []
+        if not decisions and not details.get("llm_invoked") and not details.get(
+            "llm_unavailable"
+        ):
+            return
+
+        story.append(Paragraph("DeepSeek Unicode Mapping Review", section_style))
+
+        summary_rows: List[List[Any]] = []
+        _add_key_value_rows(summary_rows, "Model", details.get("model"))
+        _add_key_value_rows(
+            summary_rows,
+            "Minimum confidence threshold",
+            details.get("min_confidence"),
+        )
+        _add_key_value_rows(
+            summary_rows,
+            "Occurrence samples per glyph",
+            details.get("max_occurrences"),
+        )
+        _add_key_value_rows(
+            summary_rows, "Glyphs evaluated by DeepSeek", details.get("evaluated")
+        )
+        _add_key_value_rows(
+            summary_rows, "Recommendations applied", details.get("applied")
+        )
+        _add_key_value_rows(
+            summary_rows, "Mappings added", details.get("mappings_added")
+        )
+        _add_key_value_rows(
+            summary_rows, "Rollback reason", details.get("rollback_reason")
+        )
+        if summary_rows:
+            story.append(_build_decision_table(summary_rows))
+            story.append(Spacer(1, 8))
+
+        if not decisions:
+            story.append(
+                dynamic_paragraph("No per-glyph decision records were captured.")
+            )
+            return
+
+        for index, decision in enumerate(decisions, start=1):
+            font = decision.get("font", "N/A")
+            cid = decision.get("cid", "N/A")
+            story.append(
+                Paragraph(
+                    f"Glyph decision {index}: {font} / CID {cid}",
+                    subsection_style,
+                )
+            )
+
+            decision_rows: List[List[Any]] = []
+            _add_key_value_rows(
+                decision_rows, "Resolution source", decision.get("resolution_source")
+            )
+            _add_key_value_rows(
+                decision_rows,
+                "Recommendation applied",
+                decision.get("llm_recommendation_applied"),
+            )
+            _add_key_value_rows(decision_rows, "Pages", decision.get("pages"))
+            _add_key_value_rows(
+                decision_rows, "Occurrence count", decision.get("occurrence_count")
+            )
+            _add_key_value_rows(
+                decision_rows, "Resolved Unicode text", decision.get("unicode_text")
+            )
+            _add_key_value_rows(
+                decision_rows,
+                "Pipeline confidence",
+                decision.get("confidence"),
+            )
+            _add_key_value_rows(
+                decision_rows,
+                "Unresolved reason",
+                decision.get("unresolved_reason") or decision.get("rejection_reason"),
+            )
+            _add_key_value_rows(
+                decision_rows,
+                "Deterministic evidence",
+                decision.get("evidence"),
+            )
+            story.append(_build_decision_table(decision_rows))
+
+            llm_context = decision.get("llm_context") or {}
+            if llm_context:
+                story.append(Spacer(1, 4))
+                story.append(Paragraph("Evidence sent to DeepSeek", subsection_style))
+                context_rows: List[List[Any]] = []
+                _add_key_value_rows(
+                    context_rows, "Document title", llm_context.get("document_title")
+                )
+                _add_key_value_rows(context_rows, "Font", llm_context.get("font"))
+                _add_key_value_rows(context_rows, "CID", llm_context.get("cid"))
+                _add_key_value_rows(context_rows, "GID", llm_context.get("gid"))
+                _add_key_value_rows(
+                    context_rows, "Glyph name", llm_context.get("glyph_name")
+                )
+                _add_key_value_rows(
+                    context_rows, "Candidate Unicode", llm_context.get("candidates")
+                )
+                _add_key_value_rows(
+                    context_rows,
+                    "Deterministic contradictions",
+                    llm_context.get("deterministic_contradictions"),
+                )
+                _add_key_value_rows(
+                    context_rows, "Sampled pages", llm_context.get("sampled_pages")
+                )
+                _add_key_value_rows(
+                    context_rows,
+                    "Image evidence count",
+                    llm_context.get("image_evidence_count"),
+                )
+                story.append(_build_decision_table(context_rows))
+
+                occurrences = llm_context.get("occurrences") or []
+                for occ_index, occurrence in enumerate(occurrences, start=1):
+                    story.append(Spacer(1, 4))
+                    story.append(
+                        Paragraph(
+                            f"Occurrence sample {occ_index}",
+                            subsection_style,
+                        )
+                    )
+                    occurrence_rows: List[List[Any]] = []
+                    _add_key_value_rows(
+                        occurrence_rows, "Page", occurrence.get("page")
+                    )
+                    _add_key_value_rows(
+                        occurrence_rows, "Position", occurrence.get("position")
+                    )
+                    _add_key_value_rows(
+                        occurrence_rows, "Font size", occurrence.get("font_size")
+                    )
+                    _add_key_value_rows(
+                        occurrence_rows, "Baseline Y", occurrence.get("baseline_y")
+                    )
+                    _add_key_value_rows(
+                        occurrence_rows,
+                        "Masked line",
+                        occurrence.get("masked_line"),
+                        mono=True,
+                    )
+                    _add_key_value_rows(
+                        occurrence_rows,
+                        "Paragraph",
+                        occurrence.get("paragraph"),
+                        mono=True,
+                    )
+                    story.append(_build_decision_table(occurrence_rows))
+
+            llm_response = decision.get("llm_response")
+            if llm_response:
+                story.append(Spacer(1, 4))
+                story.append(Paragraph("DeepSeek response", subsection_style))
+                response_rows: List[List[Any]] = []
+                _add_key_value_rows(
+                    response_rows, "Status", llm_response.get("status")
+                )
+                _add_key_value_rows(
+                    response_rows, "Confidence", llm_response.get("confidence")
+                )
+                _add_key_value_rows(
+                    response_rows,
+                    "Unicode sequence",
+                    llm_response.get("unicode_sequence"),
+                )
+                _add_key_value_rows(
+                    response_rows,
+                    "Rendered text",
+                    llm_response.get("rendered_text"),
+                )
+                _add_key_value_rows(
+                    response_rows,
+                    "Occurrences consistent",
+                    llm_response.get("occurrences_consistent"),
+                )
+                _add_key_value_rows(
+                    response_rows, "Alternatives", llm_response.get("alternatives")
+                )
+                _add_key_value_rows(
+                    response_rows, "Evidence", llm_response.get("evidence")
+                )
+                _add_key_value_rows(
+                    response_rows, "Reason", llm_response.get("reason")
+                )
+                _add_key_value_rows(
+                    response_rows, "Vision probe", llm_response.get("vision_probe")
+                )
+                story.append(_build_decision_table(response_rows))
+                story.append(Spacer(1, 2))
+                story.append(dynamic_paragraph("Raw JSON response:", mono_style))
+                story.append(
+                    dynamic_paragraph(
+                        json.dumps(llm_response, ensure_ascii=False, indent=2),
+                        mono_style,
+                    )
+                )
+            elif decision.get("llm_invoked"):
+                story.append(Spacer(1, 4))
+                story.append(
+                    dynamic_paragraph(
+                        "DeepSeek was invoked but no structured response was recorded."
+                    )
+                )
+
+            story.append(Spacer(1, 10))
 
     def add_result_details(story: List[Any], results: List[Dict[str, Any]]) -> None:
         if not results:
@@ -616,6 +890,11 @@ def generate_remediation_report_for_api(
             summary_table,
             Paragraph("AI-Use Disclosure", section_style),
             dynamic_paragraph(llm_disclosure),
+        ]
+    )
+    add_unicode_deepseek_details(story, unicode_details)
+    story.extend(
+        [
             Paragraph("Successful Fixes", section_style),
         ]
     )

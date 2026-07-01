@@ -647,6 +647,10 @@ def repair_missing_unicode(
         )
         evaluated += 1
         decision = verifier(context)
+        context_for_record = {
+            key: value for key, value in context.items() if key != "images"
+        }
+        context_for_record["image_evidence_count"] = len(context.get("images", []))
         record = {
             "font_objgen": list(finding.font_objgen),
             "font": finding.base_font,
@@ -657,7 +661,12 @@ def repair_missing_unicode(
             "llm_invoked": True,
             "llm_recommendation_applied": bool(decision.accepted),
             "confidence": decision.confidence,
+            "llm_context": context_for_record,
         }
+        if decision.response is not None:
+            record["llm_response"] = decision.response
+        if decision.rejection_reason:
+            record["rejection_reason"] = decision.rejection_reason
         if decision.accepted and decision.text:
             accepted.append((finding.font_objgen, finding.cid, decision.text))
             affected_pages.update(finding.pages)

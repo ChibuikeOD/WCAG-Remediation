@@ -11,6 +11,7 @@ All endpoints reference WCAG 2.2 success criteria as the source of truth.
 import uuid
 import asyncio
 import aiofiles
+from glob import escape as glob_escape
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -769,6 +770,45 @@ async def download_remediated_file(report_id: str, user: User = Depends(require_
         path=output_path,
         filename=output_filename,
         media_type=media_type,
+    )
+
+
+def _latest_remediation_report_path(report_id: str) -> Optional[Path]:
+    output_dir = settings.OUTPUT_DIR.resolve()
+    pattern = f"Remediation_Report_{glob_escape(report_id)}_*.pdf"
+    candidates = (
+        path
+        for path in output_dir.glob(pattern)
+        if path.is_file() and path.resolve().parent == output_dir
+    )
+    return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
+
+
+@app.get("/remediate/report/{report_id}")
+async def download_remediation_report_by_id(
+    report_id: str,
+    user: User = Depends(require_user),
+):
+    db_conn = SessionLocal()
+    try:
+        report_rec = db_conn.query(DbReport).filter(DbReport.id == report_id).first()
+        if not report_rec:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+        if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this report.")
+    finally:
+        db_conn.close()
+
+    report_path = _latest_remediation_report_path(report_id)
+    if report_path is None:
+        raise HTTPException(status_code=404, detail="Remediation report not found")
+
+    return FileResponse(
+        path=report_path,
+        filename=report_path.name,
+        media_type="application/pdf",
     )
 
 

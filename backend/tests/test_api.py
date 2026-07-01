@@ -2,6 +2,7 @@
 Integration tests for the FastAPI endpoints.
 """
 import asyncio
+import os
 import pytest
 from pathlib import Path
 import sys
@@ -243,6 +244,68 @@ class TestRemediationDownloadEndpoint:
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("application/pdf")
+
+
+class TestRemediationReportDownloadEndpoint:
+    """Tests for authenticated remediation-report downloads."""
+
+    @staticmethod
+    def _seed_report(report_id, owner_id="dev_user_001"):
+        db = main_module.SessionLocal()
+        try:
+            db.add(database.User(id=owner_id, email=f"{owner_id}@example.com", name=owner_id))
+            uploaded_file = database.UploadedFile(
+                id=f"file-{report_id}",
+                filename="source.pdf",
+                file_type="pdf",
+                file_path="unused/source.pdf",
+                file_size=1,
+                owner_id=owner_id,
+            )
+            db.add(uploaded_file)
+            db.add(database.AccessibilityReport(
+                id=report_id,
+                file_id=uploaded_file.id,
+                report_json="{}",
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+    def test_download_remediation_report_returns_latest_pdf(self, client):
+        report_id = "owned-report"
+        self._seed_report(report_id)
+        older = settings.OUTPUT_DIR / f"Remediation_Report_{report_id}_older.pdf"
+        latest = settings.OUTPUT_DIR / f"Remediation_Report_{report_id}_latest.pdf"
+        older.write_bytes(b"older")
+        latest.write_bytes(b"latest")
+        os.utime(older, (1, 1))
+        os.utime(latest, (2, 2))
+
+        response = client.get(f"/remediate/report/{report_id}")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/pdf")
+        assert response.headers["content-disposition"] == f'attachment; filename="{latest.name}"'
+        assert response.content == b"latest"
+
+    def test_download_remediation_report_returns_404_without_artifact(self, client):
+        report_id = "report-without-artifact"
+        self._seed_report(report_id)
+
+        response = client.get(f"/remediate/report/{report_id}")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Remediation report not found"
+
+    def test_download_remediation_report_rejects_another_users_report(self, client):
+        report_id = "another-users-report"
+        self._seed_report(report_id, owner_id="another-user")
+        (settings.OUTPUT_DIR / f"Remediation_Report_{report_id}_result.pdf").write_bytes(b"private")
+
+        response = client.get(f"/remediate/report/{report_id}")
+
+        assert response.status_code == 403
 
 
 if __name__ == '__main__':

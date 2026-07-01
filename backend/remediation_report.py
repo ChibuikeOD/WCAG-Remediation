@@ -615,6 +615,11 @@ def generate_remediation_report_for_api(
         _add_key_value_rows(summary_rows, "Model", details.get("model"))
         _add_key_value_rows(
             summary_rows,
+            "Vision fallback model",
+            details.get("vision_fallback_model"),
+        )
+        _add_key_value_rows(
+            summary_rows,
             "Minimum confidence threshold",
             details.get("min_confidence"),
         )
@@ -658,6 +663,9 @@ def generate_remediation_report_for_api(
             decision_rows: List[List[Any]] = []
             _add_key_value_rows(
                 decision_rows, "Resolution source", decision.get("resolution_source")
+            )
+            _add_key_value_rows(
+                decision_rows, "Model used", decision.get("llm_model_used")
             )
             _add_key_value_rows(
                 decision_rows,
@@ -758,56 +766,82 @@ def generate_remediation_report_for_api(
 
             llm_response = decision.get("llm_response")
             if llm_response:
-                story.append(Spacer(1, 4))
-                story.append(Paragraph("DeepSeek response", subsection_style))
-                response_rows: List[List[Any]] = []
-                _add_key_value_rows(
-                    response_rows, "Status", llm_response.get("status")
-                )
-                _add_key_value_rows(
-                    response_rows, "Confidence", llm_response.get("confidence")
-                )
-                _add_key_value_rows(
-                    response_rows,
-                    "Unicode sequence",
-                    llm_response.get("unicode_sequence"),
-                )
-                _add_key_value_rows(
-                    response_rows,
-                    "Rendered text",
-                    llm_response.get("rendered_text"),
-                )
-                _add_key_value_rows(
-                    response_rows,
-                    "Occurrences consistent",
-                    llm_response.get("occurrences_consistent"),
-                )
-                _add_key_value_rows(
-                    response_rows, "Alternatives", llm_response.get("alternatives")
-                )
-                _add_key_value_rows(
-                    response_rows, "Evidence", llm_response.get("evidence")
-                )
-                _add_key_value_rows(
-                    response_rows, "Reason", llm_response.get("reason")
-                )
-                _add_key_value_rows(
-                    response_rows, "Vision probe", llm_response.get("vision_probe")
-                )
-                story.append(_build_decision_table(response_rows))
-                story.append(Spacer(1, 2))
-                story.append(dynamic_paragraph("Raw JSON response:", mono_style))
-                story.append(
-                    dynamic_paragraph(
-                        json.dumps(llm_response, ensure_ascii=False, indent=2),
-                        mono_style,
+                api_error = llm_response.get("api_error")
+                raw_content = llm_response.get("raw_content")
+                if api_error:
+                    story.append(Spacer(1, 4))
+                    story.append(Paragraph("DeepSeek API error", subsection_style))
+                    error_rows: List[List[Any]] = []
+                    _add_key_value_rows(
+                        error_rows,
+                        "HTTP status",
+                        api_error.get("status_code"),
                     )
-                )
+                    _add_key_value_rows(
+                        error_rows, "Model attempted", api_error.get("model")
+                    )
+                    _add_key_value_rows(
+                        error_rows,
+                        "Error body",
+                        api_error.get("body"),
+                        mono=True,
+                    )
+                    story.append(_build_decision_table(error_rows))
+                elif raw_content:
+                    story.append(Spacer(1, 4))
+                    story.append(Paragraph("Unparseable DeepSeek output", subsection_style))
+                    story.append(dynamic_paragraph(raw_content, mono_style))
+                if not api_error and not raw_content:
+                    story.append(Spacer(1, 4))
+                    story.append(Paragraph("DeepSeek response", subsection_style))
+                    response_rows: List[List[Any]] = []
+                    _add_key_value_rows(
+                        response_rows, "Status", llm_response.get("status")
+                    )
+                    _add_key_value_rows(
+                        response_rows, "Confidence", llm_response.get("confidence")
+                    )
+                    _add_key_value_rows(
+                        response_rows,
+                        "Unicode sequence",
+                        llm_response.get("unicode_sequence"),
+                    )
+                    _add_key_value_rows(
+                        response_rows,
+                        "Rendered text",
+                        llm_response.get("rendered_text"),
+                    )
+                    _add_key_value_rows(
+                        response_rows,
+                        "Occurrences consistent",
+                        llm_response.get("occurrences_consistent"),
+                    )
+                    _add_key_value_rows(
+                        response_rows, "Alternatives", llm_response.get("alternatives")
+                    )
+                    _add_key_value_rows(
+                        response_rows, "Evidence", llm_response.get("evidence")
+                    )
+                    _add_key_value_rows(
+                        response_rows, "Reason", llm_response.get("reason")
+                    )
+                    _add_key_value_rows(
+                        response_rows, "Vision probe", llm_response.get("vision_probe")
+                    )
+                    story.append(_build_decision_table(response_rows))
+                    story.append(Spacer(1, 2))
+                    story.append(dynamic_paragraph("Raw JSON response:", mono_style))
+                    story.append(
+                        dynamic_paragraph(
+                            json.dumps(llm_response, ensure_ascii=False, indent=2),
+                            mono_style,
+                        )
+                    )
             elif decision.get("llm_invoked"):
                 story.append(Spacer(1, 4))
                 story.append(
                     dynamic_paragraph(
-                        "DeepSeek was invoked but no structured response was recorded."
+                        "DeepSeek was invoked but returned no parseable JSON response."
                     )
                 )
 

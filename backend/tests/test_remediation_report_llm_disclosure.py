@@ -250,3 +250,40 @@ def test_report_includes_deepseek_response_details(tmp_path: Path) -> None:
     assert "vision_probe" in text
     assert "Masked line" in text
     assert "superscript" in text
+
+
+def test_report_includes_deepseek_api_error_details(tmp_path: Path) -> None:
+    details = {
+        "llm_invoked": True,
+        "llm_recommendation_applied": False,
+        "evaluated": 1,
+        "applied": 0,
+        "model": "deepseek-v4-pro",
+        "vision_fallback_model": "deepseek-chat",
+        "decisions": [
+            {
+                "font": "/CIDFont+F6",
+                "cid": 2870,
+                "pages": [30],
+                "occurrence_count": 58,
+                "resolution_source": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_recommendation_applied": False,
+                "llm_model_used": "deepseek-v4-pro",
+                "unresolved_reason": "api-status-400",
+                "llm_response": {
+                    "api_error": {
+                        "status_code": 400,
+                        "model": "deepseek-v4-pro",
+                        "body": {"error": {"message": "vision not supported"}},
+                    }
+                },
+            }
+        ],
+    }
+    path = generate_report_with_unicode_details(tmp_path, details)
+    text = extract_pdf_text(path)
+
+    assert "DeepSeek API error" in text
+    assert "vision not supported" in text
+    assert "HTTP status" in text

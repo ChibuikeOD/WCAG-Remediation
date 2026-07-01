@@ -127,6 +127,7 @@ class Settings(BaseSettings):
     # Ambiguous PDF Unicode verification
     PDF_UNICODE_LLM_ENABLED: bool = True
     PDF_UNICODE_LLM_MODEL: str = "deepseek-v4-pro"
+    PDF_UNICODE_LLM_VISION_FALLBACK_MODEL: str = "deepseek-chat"
     PDF_UNICODE_LLM_MIN_CONFIDENCE: float = Field(default=0.98, ge=0.0, le=1.0)
     PDF_UNICODE_LLM_TIMEOUT_SECONDS: float = Field(default=45.0, gt=0.0)
     PDF_UNICODE_LLM_MAX_OCCURRENCES: int = Field(default=3, ge=1, le=5)

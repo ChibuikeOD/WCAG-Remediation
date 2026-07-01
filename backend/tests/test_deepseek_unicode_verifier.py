@@ -57,6 +57,7 @@ def test_request_uses_v4_pro_images_and_untrusted_context() -> None:
     request = build_deepseek_request(
         ambiguity_context(),
         "data:image/png;base64,PROBE",
+        model="deepseek-v4-pro",
     )
 
     assert request["model"] == "deepseek-v4-pro"
@@ -128,6 +129,7 @@ def test_verifier_calls_deepseek_and_accepts_strict_json() -> None:
         ambiguity_context(),
         api_key="secret",
         min_confidence=0.98,
+        model="deepseek-v4-pro",
         transport=httpx.MockTransport(handler),
         probe_token="K7M4Q2",
         probe_image="data:image/png;base64,PROBE",
@@ -146,6 +148,8 @@ def test_verifier_fails_closed_on_api_error() -> None:
         ambiguity_context(),
         api_key="secret",
         min_confidence=0.98,
+        model="deepseek-v4-pro",
+        vision_fallback_model=None,
         transport=transport,
         probe_token="K7M4Q2",
         probe_image="data:image/png;base64,PROBE",
@@ -153,6 +157,44 @@ def test_verifier_fails_closed_on_api_error() -> None:
 
     assert decision.accepted is False
     assert decision.rejection_reason == "api-status-429"
+    assert decision.response is not None
+    assert decision.response["api_error"]["status_code"] == 429
+
+
+def test_verifier_retries_with_vision_fallback_after_400() -> None:
+    models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        models.append(payload["model"])
+        if payload["model"] == "deepseek-v4-pro":
+            return httpx.Response(
+                400,
+                json={"error": {"message": "vision not supported", "type": "invalid_request_error"}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps(valid_response())}}
+                ]
+            },
+        )
+
+    decision = verify_ambiguous_unicode(
+        ambiguity_context(),
+        api_key="secret",
+        min_confidence=0.98,
+        model="deepseek-v4-pro",
+        vision_fallback_model="deepseek-chat",
+        transport=httpx.MockTransport(handler),
+        probe_token="K7M4Q2",
+        probe_image="data:image/png;base64,PROBE",
+    )
+
+    assert models == ["deepseek-v4-pro", "deepseek-chat"]
+    assert decision.accepted is True
+    assert decision.model_used == "deepseek-chat"
 
 
 def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
@@ -171,6 +213,8 @@ def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
         ambiguity_context(),
         api_key="secret",
         min_confidence=0.98,
+        model="deepseek-v4-pro",
+        vision_fallback_model=None,
         transport=transport,
         probe_token="K7M4Q2",
         probe_image="data:image/png;base64,PROBE",
@@ -178,3 +222,5 @@ def test_verifier_fails_closed_on_prose_wrapped_json() -> None:
 
     assert decision.accepted is False
     assert decision.rejection_reason == "invalid-json"
+    assert decision.response is not None
+    assert "raw_content" in decision.response

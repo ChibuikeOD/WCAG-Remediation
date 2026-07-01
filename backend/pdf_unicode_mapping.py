@@ -657,11 +657,12 @@ def repair_missing_unicode(
             "cid": finding.cid,
             "pages": list(finding.pages),
             "occurrence_count": finding.occurrence_count,
-            "resolution_source": "deepseek-v4-pro",
+            "resolution_source": decision.model_used or "deepseek-v4-pro",
             "llm_invoked": True,
             "llm_recommendation_applied": bool(decision.accepted),
             "confidence": decision.confidence,
             "llm_context": context_for_record,
+            "llm_model_used": decision.model_used,
         }
         if decision.response is not None:
             record["llm_response"] = decision.response

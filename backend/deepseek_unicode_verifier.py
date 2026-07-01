@@ -44,10 +44,11 @@ class DeepSeekDecision:
     confidence: Optional[float]
     rejection_reason: Optional[str]
     response: Optional[dict[str, Any]] = None
+    model_used: Optional[str] = None
 
 
 def build_deepseek_request(
-    context: dict[str, Any], probe_image: str
+    context: dict[str, Any], probe_image: str, *, model: str
 ) -> dict[str, Any]:
     """Build the multimodal request without exposing the probe answer in text."""
     context_for_prompt = {key: value for key, value in context.items() if key != "images"}
@@ -64,7 +65,7 @@ def build_deepseek_request(
         content.append({"type": "image_url", "image_url": {"url": image}})
     content.append({"type": "image_url", "image_url": {"url": probe_image}})
     return {
-        "model": "deepseek-v4-pro",
+        "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": content},
@@ -98,13 +99,27 @@ def _unicode_text(sequence: list[str]) -> str:
 def _reject(
     reason: str,
     response: Optional[_DeepSeekResponse] = None,
+    *,
+    api_error: Optional[dict[str, Any]] = None,
+    raw_content: Optional[str] = None,
+    model_used: Optional[str] = None,
 ) -> DeepSeekDecision:
+    payload: Optional[dict[str, Any]] = None
+    if response is not None:
+        payload = response.model_dump()
+    elif api_error is not None or raw_content is not None:
+        payload = {}
+        if api_error is not None:
+            payload["api_error"] = api_error
+        if raw_content is not None:
+            payload["raw_content"] = raw_content[:4000]
     return DeepSeekDecision(
         accepted=False,
         text=None,
         confidence=response.confidence if response else None,
         rejection_reason=reason,
-        response=response.model_dump() if response else None,
+        response=payload,
+        model_used=model_used,
     )
 
 
@@ -150,6 +165,32 @@ def validate_deepseek_response(
         confidence=response.confidence,
         rejection_reason=None,
         response=response.model_dump(),
+        model_used=None,
+    )
+
+
+def _extract_api_error(response: httpx.Response, model: str) -> dict[str, Any]:
+    body: Any
+    try:
+        body = response.json()
+    except ValueError:
+        body = (response.text or "").strip()[:4000]
+    return {
+        "status_code": response.status_code,
+        "model": model,
+        "body": body,
+    }
+
+
+def _chat_completions(
+    client: httpx.Client,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> httpx.Response:
+    return client.post(
+        "https://api.deepseek.com/v1/chat/completions",
+        json=payload,
+        headers=headers,
     )
 
 
@@ -169,6 +210,8 @@ def verify_ambiguous_unicode(
     *,
     api_key: str,
     min_confidence: float,
+    model: str = "deepseek-v4-pro",
+    vision_fallback_model: Optional[str] = "deepseek-chat",
     timeout: float = 45.0,
     transport: Optional[httpx.BaseTransport] = None,
     probe_token: Optional[str] = None,
@@ -181,19 +224,39 @@ def verify_ambiguous_unicode(
         secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6)
     )
     image = probe_image or create_vision_probe(token)
-    payload = build_deepseek_request(context, image)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    models_to_try = [model]
+    if (
+        vision_fallback_model
+        and vision_fallback_model != model
+        and context.get("images")
+    ):
+        models_to_try.append(vision_fallback_model)
+
     try:
         with httpx.Client(timeout=timeout, transport=transport) as client:
-            response = client.post(
-                "https://api.deepseek.com/v1/chat/completions",
-                json=payload,
-                headers=headers,
-            )
+            response: Optional[httpx.Response] = None
+            model_used = model
+            for candidate_model in models_to_try:
+                payload = build_deepseek_request(context, image, model=candidate_model)
+                response = _chat_completions(client, payload, headers)
+                model_used = candidate_model
+                if response.status_code == 200:
+                    break
+                if candidate_model != models_to_try[-1]:
+                    continue
     except httpx.HTTPError:
         return _reject("api-error")
+
+    if response is None:
+        return _reject("api-error")
+
     if response.status_code != 200:
-        return _reject(f"api-status-{response.status_code}")
+        return _reject(
+            f"api-status-{response.status_code}",
+            api_error=_extract_api_error(response, model_used),
+            model_used=model_used,
+        )
     try:
         envelope = response.json()
         content = envelope["choices"][0]["message"]["content"]
@@ -203,5 +266,24 @@ def verify_ambiguous_unicode(
         if not isinstance(parsed, dict):
             raise TypeError("response JSON is not an object")
     except (ValueError, TypeError, KeyError, IndexError):
-        return _reject("invalid-json")
-    return validate_deepseek_response(parsed, context, token, min_confidence)
+        raw = None
+        try:
+            raw = envelope["choices"][0]["message"]["content"]  # type: ignore[name-defined]
+        except Exception:
+            raw = response.text
+        return _reject(
+            "invalid-json",
+            raw_content=raw if isinstance(raw, str) else None,
+            model_used=model_used,
+        )
+    decision = validate_deepseek_response(parsed, context, token, min_confidence)
+    if decision.model_used is None:
+        return DeepSeekDecision(
+            accepted=decision.accepted,
+            text=decision.text,
+            confidence=decision.confidence,
+            rejection_reason=decision.rejection_reason,
+            response=decision.response,
+            model_used=model_used,
+        )
+    return decision

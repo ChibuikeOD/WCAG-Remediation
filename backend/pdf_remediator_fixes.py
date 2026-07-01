@@ -1312,6 +1312,8 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
                 context,
                 api_key=settings.DEEPSEEK_API_KEY or "",
                 min_confidence=settings.PDF_UNICODE_LLM_MIN_CONFIDENCE,
+                model=settings.PDF_UNICODE_LLM_MODEL,
+                vision_fallback_model=settings.PDF_UNICODE_LLM_VISION_FALLBACK_MODEL,
                 timeout=settings.PDF_UNICODE_LLM_TIMEOUT_SECONDS,
             )
 
@@ -1324,6 +1326,7 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
     if isinstance(details, dict):
         details["min_confidence"] = settings.PDF_UNICODE_LLM_MIN_CONFIDENCE
         details["max_occurrences"] = settings.PDF_UNICODE_LLM_MAX_OCCURRENCES
+        details["vision_fallback_model"] = settings.PDF_UNICODE_LLM_VISION_FALLBACK_MODEL
         if settings.PDF_UNICODE_LLM_MODEL:
             details["model"] = settings.PDF_UNICODE_LLM_MODEL
     return result

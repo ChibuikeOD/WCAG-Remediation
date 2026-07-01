@@ -584,6 +584,8 @@ def generate_remediation_report_for_api(
         rows.append([dynamic_paragraph(label), dynamic_paragraph(_format_scalar(value), style)])
 
     def _build_decision_table(rows: List[List[Any]]) -> Table:
+        if not rows:
+            raise ValueError("decision table requires at least one row")
         table = Table(rows, colWidths=[2.0 * inch, 4.3 * inch])
         table.setStyle(
             TableStyle(
@@ -599,6 +601,10 @@ def generate_remediation_report_for_api(
             )
         )
         return table
+
+    def _append_decision_table(story: List[Any], rows: List[List[Any]]) -> None:
+        if rows:
+            story.append(_build_decision_table(rows))
 
     def add_unicode_deepseek_details(
         story: List[Any], details: Dict[str, Any]
@@ -646,7 +652,7 @@ def generate_remediation_report_for_api(
             summary_rows, "Rollback reason", details.get("rollback_reason")
         )
         if summary_rows:
-            story.append(_build_decision_table(summary_rows))
+            _append_decision_table(story, summary_rows)
             story.append(Spacer(1, 8))
 
         if not decisions:
@@ -702,7 +708,7 @@ def generate_remediation_report_for_api(
                 "Deterministic evidence",
                 decision.get("evidence"),
             )
-            story.append(_build_decision_table(decision_rows))
+            _append_decision_table(story, decision_rows)
 
             llm_context = decision.get("llm_context") or {}
             if llm_context:
@@ -734,7 +740,7 @@ def generate_remediation_report_for_api(
                     "Image evidence count",
                     llm_context.get("image_evidence_count"),
                 )
-                story.append(_build_decision_table(context_rows))
+                _append_decision_table(story, context_rows)
 
                 occurrences = llm_context.get("occurrences") or []
                 for occ_index, occurrence in enumerate(occurrences, start=1):
@@ -770,7 +776,7 @@ def generate_remediation_report_for_api(
                         occurrence.get("paragraph"),
                         mono=True,
                     )
-                    story.append(_build_decision_table(occurrence_rows))
+                    _append_decision_table(story, occurrence_rows)
 
             llm_response = decision.get("llm_response")
             if llm_response:
@@ -794,7 +800,7 @@ def generate_remediation_report_for_api(
                         api_error.get("body"),
                         mono=True,
                     )
-                    story.append(_build_decision_table(error_rows))
+                    _append_decision_table(story, error_rows)
                 elif raw_content:
                     story.append(Spacer(1, 4))
                     story.append(Paragraph("Unparseable DeepSeek output", subsection_style))
@@ -836,7 +842,7 @@ def generate_remediation_report_for_api(
                     _add_key_value_rows(
                         response_rows, "Vision probe", llm_response.get("vision_probe")
                     )
-                    story.append(_build_decision_table(response_rows))
+                    _append_decision_table(story, response_rows)
                     story.append(Spacer(1, 2))
                     story.append(dynamic_paragraph("Raw JSON response:", mono_style))
                     story.append(

@@ -287,3 +287,26 @@ def test_report_includes_deepseek_api_error_details(tmp_path: Path) -> None:
     assert "DeepSeek API error" in text
     assert "vision not supported" in text
     assert "HTTP status" in text
+
+
+def test_report_skips_empty_deepseek_response_table(tmp_path: Path) -> None:
+    details = {
+        "llm_invoked": True,
+        "evaluated": 1,
+        "applied": 0,
+        "model": "deepseek-v4-pro",
+        "decisions": [
+            {
+                "font": "/CIDFont+F6",
+                "cid": 2870,
+                "pages": [30],
+                "occurrence_count": 1,
+                "resolution_source": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_recommendation_applied": False,
+                "llm_response": {},
+            }
+        ],
+    }
+    path = generate_report_with_unicode_details(tmp_path, details)
+    assert path.read_bytes().startswith(b"%PDF")

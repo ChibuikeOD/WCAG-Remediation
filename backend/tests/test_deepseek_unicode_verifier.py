@@ -115,6 +115,40 @@ def test_acceptance_gate_ignores_vision_probe_in_text_only_mode() -> None:
     assert decision.text == "2"
 
 
+def test_acceptance_gate_allows_verified_digit_with_inferred_candidates() -> None:
+    context = ambiguity_context()
+    context["candidates"] = [f"U+003{d}" for d in range(10)]
+    context["deterministic_contradictions"] = []
+    response = valid_response() | {"vision_probe": ""}
+
+    decision = validate_deepseek_response(
+        response,
+        context,
+        "K7M4Q2",
+        0.98,
+        require_vision_probe=False,
+    )
+
+    assert decision.accepted is True
+    assert decision.rejection_reason is None
+
+
+def test_acceptance_gate_rejects_only_authoritative_contradictions() -> None:
+    context = ambiguity_context()
+    context["deterministic_contradictions"] = ["2", "²"]
+
+    decision = validate_deepseek_response(
+        valid_response() | {"vision_probe": ""},
+        context,
+        "K7M4Q2",
+        0.98,
+        require_vision_probe=False,
+    )
+
+    assert decision.accepted is False
+    assert decision.rejection_reason == "deterministic-contradiction"
+
+
 def test_text_request_uses_plain_string_user_content() -> None:
     request = build_deepseek_text_request(ambiguity_context(), model="deepseek-v4-pro")
 

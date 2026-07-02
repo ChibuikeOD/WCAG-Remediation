@@ -309,9 +309,37 @@ def test_infer_typographic_candidates_for_uniform_superscript() -> None:
 
     inferred = unicode_module._infer_typographic_candidates(occurrences)
 
-    assert "2" in inferred
-    assert "²" in inferred
-    assert "baseline" not in inferred
+    assert inferred == tuple(str(digit) for digit in range(10))
+
+
+def test_typographic_inference_leaves_deterministic_contradictions_empty() -> None:
+    occurrences = [{"position": "superscript"}, {"position": "superscript"}]
+    inferred = unicode_module._infer_typographic_candidates(occurrences)
+    authoritative_texts: set[str] = set()
+    contradictions = sorted(authoritative_texts) if len(authoritative_texts) > 1 else []
+    candidate_sequences = [
+        notation
+        for text in sorted(inferred)
+        for notation in unicode_module._unicode_notation(text)
+    ]
+
+    assert contradictions == []
+    assert len(candidate_sequences) == 10
+
+
+def test_verified_deepseek_answer_not_blocked_by_inferred_candidates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = build_type0_pdf(tmp_path / "accepted.pdf", shown_cid=0x0B36)
+    monkeypatch.setattr(unicode_module, "verify_repair", lambda *_args: (True, "ok"))
+
+    result = repair_missing_unicode(
+        path, verifier=VerifierSpy(accepted_decision("2"))
+    )
+
+    assert result["success"] is True
+    assert result["details"]["applied"] == 1
+    assert result["details"]["decisions"][0]["llm_recommendation_applied"] is True
 
 
 def test_infer_typographic_candidates_skips_mixed_positions() -> None:

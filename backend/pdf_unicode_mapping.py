@@ -216,9 +216,7 @@ def _infer_typographic_candidates(occurrences: list[dict]) -> tuple[str, ...]:
     if not occurrences:
         return ()
     positions = {item["position"] for item in occurrences}
-    if positions == {"superscript"}:
-        return tuple(str(digit) for digit in range(10)) + ("²", "³", "ⁿ")
-    if positions == {"subscript"}:
+    if positions in ({"superscript"}, {"subscript"}):
         return tuple(str(digit) for digit in range(10))
     return ()
 
@@ -294,29 +292,28 @@ def build_ambiguity_context(
         metadata = document.metadata or {}
         document.close()
 
-    candidate_texts: set[str] = set()
+    authoritative_texts: set[str] = set()
     if finding.gid is not None:
-        candidate_texts.update(evidence.unicode_by_gid.get(finding.gid, ()))
+        authoritative_texts.update(evidence.unicode_by_gid.get(finding.gid, ()))
         glyph_name = evidence.glyph_name_by_gid.get(finding.gid)
         if glyph_name and evidence.unicode_by_glyph_name.get(glyph_name):
-            candidate_texts.add(evidence.unicode_by_glyph_name[glyph_name])
+            authoritative_texts.add(evidence.unicode_by_glyph_name[glyph_name])
+    contradictions = sorted(authoritative_texts) if len(authoritative_texts) > 1 else []
     candidate_sequences = [
         notation
-        for text in sorted(candidate_texts)
+        for text in sorted(authoritative_texts)
         for notation in _unicode_notation(text)
     ]
     candidate_source = "font-metadata"
     if not candidate_sequences:
         inferred = _infer_typographic_candidates(occurrences)
         if inferred:
-            candidate_texts.update(inferred)
             candidate_sequences = [
                 notation
-                for text in sorted(candidate_texts)
+                for text in sorted(inferred)
                 for notation in _unicode_notation(text)
             ]
             candidate_source = "typographic-inference"
-    contradictions = sorted(candidate_texts) if len(candidate_texts) > 1 else []
     if isolated:
         images.insert(0, isolated)
     return {

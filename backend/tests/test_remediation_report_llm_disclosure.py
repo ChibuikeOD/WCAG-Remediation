@@ -174,13 +174,14 @@ def test_report_contains_llm_disclosure(
     assert expected in extract_pdf_text(path)
 
 
-def test_report_includes_deepseek_response_details(tmp_path: Path) -> None:
+def test_report_includes_gemini_response_details(tmp_path: Path) -> None:
     details = {
+        "provider": "Gemini",
         "llm_invoked": True,
         "llm_recommendation_applied": False,
         "evaluated": 1,
         "applied": 0,
-        "model": "deepseek-v4-pro",
+        "model": "gemini-3.1-flash-lite",
         "min_confidence": 0.98,
         "max_occurrences": 3,
         "decisions": [
@@ -189,7 +190,8 @@ def test_report_includes_deepseek_response_details(tmp_path: Path) -> None:
                 "cid": 2870,
                 "pages": [30, 171],
                 "occurrence_count": 12,
-                "resolution_source": "deepseek-v4-pro",
+                "resolution_source": "gemini-3.1-flash-lite",
+                "llm_model_used": "gemini-3.1-flash-lite",
                 "llm_invoked": True,
                 "llm_recommendation_applied": False,
                 "confidence": 0.91,
@@ -236,15 +238,16 @@ def test_report_includes_deepseek_response_details(tmp_path: Path) -> None:
     path = generate_report_with_unicode_details(tmp_path, details)
     text = extract_pdf_text(path)
 
-    assert "DeepSeek Unicode Mapping Review" in text
+    assert "Gemini Unicode Mapping Review" in text
     assert "Minimum confidence threshold" in text
     assert "0.98" in text
     assert "Glyph decision 1: /CIDFont+F6 / CID 2870" in text
-    assert "Evidence sent to DeepSeek" in text
+    assert "Evidence sent to Gemini" in text
     assert "U+0032" in text
     assert "U+00B2" in text
     assert "confidence-below-threshold" in text
-    assert "DeepSeek response" in text
+    assert "Gemini response" in text
+    assert "DeepSeek" not in text
     assert "Superscript styling of digit two" in text
     assert "Raw JSON response" in text
     assert "vision_probe" in text
@@ -252,29 +255,29 @@ def test_report_includes_deepseek_response_details(tmp_path: Path) -> None:
     assert "superscript" in text
 
 
-def test_report_includes_deepseek_api_error_details(tmp_path: Path) -> None:
+def test_report_includes_gemini_api_error_details(tmp_path: Path) -> None:
     details = {
+        "provider": "Gemini",
         "llm_invoked": True,
         "llm_recommendation_applied": False,
         "evaluated": 1,
         "applied": 0,
-        "model": "deepseek-v4-pro",
-        "vision_fallback_model": "deepseek-chat",
+        "model": "gemini-3.1-flash-lite",
         "decisions": [
             {
                 "font": "/CIDFont+F6",
                 "cid": 2870,
                 "pages": [30],
                 "occurrence_count": 58,
-                "resolution_source": "deepseek-v4-pro",
+                "resolution_source": "gemini-3.1-flash-lite",
                 "llm_invoked": True,
                 "llm_recommendation_applied": False,
-                "llm_model_used": "deepseek-v4-pro",
+                "llm_model_used": "gemini-3.1-flash-lite",
                 "unresolved_reason": "api-status-400",
                 "llm_response": {
                     "api_error": {
                         "status_code": 400,
-                        "model": "deepseek-v4-pro",
+                        "model": "gemini-3.1-flash-lite",
                         "body": {"error": {"message": "vision not supported"}},
                     }
                 },
@@ -284,24 +287,25 @@ def test_report_includes_deepseek_api_error_details(tmp_path: Path) -> None:
     path = generate_report_with_unicode_details(tmp_path, details)
     text = extract_pdf_text(path)
 
-    assert "DeepSeek API error" in text
+    assert "Gemini API error" in text
     assert "vision not supported" in text
     assert "HTTP status" in text
 
 
-def test_report_skips_empty_deepseek_response_table(tmp_path: Path) -> None:
+def test_report_skips_empty_gemini_response_table(tmp_path: Path) -> None:
     details = {
+        "provider": "Gemini",
         "llm_invoked": True,
         "evaluated": 1,
         "applied": 0,
-        "model": "deepseek-v4-pro",
+        "model": "gemini-3.1-flash-lite",
         "decisions": [
             {
                 "font": "/CIDFont+F6",
                 "cid": 2870,
                 "pages": [30],
                 "occurrence_count": 1,
-                "resolution_source": "deepseek-v4-pro",
+                "resolution_source": "gemini-3.1-flash-lite",
                 "llm_invoked": True,
                 "llm_recommendation_applied": False,
                 "llm_response": {},

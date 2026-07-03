@@ -1300,21 +1300,20 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
-    """Repair incomplete ToUnicode maps, using DeepSeek only for ambiguity."""
+    """Repair incomplete ToUnicode maps, using Gemini vision only for ambiguity."""
     from .config import settings
-    from .deepseek_unicode_verifier import verify_ambiguous_unicode
+    from .gemini_unicode_verifier import verify_ambiguous_unicode
     from .pdf_unicode_mapping import repair_missing_unicode
 
     verifier = None
-    if settings.PDF_UNICODE_LLM_ENABLED and settings.DEEPSEEK_API_KEY:
+    if settings.PDF_UNICODE_LLM_ENABLED and settings.GEMINI_API_KEY:
         def verifier(context: Dict[str, Any]):
             return verify_ambiguous_unicode(
                 context,
-                api_key=settings.DEEPSEEK_API_KEY or "",
+                api_key=settings.GEMINI_API_KEY or "",
                 min_confidence=settings.PDF_UNICODE_LLM_MIN_CONFIDENCE,
-                model=settings.PDF_UNICODE_LLM_MODEL,
-                vision_fallback_model=settings.PDF_UNICODE_LLM_VISION_FALLBACK_MODEL,
-                use_vision=settings.PDF_UNICODE_LLM_USE_VISION,
+                model=settings.GEMINI_MODEL,
+                endpoint=settings.GEMINI_API_ENDPOINT,
                 max_attempts=settings.PDF_UNICODE_LLM_MAX_ATTEMPTS,
                 timeout=settings.PDF_UNICODE_LLM_TIMEOUT_SECONDS,
             )
@@ -1323,16 +1322,20 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
         Path(pdf_path),
         verifier=verifier,
         max_occurrences=settings.PDF_UNICODE_LLM_MAX_OCCURRENCES,
+        provider_name="Gemini",
+        provider_label="Gemini 3.1 Flash-Lite",
+        model_name=settings.GEMINI_MODEL,
     )
     details = result.get("details")
     if isinstance(details, dict):
         details["min_confidence"] = settings.PDF_UNICODE_LLM_MIN_CONFIDENCE
         details["max_occurrences"] = settings.PDF_UNICODE_LLM_MAX_OCCURRENCES
-        details["vision_fallback_model"] = settings.PDF_UNICODE_LLM_VISION_FALLBACK_MODEL
-        details["use_vision"] = settings.PDF_UNICODE_LLM_USE_VISION
+        details["provider"] = "Gemini"
+        details["use_vision"] = True
         details["max_attempts"] = settings.PDF_UNICODE_LLM_MAX_ATTEMPTS
-        if settings.PDF_UNICODE_LLM_MODEL:
-            details["model"] = settings.PDF_UNICODE_LLM_MODEL
+        details["endpoint"] = settings.GEMINI_API_ENDPOINT
+        if settings.GEMINI_MODEL:
+            details["model"] = settings.GEMINI_MODEL
     return result
 
 def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:

@@ -474,21 +474,23 @@ def generate_remediation_report_for_api(
         None,
     )
     unicode_details = (unicode_result or {}).get("details") or {}
+    llm_provider = unicode_details.get("provider") or "Gemini"
+    llm_provider_label = unicode_details.get("provider_label") or llm_provider
     if unicode_details.get("llm_unavailable"):
         llm_disclosure = (
-            "DeepSeek V4 Pro was requested but unavailable; "
+            f"{llm_provider_label} was requested but unavailable; "
             "no ambiguous mappings were changed."
         )
     elif unicode_details.get("llm_invoked"):
         evaluated = int(unicode_details.get("evaluated", 0))
         applied = int(unicode_details.get("applied", 0))
         llm_disclosure = (
-            f"DeepSeek V4 Pro evaluated {evaluated} ambiguous Unicode mapping(s); "
+            f"{llm_provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
             f"{applied} recommendation(s) were applied."
         )
     else:
         llm_disclosure = (
-            "DeepSeek V4 Pro was not used; all Unicode decisions were deterministic."
+            f"{llm_provider_label} was not used; all Unicode decisions were deterministic."
         )
 
     manual_remaining = [
@@ -606,7 +608,7 @@ def generate_remediation_report_for_api(
         if rows:
             story.append(_build_decision_table(rows))
 
-    def add_unicode_deepseek_details(
+    def add_unicode_llm_details(
         story: List[Any], details: Dict[str, Any]
     ) -> None:
         decisions = details.get("decisions") or []
@@ -615,7 +617,8 @@ def generate_remediation_report_for_api(
         ):
             return
 
-        story.append(Paragraph("DeepSeek Unicode Mapping Review", section_style))
+        provider = details.get("provider") or "Gemini"
+        story.append(Paragraph(f"{provider} Unicode Mapping Review", section_style))
 
         summary_rows: List[List[Any]] = []
         _add_key_value_rows(summary_rows, "Model", details.get("model"))
@@ -643,7 +646,7 @@ def generate_remediation_report_for_api(
             details.get("max_occurrences"),
         )
         _add_key_value_rows(
-            summary_rows, "Glyphs evaluated by DeepSeek", details.get("evaluated")
+            summary_rows, f"Glyphs evaluated by {provider}", details.get("evaluated")
         )
         _add_key_value_rows(
             summary_rows, "Recommendations applied", details.get("applied")
@@ -721,7 +724,7 @@ def generate_remediation_report_for_api(
             llm_context = decision.get("llm_context") or {}
             if llm_context:
                 story.append(Spacer(1, 4))
-                story.append(Paragraph("Evidence sent to DeepSeek", subsection_style))
+                story.append(Paragraph(f"Evidence sent to {provider}", subsection_style))
                 context_rows: List[List[Any]] = []
                 _add_key_value_rows(
                     context_rows, "Document title", llm_context.get("document_title")
@@ -797,7 +800,7 @@ def generate_remediation_report_for_api(
                 raw_content = llm_response.get("raw_content")
                 if api_error:
                     story.append(Spacer(1, 4))
-                    story.append(Paragraph("DeepSeek API error", subsection_style))
+                    story.append(Paragraph(f"{provider} API error", subsection_style))
                     error_rows: List[List[Any]] = []
                     _add_key_value_rows(
                         error_rows,
@@ -816,7 +819,7 @@ def generate_remediation_report_for_api(
                     _append_decision_table(story, error_rows)
                 elif raw_content is not None or llm_response.get("finish_reason"):
                     story.append(Spacer(1, 4))
-                    story.append(Paragraph("Unparseable DeepSeek output", subsection_style))
+                    story.append(Paragraph(f"Unparseable {provider} output", subsection_style))
                     unparseable_rows: List[List[Any]] = []
                     _add_key_value_rows(
                         unparseable_rows,
@@ -829,13 +832,13 @@ def generate_remediation_report_for_api(
                     else:
                         story.append(
                             dynamic_paragraph(
-                                "(DeepSeek returned an empty message body.)",
+                                f"({provider} returned an empty message body.)",
                                 mono_style,
                             )
                         )
                 if llm_response.get("status") in {"verified", "ambiguous"}:
                     story.append(Spacer(1, 4))
-                    story.append(Paragraph("DeepSeek response", subsection_style))
+                    story.append(Paragraph(f"{provider} response", subsection_style))
                     response_rows: List[List[Any]] = []
                     _add_key_value_rows(
                         response_rows, "Status", llm_response.get("status")
@@ -886,7 +889,7 @@ def generate_remediation_report_for_api(
                 story.append(Spacer(1, 4))
                 story.append(
                     dynamic_paragraph(
-                        "DeepSeek was invoked but returned no parseable JSON response."
+                        f"{provider} was invoked but returned no parseable JSON response."
                     )
                 )
 
@@ -971,7 +974,7 @@ def generate_remediation_report_for_api(
             dynamic_paragraph(llm_disclosure),
         ]
     )
-    add_unicode_deepseek_details(story, unicode_details)
+    add_unicode_llm_details(story, unicode_details)
     story.extend(
         [
             Paragraph("Successful Fixes", section_style),

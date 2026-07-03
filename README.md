@@ -142,15 +142,18 @@ The remediation pipeline scans actual PDF text-showing operators for character
 codes that are missing from a font's `ToUnicode` map. Authoritative embedded
 font metadata is used first and does not invoke an LLM.
 
-Only ambiguous mappings are sent to `deepseek-v4-pro`. The request includes an
+Only ambiguous mappings are sent to `gemini-3.1-flash-lite`. The synchronous
+vision request includes an
 isolated glyph, representative line crops from distinct pages, masked nearby
 text, typographic position, font metadata, and candidate Unicode values. Set
-`DEEPSEEK_API_KEY` to enable this fallback. The verifier fails closed when
+`GEMINI_API_KEY` to enable this fallback. Optional `GEMINI_MODEL` and
+`GEMINI_API_ENDPOINT` variables override the model and Google's OpenAI-compatible
+Chat Completions endpoint. The verifier fails closed when
 multimodal input cannot be confirmed, when confidence is below `0.98`, when
 occurrences conflict, or when a credible alternative remains.
 
 Rejected decisions leave the PDF unchanged. Remediation results and generated
-JSON reports separately disclose whether DeepSeek was invoked and whether its
+JSON and PDF reports separately disclose whether Gemini was invoked and whether its
 recommendation was applied.
 
 ## API Endpoints

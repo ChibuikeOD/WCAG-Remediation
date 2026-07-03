@@ -44,11 +44,76 @@ def test_remediation_result_accepts_unicode_decision_details() -> None:
     }
 
 
-def test_unicode_verifier_model_is_deepseek_v4_pro() -> None:
+def test_unicode_verifier_defaults_to_gemini_flash_lite() -> None:
     settings = Settings()
 
-    assert settings.PDF_UNICODE_LLM_MODEL == "deepseek-v4-pro"
+    assert settings.GEMINI_MODEL == "gemini-3.1-flash-lite"
     assert settings.PDF_UNICODE_LLM_MIN_CONFIDENCE == 0.98
+
+
+def test_settings_load_gemini_key_from_backend_env(tmp_path: Path, monkeypatch) -> None:
+    backend_dir = tmp_path / "backend"
+    backend_dir.mkdir()
+    (backend_dir / ".env").write_text(
+        "GEMINI_API_KEY=backend-env-key\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings()
+
+    assert settings.GEMINI_API_KEY == "backend-env-key"
+
+
+def test_unicode_repair_uses_configured_gemini_vision_verifier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from backend import config
+    from backend import gemini_unicode_verifier
+    from backend import pdf_remediator_fixes as fixes
+    from backend import pdf_unicode_mapping
+    from backend.deepseek_unicode_verifier import DeepSeekDecision
+
+    captured = {}
+
+    def fake_verify(context, **kwargs):
+        captured.update(kwargs)
+        captured["images"] = context["images"]
+        return DeepSeekDecision(True, "2", 0.99, None)
+
+    def fake_repair(
+        path, *, verifier, max_occurrences, provider_name, provider_label, model_name
+    ):
+        assert provider_name == "Gemini"
+        assert provider_label == "Gemini 3.1 Flash-Lite"
+        assert model_name == "gemini-3.1-flash-lite"
+        decision = verifier({"images": ["data:image/png;base64,AAAA"]})
+        assert decision.accepted is True
+        return {
+            "issue_id": "pdf-unicode-mapping",
+            "success": True,
+            "details": {},
+        }
+
+    monkeypatch.setattr(config.settings, "PDF_UNICODE_LLM_ENABLED", True)
+    monkeypatch.setattr(config.settings, "GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setattr(
+        config.settings, "GEMINI_MODEL", "gemini-3.1-flash-lite"
+    )
+    monkeypatch.setattr(
+        config.settings,
+        "GEMINI_API_ENDPOINT",
+        "https://example.test/chat/completions",
+    )
+    monkeypatch.setattr(gemini_unicode_verifier, "verify_ambiguous_unicode", fake_verify)
+    monkeypatch.setattr(pdf_unicode_mapping, "repair_missing_unicode", fake_repair)
+
+    result = fixes.fix_pdf_unicode_mappings(tmp_path / "document.pdf")
+
+    assert result["success"] is True
+    assert captured["api_key"] == "gemini-secret"
+    assert captured["model"] == "gemini-3.1-flash-lite"
+    assert captured["endpoint"] == "https://example.test/chat/completions"
+    assert captured["images"]
 
 
 def test_full_pdf_remediation_always_requests_structure_overwrite(

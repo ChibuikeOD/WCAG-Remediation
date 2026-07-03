@@ -607,16 +607,18 @@ def _qpdf_check(pdf_path: Path) -> tuple[bool, str]:
     return True, "qpdf-ok"
 
 
-def _disclosure(evaluated: int, applied: int, unavailable: bool) -> str:
+def _disclosure(
+    evaluated: int, applied: int, unavailable: bool, provider_label: str
+) -> str:
     if unavailable:
         return (
-            "DeepSeek V4 Pro was requested but unavailable; "
+            f"{provider_label} was requested but unavailable; "
             "no ambiguous mappings were changed."
         )
     if evaluated == 0:
-        return "DeepSeek V4 Pro was not used; all Unicode decisions were deterministic."
+        return f"{provider_label} was not used; all Unicode decisions were deterministic."
     return (
-        f"DeepSeek V4 Pro evaluated {evaluated} ambiguous Unicode mapping(s); "
+        f"{provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
         f"{applied} recommendation(s) were applied."
     )
 
@@ -626,6 +628,9 @@ def repair_missing_unicode(
     *,
     verifier=None,
     max_occurrences: int = 3,
+    provider_name: str = "Gemini",
+    provider_label: str = "Gemini 3.1 Flash-Lite",
+    model_name: str = "gemini-3.1-flash-lite",
 ) -> dict:
     """Resolve missing mappings and atomically install only verified changes."""
     findings = inventory_missing_unicode(pdf_path)
@@ -712,15 +717,17 @@ def repair_missing_unicode(
         decisions.append(record)
 
     details = {
+        "provider": provider_name,
+        "provider_label": provider_label,
         "llm_invoked": evaluated > 0,
         "llm_recommendation_applied": llm_applied > 0,
         "llm_unavailable": unavailable,
-        "model": "deepseek-v4-pro" if evaluated else None,
+        "model": model_name if evaluated else None,
         "evaluated": evaluated,
         "applied": llm_applied,
         "decisions": decisions,
     }
-    disclosure = _disclosure(evaluated, llm_applied, unavailable)
+    disclosure = _disclosure(evaluated, llm_applied, unavailable, provider_label)
     if not accepted:
         return {
             "issue_id": "pdf-unicode-mapping",
@@ -750,7 +757,7 @@ def repair_missing_unicode(
             details["accepted_before_rollback"] = accepted_before_rollback
             rollback_message = (
                 f"Unicode repair rolled back: {reason}. "
-                f"DeepSeek V4 Pro evaluated {evaluated} ambiguous Unicode mapping(s); "
+                f"{provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
                 f"{accepted_before_rollback} recommendation(s) were accepted before rollback."
             )
             return {

@@ -125,10 +125,12 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: Optional[str] = None
 
     # Ambiguous PDF Unicode verification
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+    GEMINI_API_ENDPOINT: str = (
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    )
     PDF_UNICODE_LLM_ENABLED: bool = True
-    PDF_UNICODE_LLM_MODEL: str = "deepseek-v4-pro"
-    PDF_UNICODE_LLM_VISION_FALLBACK_MODEL: str = "deepseek-chat"
-    PDF_UNICODE_LLM_USE_VISION: bool = False
     PDF_UNICODE_LLM_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=5)
     PDF_UNICODE_LLM_MIN_CONFIDENCE: float = Field(default=0.98, ge=0.0, le=1.0)
     PDF_UNICODE_LLM_TIMEOUT_SECONDS: float = Field(default=45.0, gt=0.0)
@@ -142,7 +144,7 @@ class Settings(BaseSettings):
     ]
     
     class Config:
-        env_file = ".env"
+        env_file = (".env", "backend/.env")
         env_file_encoding = "utf-8"
 
 

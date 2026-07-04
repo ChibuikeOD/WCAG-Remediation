@@ -314,6 +314,63 @@ def test_reserve_idempotency_requires_same_job_and_payload(db):
         service.reserve(user.id, second.id, 3, "same-key")
 
 
+def test_reserve_retry_rejects_authoritative_page_count_drift(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    service.reserve(user.id, job.id, 3, "same-key")
+    job.page_count = 4
+    db.commit()
+
+    with pytest.raises(TrialStateError, match="page count"):
+        service.reserve(user.id, job.id, 3, "same-key")
+
+    assert len(entries(db, user.id)) == 2
+
+
+def test_reserve_retry_rejects_illegal_changed_job_state(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    service.reserve(user.id, job.id, 3, "same-key")
+    job.status = "processing"
+    db.commit()
+
+    with pytest.raises(TrialStateError, match="reserved"):
+        service.reserve(user.id, job.id, 3, "same-key")
+
+    assert len(entries(db, user.id)) == 2
+
+
+def test_reserve_retry_rejects_missing_authoritative_job(db):
+    user = add_user(db)
+    user_id = user.id
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    job_id = job.id
+    service.reserve(user_id, job_id, 3, "same-key")
+
+    # Simulate external database corruption; the declared FK normally prevents
+    # a job from disappearing while its immutable ledger history remains.
+    connection = db.get_bind().raw_connection()
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DELETE FROM remediation_jobs WHERE id = ?", (job_id,))
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys=ON")
+    finally:
+        connection.close()
+    db.expire_all()
+
+    with pytest.raises(TrialStateError, match="job"):
+        service.reserve(user_id, job_id, 3, "same-key")
+
+    assert len(entries(db, user_id)) == 2
+
+
 def test_idempotent_retry_finishes_transaction_and_releases_locks(db):
     user = add_user(db)
     service = TrialService(db)

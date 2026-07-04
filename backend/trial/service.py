@@ -87,6 +87,12 @@ class TrialService:
             raise ValueError("pages must be a positive integer")
         try:
             self._lock_account(user_id)
+            job = self._lock_job(job_id)
+            if job is None or job.user_id != user_id:
+                raise TrialStateError("remediation job does not belong to user")
+            if job.page_count != pages:
+                raise TrialStateError("pages must match authoritative job page count")
+
             existing = self.session.scalar(
                 select(TrialLedgerEntry).where(
                     TrialLedgerEntry.user_id == user_id,
@@ -96,15 +102,14 @@ class TrialService:
             if existing is not None:
                 if not self._matches_reserve(existing, job_id, pages):
                     raise TrialStateError("idempotency key conflicts with reservation")
+                if job.status != "reserved":
+                    raise TrialStateError(
+                        "idempotent reservation requires a reserved job"
+                    )
                 result = self._get_balance(user_id)
                 self.session.commit()
                 return result
 
-            job = self._lock_job(job_id)
-            if job is None or job.user_id != user_id:
-                raise TrialStateError("remediation job does not belong to user")
-            if job.page_count != pages:
-                raise TrialStateError("pages must match authoritative job page count")
             if job.status != "pending":
                 raise TrialStateError("remediation job must be pending")
 

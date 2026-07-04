@@ -129,6 +129,28 @@ def test_trial_account_eligibility_provenance_is_immutable(
         db_session.commit()
 
 
+def test_trial_account_user_ownership_is_immutable(db_session):
+    original_user = add_user(db_session, "original-user")
+    replacement_user = add_user(db_session, "replacement-user")
+    account = database.TrialAccount(
+        user=original_user,
+        normalized_email="person@example.com",
+        normalized_domain="example.com",
+        granted_pages=10,
+        eligibility_rule_version="v1",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    account.user = replacement_user
+    with pytest.raises(ValueError, match="eligibility provenance is immutable"):
+        db_session.commit()
+    db_session.rollback()
+
+    assert db_session.get(database.TrialAccount, original_user.id).user_id == original_user.id
+    assert db_session.get(database.TrialAccount, replacement_user.id) is None
+
+
 def test_trial_ledger_entry_enforces_user_idempotency_and_signed_deltas(db_session):
     user = add_user(db_session)
     first = database.TrialLedgerEntry(
@@ -306,7 +328,7 @@ def test_remediation_job_rejects_a_file_owned_by_another_user(db_session):
             idempotency_key="cross-user-job",
         )
     )
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValueError, match="file must be owned by the job user"):
         db_session.commit()
 
 
@@ -484,7 +506,7 @@ def test_remediation_job_remains_mutable(db_session):
     assert db_session.get(database.RemediationJob, job.id).status == "processing"
 
 
-def test_deleting_uploaded_file_cascades_its_remediation_jobs(db_session):
+def test_deleting_uploaded_file_preserves_its_remediation_job(db_session):
     user = add_user(db_session)
     uploaded_file = add_file(db_session, user)
     job = database.RemediationJob(
@@ -502,7 +524,42 @@ def test_deleting_uploaded_file_cascades_its_remediation_jobs(db_session):
     db_session.delete(uploaded_file)
     db_session.commit()
 
-    assert db_session.get(database.RemediationJob, job_id) is None
+    stored_job = db_session.get(database.RemediationJob, job_id)
+    assert stored_job is not None
+    assert stored_job.file_id is None
+
+
+def test_deleting_uploaded_file_preserves_job_and_immutable_ledger_history(db_session):
+    user = add_user(db_session)
+    uploaded_file = add_file(db_session, user)
+    job = add_job(db_session, user, uploaded_file)
+    ledger = database.TrialLedgerEntry(
+        id="ledger-1",
+        user=user,
+        job=job,
+        entry_type="reserve",
+        granted_delta=0,
+        reserved_delta=2,
+        consumed_delta=0,
+        idempotency_key="reserve-job-1",
+    )
+    db_session.add(ledger)
+    db_session.commit()
+    job_id, ledger_id = job.id, ledger.id
+
+    db_session.delete(uploaded_file)
+    db_session.commit()
+
+    stored_job = db_session.get(database.RemediationJob, job_id)
+    stored_ledger = db_session.get(database.TrialLedgerEntry, ledger_id)
+    assert stored_job is not None
+    assert stored_job.file_id is None
+    assert stored_ledger is not None
+    assert stored_ledger.job_id == job_id
+
+    stored_ledger.reserved_delta = 3
+    with pytest.raises(ValueError, match="append-only"):
+        db_session.commit()
 
 
 def test_trial_timestamp_columns_are_timezone_aware_and_nonnullable(db_session):
@@ -544,14 +601,22 @@ def test_trial_model_constraints_match_migration_ddl():
     normalized = re.sub(r"\s+", " ", migration.lower())
 
     assert "unique (id, owner_id)" in normalized
-    assert "foreign key (file_id, user_id)" in normalized
-    assert "references public.uploaded_files(id, owner_id)" in normalized
+    assert "file_id text null references public.uploaded_files(id) on delete set null" in normalized
+    assert "remediation_jobs_enforce_file_ownership" in normalized
     assert "unique (id, user_id)" in normalized
     assert "foreign key (job_id, user_id)" in normalized
     assert "references public.remediation_jobs(id, user_id)" in normalized
     assert "constraint ck_trial_ledger_signed_deltas" in normalized
     assert "timestamp with time zone" in normalized
     assert "trial_ledger_entries_append_only" in normalized
+    assert "new.user_id is distinct from old.user_id" in normalized
+    assert "fk_uploaded_files_owner_id_users" in normalized
+
+    job_file_fk = next(iter(database.RemediationJob.__table__.c.file_id.foreign_keys))
+    owner_fk = next(iter(database.UploadedFile.__table__.c.owner_id.foreign_keys))
+    assert database.RemediationJob.__table__.c.file_id.nullable is True
+    assert job_file_fk.ondelete == "SET NULL"
+    assert owner_fk.ondelete == "CASCADE"
 
     model_constraint_names = {
         constraint.name
@@ -594,12 +659,21 @@ def test_postgresql_trial_migration_constraints_triggers_and_rls():
             cursor.execute(
                 f'create table "{schema}".users (id text primary key);'
                 f'create table "{schema}".uploaded_files ('
-                "id text primary key, owner_id text null references "
-                f'"{schema}".users(id) on delete cascade);'
+                "id text primary key, owner_id text null, "
+                "constraint legacy_uploaded_files_owner_id_fkey foreign key (owner_id) "
+                f'references "{schema}".users(id));'
                 f'create table "{schema}".accessibility_reports ('
                 "id text primary key)"
             )
             cursor.execute(migration, prepare=False)
+
+            cursor.execute(
+                "select confdeltype from pg_constraint "
+                "where conrelid = %s::regclass and conname = "
+                "'fk_uploaded_files_owner_id_users'",
+                (f'"{schema}".uploaded_files',),
+            )
+            assert cursor.fetchone() == ("c",)
 
             cursor.execute(
                 "select relname, relrowsecurity from pg_class "
@@ -632,6 +706,7 @@ def test_postgresql_trial_migration_constraints_triggers_and_rls():
             )
             trigger_names = {row[0] for row in cursor.fetchall()}
             assert {
+                "remediation_jobs_enforce_file_ownership",
                 "remediation_jobs_set_updated_at",
                 "trial_accounts_immutable_grant_provenance",
                 "trial_ledger_entries_append_only",
@@ -701,6 +776,12 @@ def test_postgresql_trial_migration_constraints_triggers_and_rls():
             with pytest.raises(psycopg.errors.RaiseException):
                 with connection.transaction():
                     cursor.execute(
+                        f'update "{schema}".trial_accounts '
+                        "set user_id = 'user-2' where user_id = 'user-1'"
+                    )
+            with pytest.raises(psycopg.errors.RaiseException):
+                with connection.transaction():
+                    cursor.execute(
                         f'update "{schema}".trial_ledger_entries '
                         "set reserved_delta = 2 where id = 'ledger-1'"
                     )
@@ -711,10 +792,32 @@ def test_postgresql_trial_migration_constraints_triggers_and_rls():
                         "where id = 'ledger-1'"
                     )
 
+            cursor.execute(f'delete from "{schema}".uploaded_files where id = %s', ("file-1",))
+            cursor.execute(
+                f'select file_id from "{schema}".remediation_jobs where id = %s',
+                ("job-1",),
+            )
+            assert cursor.fetchone() == (None,)
+            cursor.execute(
+                f'select job_id from "{schema}".trial_ledger_entries where id = %s',
+                ("ledger-1",),
+            )
+            assert cursor.fetchone() == ("job-1",)
+
             cursor.execute(f'delete from "{schema}".users where id = %s', ("user-1",))
             cursor.execute(
                 f'select count(*) from "{schema}".trial_ledger_entries '
                 "where user_id = 'user-1'"
+            )
+            assert cursor.fetchone()[0] == 0
+            cursor.execute(
+                f'insert into "{schema}".uploaded_files (id, owner_id) values (%s, %s)',
+                ("file-2", "user-2"),
+            )
+            cursor.execute(f'delete from "{schema}".users where id = %s', ("user-2",))
+            cursor.execute(
+                f'select count(*) from "{schema}".uploaded_files where id = %s',
+                ("file-2",),
             )
             assert cursor.fetchone()[0] == 0
             connection.rollback()

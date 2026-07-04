@@ -7,6 +7,37 @@ alter table public.uploaded_files
     add constraint ck_uploaded_files_page_count_nonnegative
         check (page_count is null or page_count >= 0);
 
+-- The legacy SQLAlchemy FK was created without ON DELETE CASCADE and its name
+-- varies by deployment. Replace every owner_id -> users FK deterministically.
+do $$
+declare
+    owner_fk record;
+begin
+    for owner_fk in
+        select constraint_row.conname
+        from pg_catalog.pg_constraint as constraint_row
+        where constraint_row.contype = 'f'
+          and constraint_row.conrelid = 'public.uploaded_files'::regclass
+          and constraint_row.confrelid = 'public.users'::regclass
+          and (
+              select column_row.attnum
+              from pg_catalog.pg_attribute as column_row
+              where column_row.attrelid = constraint_row.conrelid
+                and column_row.attname = 'owner_id'
+          ) = any (constraint_row.conkey)
+    loop
+        execute format(
+            'alter table public.uploaded_files drop constraint %I',
+            owner_fk.conname
+        );
+    end loop;
+end;
+$$;
+
+alter table public.uploaded_files
+    add constraint fk_uploaded_files_owner_id_users
+        foreign key (owner_id) references public.users(id) on delete cascade;
+
 create table public.trial_accounts (
     user_id text primary key references public.users(id) on delete cascade,
     normalized_email text not null,
@@ -25,7 +56,7 @@ create table public.trial_accounts (
 create table public.remediation_jobs (
     id text primary key,
     user_id text not null references public.users(id) on delete cascade,
-    file_id text not null,
+    file_id text null references public.uploaded_files(id) on delete set null,
     report_id text null references public.accessibility_reports(id) on delete set null,
     status text not null,
     page_count integer not null,
@@ -38,9 +69,6 @@ create table public.remediation_jobs (
         unique (user_id, idempotency_key),
     constraint uq_remediation_jobs_id_user_id
         unique (id, user_id),
-    constraint fk_remediation_jobs_file_owner
-        foreign key (file_id, user_id)
-        references public.uploaded_files(id, owner_id) on delete cascade,
     constraint ck_remediation_jobs_status
         check (status in ('pending', 'reserved', 'processing', 'succeeded', 'failed', 'released')),
     constraint ck_remediation_jobs_page_count_nonnegative
@@ -106,7 +134,8 @@ language plpgsql
 set search_path = ''
 as $$
 begin
-    if new.normalized_email is distinct from old.normalized_email
+    if new.user_id is distinct from old.user_id
+       or new.normalized_email is distinct from old.normalized_email
        or new.normalized_domain is distinct from old.normalized_domain
        or new.granted_pages is distinct from old.granted_pages
        or new.eligibility_rule_version is distinct from old.eligibility_rule_version
@@ -120,6 +149,30 @@ $$;
 create trigger trial_accounts_immutable_grant_provenance
 before update on public.trial_accounts
 for each row execute function public.prevent_trial_grant_provenance_update();
+
+create function public.enforce_remediation_job_file_ownership()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if new.file_id is not null
+       and not exists (
+           select 1
+           from public.uploaded_files as uploaded_file
+           where uploaded_file.id = new.file_id
+             and uploaded_file.owner_id = new.user_id
+       ) then
+        raise exception 'remediation job file must be owned by the job user'
+            using errcode = '23503';
+    end if;
+    return new;
+end;
+$$;
+
+create trigger remediation_jobs_enforce_file_ownership
+before insert or update of file_id, user_id on public.remediation_jobs
+for each row execute function public.enforce_remediation_job_file_ownership();
 
 create function public.prevent_trial_ledger_mutation()
 returns trigger

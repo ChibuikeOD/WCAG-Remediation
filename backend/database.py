@@ -17,6 +17,7 @@ from sqlalchemy import (
     event,
     func,
     inspect,
+    select,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from .config import settings
@@ -73,7 +74,13 @@ class UploadedFile(Base):
     file_size = Column(Integer)
     page_count = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
-    owner_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # Allow anonymous in debug/demo mode
+    owner_id = Column(
+        String,
+        ForeignKey(
+            "users.id", name="fk_uploaded_files_owner_id_users", ondelete="CASCADE"
+        ),
+        nullable=True,
+    )  # Allow anonymous in debug/demo mode
     
     owner = relationship("User", back_populates="files")
     reports = relationship("AccessibilityReport", back_populates="file", cascade="all, delete-orphan")
@@ -148,6 +155,7 @@ def prevent_trial_grant_provenance_update(_mapper, _connection, account):
     """Keep the original grant amount and rule version as audit evidence."""
     state = inspect(account)
     immutable_fields = (
+        "user_id",
         "normalized_email",
         "normalized_domain",
         "granted_pages",
@@ -232,7 +240,11 @@ class RemediationJob(Base):
     user_id = Column(
         String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    file_id = Column(String, nullable=False)
+    # Ownership is validated by an ORM guard and a PostgreSQL trigger. A composite
+    # FK cannot SET NULL only file_id portably, so the retention-safe FK is singular.
+    file_id = Column(
+        String, ForeignKey("uploaded_files.id", ondelete="SET NULL"), nullable=True
+    )
     report_id = Column(
         String,
         ForeignKey("accessibility_reports.id", ondelete="SET NULL"),
@@ -277,12 +289,6 @@ class RemediationJob(Base):
             "user_id", "idempotency_key", name="uq_remediation_jobs_user_idempotency"
         ),
         UniqueConstraint("id", "user_id", name="uq_remediation_jobs_id_user_id"),
-        ForeignKeyConstraint(
-            ["file_id", "user_id"],
-            ["uploaded_files.id", "uploaded_files.owner_id"],
-            name="fk_remediation_jobs_file_owner",
-            ondelete="CASCADE",
-        ),
         CheckConstraint(
             "status IN ('pending', 'reserved', 'processing', 'succeeded', 'failed', 'released')",
             name="ck_remediation_jobs_status",
@@ -294,6 +300,19 @@ class RemediationJob(Base):
         Index("ix_remediation_jobs_report_id", "report_id"),
         Index("ix_remediation_jobs_status", "status"),
     )
+
+
+@event.listens_for(RemediationJob, "before_insert")
+@event.listens_for(RemediationJob, "before_update")
+def validate_remediation_job_file_owner(_mapper, connection, job):
+    """Keep non-null job file links within the job owner's tenant."""
+    if job.file_id is None:
+        return
+    owner_id = connection.execute(
+        select(UploadedFile.owner_id).where(UploadedFile.id == job.file_id)
+    ).scalar_one_or_none()
+    if owner_id != job.user_id:
+        raise ValueError("remediation job file must be owned by the job user")
 
 
 def init_db():

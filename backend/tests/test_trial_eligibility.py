@@ -4,12 +4,27 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+import backend.trial.eligibility as eligibility
 from backend.trial.eligibility import EligibilityDecision, classify_verified_email
+
+
+PERSONAL_DOMAINS = [
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "msn.com",
+    "yahoo.com",
+    "icloud.com",
+    "me.com",
+    "mac.com",
+]
 
 
 @pytest.mark.parametrize(
     "domain",
-    ["gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com"],
+    PERSONAL_DOMAINS,
 )
 def test_personal_email_domains_receive_200_pages(domain: str) -> None:
     decision = classify_verified_email(f"person@{domain}")
@@ -50,12 +65,60 @@ def test_personal_domain_matching_is_exact() -> None:
     assert classify_verified_email("person@notgmail.com").granted_pages == 400
 
 
+def test_unicode_and_alabel_domains_have_the_same_canonical_decision() -> None:
+    unicode_decision = classify_verified_email("person@bücher.example")
+    alabel_decision = classify_verified_email("person@xn--bcher-kva.example")
+
+    assert unicode_decision == alabel_decision
+    assert unicode_decision.normalized_domain == "xn--bcher-kva.example"
+    assert unicode_decision.normalized_email == "person@xn--bcher-kva.example"
+    assert unicode_decision.granted_pages == 400
+
+
+def test_unicode_local_part_is_rejected_before_case_normalization() -> None:
+    with pytest.raises(ValueError, match="valid email"):
+        classify_verified_email("K@example.com")
+
+
+def test_invalid_idna_domain_is_rejected() -> None:
+    with pytest.raises(ValueError, match="valid email"):
+        classify_verified_email("person@\ud800.example")
+
+
 def test_decision_is_frozen_and_has_stable_rule_version() -> None:
     decision = classify_verified_email("person@acme.com")
 
     assert decision.rule_version == "2026-07-04"
     with pytest.raises(FrozenInstanceError):
         decision.granted_pages = 200
+
+
+def test_version_and_personal_domains_share_one_immutable_ruleset() -> None:
+    assert eligibility.ELIGIBILITY_RULES.version == "2026-07-04"
+    assert eligibility.ELIGIBILITY_RULES.personal_domains == frozenset(
+        PERSONAL_DOMAINS
+    )
+    with pytest.raises(FrozenInstanceError):
+        eligibility.ELIGIBILITY_RULES.version = "changed"
+
+
+def test_canonical_mailbox_accepts_254_ascii_characters() -> None:
+    local_part = "a" * 64
+    domain = ".".join(["b" * 63, "c" * 63, "d" * 61])
+    email = f"{local_part}@{domain}"
+
+    assert len(email) == 254
+    assert classify_verified_email(email).normalized_email == email
+
+
+def test_canonical_mailbox_rejects_255_ascii_characters() -> None:
+    local_part = "a" * 64
+    domain = ".".join(["b" * 63, "c" * 63, "d" * 62])
+    email = f"{local_part}@{domain}"
+
+    assert len(email) == 255
+    with pytest.raises(ValueError, match="valid email"):
+        classify_verified_email(email)
 
 
 @pytest.mark.parametrize(

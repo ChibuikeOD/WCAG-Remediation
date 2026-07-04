@@ -261,6 +261,11 @@ class RemediationJob(Base):
     page_count = Column(Integer, nullable=False)
     idempotency_key = Column(String, nullable=False)
     failure_reason = Column(Text, nullable=True)
+    output_artifact_key = Column(String, nullable=True)
+    report_artifact_key = Column(String, nullable=True)
+    response_json = Column(Text, nullable=True)
+    processing_started_at = Column(DateTime(timezone=True), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

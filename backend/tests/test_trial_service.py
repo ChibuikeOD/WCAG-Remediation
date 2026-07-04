@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import os
 import threading
 from uuid import uuid4
@@ -75,6 +75,132 @@ def entries(db, user_id):
         .where(database.TrialLedgerEntry.user_id == user_id)
         .order_by(database.TrialLedgerEntry.created_at)
     ).all()
+
+
+def test_reserve_and_start_processing_is_one_durable_transition(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    started = datetime.now(timezone.utc)
+    expires = started + timedelta(minutes=4)
+
+    balance = service.reserve_and_start_processing(
+        user.id, job.id, 3, "reserve-start", started, expires
+    )
+
+    stored = db.get(database.RemediationJob, job.id)
+    assert stored.status == "processing"
+    assert stored.processing_started_at is not None
+    assert stored.lease_expires_at is not None
+    assert balance.reserved == 3
+    assert [row.entry_type for row in entries(db, user.id)] == ["grant", "reserve"]
+
+
+def test_complete_commits_artifact_response_and_charge_together(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=2)
+    started = datetime.now(timezone.utc)
+    service.reserve_and_start_processing(
+        user.id, job.id, 2, "reserve-start", started, started + timedelta(minutes=4)
+    )
+
+    balance = service.complete(
+        job.id,
+        output_artifact_key=f"jobs/{job.id}/fixed.pdf",
+        report_artifact_key=f"jobs/{job.id}/report.pdf",
+        response_json='{"report_id":"report-1"}',
+    )
+
+    stored = db.get(database.RemediationJob, job.id)
+    assert stored.status == "succeeded"
+    assert stored.output_artifact_key == f"jobs/{job.id}/fixed.pdf"
+    assert stored.report_artifact_key == f"jobs/{job.id}/report.pdf"
+    assert stored.response_json == '{"report_id":"report-1"}'
+    assert stored.lease_expires_at is None
+    assert balance.consumed == 2
+
+
+def test_recover_stale_jobs_releases_only_expired_processing_job(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    expired = add_job(db, user, "expired", pages=2)
+    active = add_job(db, user, "active", pages=3)
+    now = datetime.now(timezone.utc)
+    service.reserve_and_start_processing(
+        user.id, expired.id, 2, "expired-reserve", now, now + timedelta(seconds=1)
+    )
+    service.reserve_and_start_processing(
+        user.id, active.id, 3, "active-reserve", now, now + timedelta(hours=1)
+    )
+
+    balance = service.recover_stale_jobs(user.id, now + timedelta(seconds=2))
+    repeated = service.recover_stale_jobs(user.id, now + timedelta(seconds=2))
+
+    assert db.get(database.RemediationJob, expired.id).status == "released"
+    assert db.get(database.RemediationJob, expired.id).failure_reason == "Processing lease expired"
+    assert db.get(database.RemediationJob, active.id).status == "processing"
+    assert balance == repeated
+    assert balance.reserved == 3
+    assert [row.entry_type for row in entries(db, user.id)].count("release") == 1
+
+
+def test_reserve_and_start_commit_failure_rolls_back_job_and_ledger(db, monkeypatch):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=2)
+    real_commit = db.commit
+
+    def failed_commit():
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(db, "commit", failed_commit)
+    now = datetime.now(timezone.utc)
+    with pytest.raises(RuntimeError, match="commit failed"):
+        service.reserve_and_start_processing(
+            user.id, job.id, 2, "reserve-start", now, now + timedelta(minutes=4)
+        )
+    monkeypatch.setattr(db, "commit", real_commit)
+
+    db.expire_all()
+    assert db.get(database.RemediationJob, job.id).status == "pending"
+    assert [row.entry_type for row in entries(db, user.id)] == ["grant"]
+
+
+def test_completion_commit_failure_rolls_back_metadata_and_consumption(db, monkeypatch):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=2)
+    now = datetime.now(timezone.utc)
+    service.reserve_and_start_processing(
+        user.id, job.id, 2, "reserve-start", now, now + timedelta(minutes=4)
+    )
+    real_commit = db.commit
+    monkeypatch.setattr(
+        db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("commit failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        service.complete(
+            job.id,
+            output_artifact_key=f"jobs/{job.id}/fixed.pdf",
+            report_artifact_key=None,
+            response_json='{"report_id":"report"}',
+        )
+    monkeypatch.setattr(db, "commit", real_commit)
+
+    db.expire_all()
+    stored = db.get(database.RemediationJob, job.id)
+    assert stored.status == "processing"
+    assert stored.output_artifact_key is None
+    assert stored.response_json is None
+    assert service.get_balance(user.id).reserved == 2
+    assert [row.entry_type for row in entries(db, user.id)] == ["grant", "reserve"]
 
 
 @pytest.mark.parametrize(

@@ -637,13 +637,16 @@ def test_trial_timestamp_columns_are_timezone_aware_and_nonnullable(db_session):
         database.RemediationJob.__table__.c.created_at,
         database.RemediationJob.__table__.c.updated_at,
         database.RemediationJob.__table__.c.completed_at,
+        database.RemediationJob.__table__.c.processing_started_at,
+        database.RemediationJob.__table__.c.lease_expires_at,
     ]
     for column in trial_timestamp_columns:
         assert column.type.timezone is True
-    for column in trial_timestamp_columns[:-1]:
+    for column in trial_timestamp_columns[:4]:
         assert column.nullable is False
         assert column.server_default is not None
-    assert trial_timestamp_columns[-1].nullable is True
+    for column in trial_timestamp_columns[4:]:
+        assert column.nullable is True
 
     user = add_user(db_session)
     account = database.TrialAccount(
@@ -680,6 +683,23 @@ def test_trial_model_constraints_match_migration_ddl():
     assert "new.user_id is distinct from old.user_id" in normalized
     assert "fk_uploaded_files_owner_id_users" in normalized
     assert "uploaded_files_immutable_owner" in normalized
+    for column in (
+        "output_artifact_key text null",
+        "report_artifact_key text null",
+        "response_json text null",
+        "processing_started_at timestamp with time zone null",
+        "lease_expires_at timestamp with time zone null",
+    ):
+        assert column in normalized
+
+    for column_name in (
+        "output_artifact_key",
+        "report_artifact_key",
+        "response_json",
+        "processing_started_at",
+        "lease_expires_at",
+    ):
+        assert column_name in database.RemediationJob.__table__.c
 
     job_file_fk = next(iter(database.RemediationJob.__table__.c.file_id.foreign_keys))
     owner_fk = next(iter(database.UploadedFile.__table__.c.owner_id.foreign_keys))

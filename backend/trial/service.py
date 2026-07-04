@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -80,6 +81,20 @@ class TrialService:
             raise TrialStateError("trial account does not exist")
         return self._get_balance(user_id)
 
+    def get_job_for_idempotency(
+        self, user_id: str, idempotency_key: str
+    ) -> RemediationJob | None:
+        """Load a user's job and validate a succeeded lifecycle before replay."""
+        job = self.session.scalar(
+            select(RemediationJob).where(
+                RemediationJob.user_id == user_id,
+                RemediationJob.idempotency_key == idempotency_key,
+            )
+        )
+        if job is not None and job.status == "succeeded":
+            self._validate_job_lifecycle(job)
+        return job
+
     def reserve(
         self, user_id: str, job_id: str, pages: int, key: str
     ) -> TrialBalance:
@@ -132,6 +147,120 @@ class TrialService:
                 )
             )
             job.status = "reserved"
+            self.session.flush()
+            result = self._get_balance(user_id)
+            self.session.commit()
+            return result
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def reserve_and_start_processing(
+        self,
+        user_id: str,
+        job_id: str,
+        pages: int,
+        key: str,
+        processing_started_at: datetime,
+        lease_expires_at: datetime,
+    ) -> TrialBalance:
+        """Reserve pages and start a leased job in one transaction."""
+        if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
+            raise ValueError("pages must be a positive integer")
+        if lease_expires_at <= processing_started_at:
+            raise ValueError("lease must expire after processing starts")
+        try:
+            self._lock_account(user_id)
+            job = self._lock_job(job_id)
+            if job is None or job.user_id != user_id:
+                raise TrialStateError("remediation job does not belong to user")
+            if job.page_count != pages:
+                raise TrialStateError("pages must match authoritative job page count")
+            if job.status != "pending":
+                raise TrialStateError("remediation job must be pending")
+            self._validate_job_lifecycle(job)
+            if self._entry_for_key(user_id, key) is not None:
+                raise TrialStateError("idempotency key conflicts with reservation")
+            balance = self._get_balance(user_id)
+            if pages > balance.remaining:
+                raise InsufficientPages(pages, balance.remaining)
+            self.session.add(
+                TrialLedgerEntry(
+                    id=str(uuid4()), user_id=user_id, job_id=job_id,
+                    entry_type="reserve", granted_delta=0,
+                    reserved_delta=pages, consumed_delta=0,
+                    idempotency_key=key,
+                )
+            )
+            job.status = "processing"
+            job.processing_started_at = processing_started_at
+            job.lease_expires_at = lease_expires_at
+            self.session.flush()
+            result = self._get_balance(user_id)
+            self.session.commit()
+            return result
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def complete(
+        self,
+        job_id: str,
+        *,
+        output_artifact_key: str,
+        report_artifact_key: str | None,
+        response_json: str,
+    ) -> TrialBalance:
+        """Atomically record published artifacts, response replay, and consumption."""
+        self._validate_job_artifact_key(output_artifact_key, job_id)
+        if report_artifact_key is not None:
+            self._validate_job_artifact_key(report_artifact_key, job_id)
+        if not response_json:
+            raise ValueError("response_json is required")
+        try:
+            job = self.session.get(RemediationJob, job_id)
+            if job is None or job.status != "processing":
+                raise TrialStateError("only a processing job can be completed")
+            job.output_artifact_key = output_artifact_key
+            job.report_artifact_key = report_artifact_key
+            job.response_json = response_json
+            job.lease_expires_at = None
+            return self.consume(job_id)
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def recover_stale_jobs(self, user_id: str, now: datetime) -> TrialBalance:
+        """Release expired active reservations exactly once."""
+        try:
+            self._lock_account(user_id)
+            jobs = self.session.scalars(
+                select(RemediationJob)
+                .where(
+                    RemediationJob.user_id == user_id,
+                    RemediationJob.status.in_(("reserved", "processing")),
+                    RemediationJob.lease_expires_at.is_not(None),
+                    RemediationJob.lease_expires_at <= now,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+            for job in jobs:
+                self._validate_job_lifecycle(job)
+                if self._entry_for_key(user_id, f"release:{job.id}") is not None:
+                    raise TrialStateError("release idempotency state conflicts with job")
+                self.session.add(
+                    TrialLedgerEntry(
+                        id=str(uuid4()), user_id=user_id, job_id=job.id,
+                        entry_type="release", granted_delta=0,
+                        reserved_delta=-job.page_count, consumed_delta=0,
+                        idempotency_key=f"release:{job.id}",
+                    )
+                )
+                job.status = "released"
+                job.failure_reason = "Processing lease expired"
+                job.lease_expires_at = None
+                job.completed_at = now
             self.session.flush()
             result = self._get_balance(user_id)
             self.session.commit()
@@ -224,6 +353,7 @@ class TrialService:
             )
             job.status = "released"
             job.failure_reason = reason
+            job.lease_expires_at = None
             job.completed_at = datetime.now(timezone.utc)
             self.session.flush()
             result = self._get_balance(job.user_id)
@@ -232,6 +362,19 @@ class TrialService:
         except Exception:
             self.session.rollback()
             raise
+
+    @staticmethod
+    def _validate_artifact_key(key: str) -> None:
+        path = PurePosixPath(key)
+        if not key or "\\" in key or path.is_absolute() or ".." in path.parts:
+            raise ValueError("artifact key must be a relative authoritative identifier")
+
+    @classmethod
+    def _validate_job_artifact_key(cls, key: str, job_id: str) -> None:
+        cls._validate_artifact_key(key)
+        parts = PurePosixPath(key).parts
+        if len(parts) < 3 or parts[:2] != ("jobs", job_id):
+            raise ValueError("artifact key must belong to its remediation job")
 
     def _lock_account(self, user_id: str) -> TrialAccount:
         account = self.session.scalar(

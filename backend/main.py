@@ -14,13 +14,14 @@ import aiofiles
 from glob import escape as glob_escape
 from pathlib import Path
 from typing import Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 import logging
 import json
-import fitz
 import os
 import shutil
+import subprocess
+import sys
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, Request
 from fastapi.concurrency import run_in_threadpool
@@ -325,13 +326,25 @@ async def health_check():
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
-def _pdf_page_count(path: Path) -> int:
-    """Open a staged PDF synchronously; callers run this in a worker thread."""
-    document = fitz.open(path)
+def _run_pdf_probe(path: Path, timeout: float) -> int:
+    """Run the PDF parser in a child process that can be killed on timeout."""
+    completed = subprocess.run(
+        [sys.executable, "-m", "backend.pdf_probe", str(path)],
+        timeout=timeout,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode != 0 or len(completed.stdout) > 1024:
+        raise ValueError("PDF probe failed")
     try:
-        return document.page_count
-    finally:
-        document.close()
+        payload = json.loads(completed.stdout)
+        page_count = payload["page_count"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise ValueError("PDF probe returned invalid output") from None
+    if not isinstance(page_count, int) or isinstance(page_count, bool) or page_count <= 0:
+        raise ValueError("PDF probe returned invalid page count")
+    return page_count
 
 @app.get("/trial/me", response_model=TrialBalanceResponse)
 async def get_trial_balance(user: User = Depends(require_trial_user)):
@@ -406,13 +419,14 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
             if signature != b"%PDF-":
                 raise HTTPException(status_code=400, detail="Invalid PDF file")
             try:
-                page_count = await asyncio.wait_for(
-                    run_in_threadpool(_pdf_page_count, staging_path),
-                    timeout=settings.PDF_UPLOAD_VALIDATION_TIMEOUT_SECONDS,
+                page_count = await run_in_threadpool(
+                    _run_pdf_probe,
+                    staging_path,
+                    settings.PDF_UPLOAD_VALIDATION_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except subprocess.TimeoutExpired:
                 raise HTTPException(
-                    status_code=400, detail="PDF validation timed out"
+                    status_code=408, detail="PDF validation timed out"
                 ) from None
             except Exception:
                 raise HTTPException(
@@ -721,7 +735,14 @@ def _resolve_trial_artifact(key: str | None, job_id: str) -> Path:
     if not key:
         raise TrialStateError("trial artifact metadata is missing")
     root = settings.OUTPUT_DIR.resolve()
-    job_root = (root / "jobs" / job_id).resolve()
+    jobs_root = (root / "jobs").resolve()
+    job_root = (jobs_root / job_id).resolve()
+    if (
+        job_root.parent != jobs_root
+        or job_root.name != job_id
+        or not job_root.is_relative_to(jobs_root)
+    ):
+        raise TrialStateError("trial job artifact root is invalid")
     candidate = (root / key).resolve()
     if not candidate.is_relative_to(job_root) or not candidate.is_file():
         raise TrialStateError("trial artifact metadata is invalid")
@@ -752,6 +773,50 @@ def _release_trial_reservation(
         logger.exception("Failed to release trial reservation")
 
 
+def _trial_lease_seconds() -> float:
+    return float(max(settings.PDF_SUBPROCESS_TIMEOUT_SECONDS + 120, 300))
+
+
+def _trial_heartbeat_interval(lease_seconds: float) -> float:
+    return max(0.05, min(30.0, lease_seconds / 3))
+
+
+async def _trial_lease_heartbeat(
+    job_id: str, lease_seconds: float, interval: float
+) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        heartbeat_db = SessionLocal()
+        try:
+            TrialService(heartbeat_db).renew_processing_lease(
+                job_id, lease_seconds=lease_seconds
+            )
+        finally:
+            heartbeat_db.close()
+
+
+def _raise_if_heartbeat_failed(task: asyncio.Task | None) -> None:
+    if task is not None and task.done() and not task.cancelled():
+        task.result()
+
+
+async def _stop_trial_heartbeat(
+    task: asyncio.Task | None, *, propagate: bool
+) -> None:
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        if propagate:
+            raise
+        logger.exception("Trial processing heartbeat failed")
+
+
 async def _remediate_trial(
     request: RemediationRequest, user: User
 ) -> RemediationResponse:
@@ -763,6 +828,7 @@ async def _remediate_trial(
     final_dir = None
     published = False
     committed = False
+    heartbeat_task = None
     try:
         report_rec = db.get(DbReport, request.report_id)
         file_rec = db.get(UploadedFile, report_rec.file_id) if report_rec else None
@@ -776,8 +842,7 @@ async def _remediate_trial(
             )
 
         service.ensure_account(user)
-        now = datetime.now(timezone.utc)
-        service.recover_stale_jobs(user.id, now)
+        service.recover_stale_jobs(user.id, datetime.now(timezone.utc))
         report = AccessibilityReport.model_validate_json(report_rec.report_json)
         job_key = f"remediate:{user.id}:{request.report_id}"
         existing = service.get_job_for_idempotency(user.id, job_key)
@@ -807,15 +872,22 @@ async def _remediate_trial(
             )
         )
         try:
+            lease_seconds = _trial_lease_seconds()
             service.reserve_and_start_processing(
                 user.id,
                 job_id,
                 file_rec.page_count,
                 f"reserve:{job_id}",
-                now,
-                now + timedelta(seconds=settings.PDF_SUBPROCESS_TIMEOUT_SECONDS + 60),
+                lease_seconds=lease_seconds,
             )
             reservation_active = True
+            heartbeat_task = asyncio.create_task(
+                _trial_lease_heartbeat(
+                    job_id,
+                    lease_seconds,
+                    _trial_heartbeat_interval(lease_seconds),
+                )
+            )
         except InsufficientPages as exc:
             detail = TrialPageLimitDetail(
                 requested_pages=exc.requested, remaining_pages=exc.remaining
@@ -839,20 +911,22 @@ async def _remediate_trial(
 
         if file_rec.file_type != "pdf":
             raise HTTPException(status_code=400, detail="Trial remediation requires PDF")
-        shutil.copy2(source_path, output_path)
-        remediator = PDFRemediator(output_path)
+        await run_in_threadpool(shutil.copy2, source_path, output_path)
+        remediator = await run_in_threadpool(PDFRemediator, output_path)
         results = await run_in_threadpool(
             remediator.fix_all,
             output_path=output_path,
             report=report,
             original_filename=safe_name,
         )
+        _raise_if_heartbeat_failed(heartbeat_task)
         total_fixed = len([result for result in results if result.success])
         total_failed = len([result for result in results if not result.success])
 
         from .remediation_report import generate_remediation_report_for_api
 
-        report_artifact = generate_remediation_report_for_api(
+        report_artifact = await run_in_threadpool(
+            generate_remediation_report_for_api,
             original_filename=safe_name,
             file_id=file_rec.id,
             report_id=request.report_id,
@@ -862,6 +936,7 @@ async def _remediate_trial(
             remediated_file_path=str(output_path),
             output_dir=temp_dir,
         )
+        _raise_if_heartbeat_failed(heartbeat_task)
         report_artifact = Path(report_artifact).resolve()
         if (
             not report_artifact.is_relative_to(temp_dir.resolve())
@@ -885,6 +960,8 @@ async def _remediate_trial(
         )
         os.replace(temp_dir, final_dir)
         published = True
+        await _stop_trial_heartbeat(heartbeat_task, propagate=True)
+        heartbeat_task = None
         service.complete(
             job_id,
             output_artifact_key=output_key,
@@ -895,25 +972,34 @@ async def _remediate_trial(
         committed = True
         return response
     except asyncio.CancelledError:
+        await _stop_trial_heartbeat(heartbeat_task, propagate=False)
+        heartbeat_task = None
         if reservation_active:
             _release_trial_reservation(service, job_id, "processing_cancelled")
         raise
     except HTTPException:
+        await _stop_trial_heartbeat(heartbeat_task, propagate=False)
+        heartbeat_task = None
         if reservation_active:
             _release_trial_reservation(service, job_id, "processing_failed")
         raise
     except (TrialStateError, ValueError):
+        await _stop_trial_heartbeat(heartbeat_task, propagate=False)
+        heartbeat_task = None
         if reservation_active:
             _release_trial_reservation(service, job_id, "processing_failed")
         raise HTTPException(
             status_code=409, detail={"code": "trial_remediation_state_invalid"}
         ) from None
     except Exception:
+        await _stop_trial_heartbeat(heartbeat_task, propagate=False)
+        heartbeat_task = None
         if reservation_active:
             _release_trial_reservation(service, job_id, "processing_failed")
         logger.exception("Remediation processing failed")
         raise HTTPException(status_code=500, detail="Remediation processing failed") from None
     finally:
+        await _stop_trial_heartbeat(heartbeat_task, propagate=False)
         if temp_dir is not None:
             _remove_contained_tree(temp_dir, settings.OUTPUT_DIR / ".tmp")
         if published and not committed and final_dir is not None:

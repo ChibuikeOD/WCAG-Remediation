@@ -1,7 +1,7 @@
 """Atomic lifecycle operations for trial page grants and reservations."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from uuid import uuid4
 
@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from backend.database import RemediationJob, TrialAccount, TrialLedgerEntry, User
 
 from .eligibility import classify_verified_email
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -161,14 +165,13 @@ class TrialService:
         job_id: str,
         pages: int,
         key: str,
-        processing_started_at: datetime,
-        lease_expires_at: datetime,
+        lease_seconds: float,
     ) -> TrialBalance:
         """Reserve pages and start a leased job in one transaction."""
         if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
             raise ValueError("pages must be a positive integer")
-        if lease_expires_at <= processing_started_at:
-            raise ValueError("lease must expire after processing starts")
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
         try:
             self._lock_account(user_id)
             job = self._lock_job(job_id)
@@ -184,6 +187,8 @@ class TrialService:
             balance = self._get_balance(user_id)
             if pages > balance.remaining:
                 raise InsufficientPages(pages, balance.remaining)
+            processing_started_at = _utc_now()
+            lease_expires_at = processing_started_at + timedelta(seconds=lease_seconds)
             self.session.add(
                 TrialLedgerEntry(
                     id=str(uuid4()), user_id=user_id, job_id=job_id,
@@ -199,6 +204,41 @@ class TrialService:
             result = self._get_balance(user_id)
             self.session.commit()
             return result
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def renew_processing_lease(
+        self,
+        job_id: str,
+        lease_seconds: float,
+        now: datetime | None = None,
+    ) -> datetime:
+        """Extend an active processing lease without ever shortening it."""
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        try:
+            unlocked = self.session.get(RemediationJob, job_id)
+            if unlocked is None:
+                raise TrialStateError("remediation job does not exist")
+            self._lock_account(unlocked.user_id)
+            job = self._lock_job(job_id)
+            if job is None or job.user_id != unlocked.user_id:
+                raise TrialStateError("remediation job ownership changed")
+            self._validate_job_lifecycle(job)
+            if job.status != "processing" or job.lease_expires_at is None:
+                raise TrialStateError("processing lease is no longer active")
+            current_time = now or _utc_now()
+            proposed = current_time + timedelta(seconds=lease_seconds)
+            existing = job.lease_expires_at
+            if existing.tzinfo is None and proposed.tzinfo is not None:
+                proposed_for_compare = proposed.replace(tzinfo=None)
+            else:
+                proposed_for_compare = proposed
+            if proposed_for_compare > existing:
+                job.lease_expires_at = proposed
+            self.session.commit()
+            return job.lease_expires_at
         except Exception:
             self.session.rollback()
             raise

@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from backend import database
+import backend.trial.service as service_module
 from backend.trial.service import (
     InsufficientPages,
     TrialBalance,
@@ -77,22 +78,34 @@ def entries(db, user_id):
     ).all()
 
 
-def test_reserve_and_start_processing_is_one_durable_transition(db):
+def test_reserve_and_start_processing_timestamps_after_locks(db, monkeypatch):
     user = add_user(db)
     service = TrialService(db)
     service.ensure_account(user)
     job = add_job(db, user, pages=3)
-    started = datetime.now(timezone.utc)
-    expires = started + timedelta(minutes=4)
+    started = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+    locked = []
+    real_lock_job = service._lock_job
+
+    def lock_job(job_id):
+        locked.append(job_id)
+        return real_lock_job(job_id)
+
+    def clock():
+        assert locked == [job.id]
+        return started
+
+    monkeypatch.setattr(service, "_lock_job", lock_job)
+    monkeypatch.setattr(service_module, "_utc_now", clock)
 
     balance = service.reserve_and_start_processing(
-        user.id, job.id, 3, "reserve-start", started, expires
+        user.id, job.id, 3, "reserve-start", lease_seconds=240
     )
 
     stored = db.get(database.RemediationJob, job.id)
     assert stored.status == "processing"
-    assert stored.processing_started_at is not None
-    assert stored.lease_expires_at is not None
+    assert stored.processing_started_at.replace(tzinfo=timezone.utc) == started
+    assert stored.lease_expires_at.replace(tzinfo=timezone.utc) == started + timedelta(seconds=240)
     assert balance.reserved == 3
     assert [row.entry_type for row in entries(db, user.id)] == ["grant", "reserve"]
 
@@ -102,9 +115,8 @@ def test_complete_commits_artifact_response_and_charge_together(db):
     service = TrialService(db)
     service.ensure_account(user)
     job = add_job(db, user, pages=2)
-    started = datetime.now(timezone.utc)
     service.reserve_and_start_processing(
-        user.id, job.id, 2, "reserve-start", started, started + timedelta(minutes=4)
+        user.id, job.id, 2, "reserve-start", lease_seconds=240
     )
 
     balance = service.complete(
@@ -123,18 +135,19 @@ def test_complete_commits_artifact_response_and_charge_together(db):
     assert balance.consumed == 2
 
 
-def test_recover_stale_jobs_releases_only_expired_processing_job(db):
+def test_recover_stale_jobs_releases_only_expired_processing_job(db, monkeypatch):
     user = add_user(db)
     service = TrialService(db)
     service.ensure_account(user)
     expired = add_job(db, user, "expired", pages=2)
     active = add_job(db, user, "active", pages=3)
     now = datetime.now(timezone.utc)
+    monkeypatch.setattr(service_module, "_utc_now", lambda: now)
     service.reserve_and_start_processing(
-        user.id, expired.id, 2, "expired-reserve", now, now + timedelta(seconds=1)
+        user.id, expired.id, 2, "expired-reserve", lease_seconds=1
     )
     service.reserve_and_start_processing(
-        user.id, active.id, 3, "active-reserve", now, now + timedelta(hours=1)
+        user.id, active.id, 3, "active-reserve", lease_seconds=3600
     )
 
     balance = service.recover_stale_jobs(user.id, now + timedelta(seconds=2))
@@ -159,10 +172,9 @@ def test_reserve_and_start_commit_failure_rolls_back_job_and_ledger(db, monkeypa
         raise RuntimeError("commit failed")
 
     monkeypatch.setattr(db, "commit", failed_commit)
-    now = datetime.now(timezone.utc)
     with pytest.raises(RuntimeError, match="commit failed"):
         service.reserve_and_start_processing(
-            user.id, job.id, 2, "reserve-start", now, now + timedelta(minutes=4)
+            user.id, job.id, 2, "reserve-start", lease_seconds=240
         )
     monkeypatch.setattr(db, "commit", real_commit)
 
@@ -176,9 +188,8 @@ def test_completion_commit_failure_rolls_back_metadata_and_consumption(db, monke
     service = TrialService(db)
     service.ensure_account(user)
     job = add_job(db, user, pages=2)
-    now = datetime.now(timezone.utc)
     service.reserve_and_start_processing(
-        user.id, job.id, 2, "reserve-start", now, now + timedelta(minutes=4)
+        user.id, job.id, 2, "reserve-start", lease_seconds=240
     )
     real_commit = db.commit
     monkeypatch.setattr(
@@ -201,6 +212,31 @@ def test_completion_commit_failure_rolls_back_metadata_and_consumption(db, monke
     assert stored.response_json is None
     assert service.get_balance(user.id).reserved == 2
     assert [row.entry_type for row in entries(db, user.id)] == ["grant", "reserve"]
+
+
+def test_renew_processing_lease_extends_and_never_shortens(db, monkeypatch):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=2)
+    started = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(service_module, "_utc_now", lambda: started)
+    service.reserve_and_start_processing(
+        user.id, job.id, 2, "reserve-start", lease_seconds=300
+    )
+    original = db.get(database.RemediationJob, job.id).lease_expires_at
+
+    service.renew_processing_lease(
+        job.id, lease_seconds=30, now=started + timedelta(seconds=10)
+    )
+    not_shortened = db.get(database.RemediationJob, job.id).lease_expires_at
+    service.renew_processing_lease(
+        job.id, lease_seconds=300, now=started + timedelta(seconds=20)
+    )
+    extended = db.get(database.RemediationJob, job.id).lease_expires_at
+
+    assert not_shortened.replace(tzinfo=timezone.utc) == original.replace(tzinfo=timezone.utc)
+    assert extended.replace(tzinfo=timezone.utc) > original.replace(tzinfo=timezone.utc)
 
 
 @pytest.mark.parametrize(

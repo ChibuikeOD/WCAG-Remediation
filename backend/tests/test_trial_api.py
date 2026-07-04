@@ -1,8 +1,12 @@
 """API contract tests for trial balances, uploads, and metered remediation."""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import subprocess
+import threading
+import time
 
 import fitz
 import pytest
@@ -354,23 +358,26 @@ def test_pdf_upload_validation_runs_via_threadpool_and_times_out(
 ):
     _, session_factory, tmp_path = trial_client
     upload = CountingUpload("slow.pdf", [pdf_bytes(1), b""])
-    called = []
-
-    async def never_finishes(function, *args, **kwargs):
-        called.append(function)
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(main_module, "run_in_threadpool", never_finishes)
     monkeypatch.setattr(settings, "PDF_UPLOAD_VALIDATION_TIMEOUT_SECONDS", 0.01, raising=False)
+    commands = []
+
+    def timed_out(command, **kwargs):
+        commands.append(command)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(main_module.subprocess, "run", timed_out)
     with session_factory() as session:
         user = session.get(database.User, "verified-user")
 
+    started = time.monotonic()
     with pytest.raises(main_module.HTTPException) as exc_info:
         asyncio.run(main_module.upload_file(upload, user))
+    elapsed = time.monotonic() - started
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 408
     assert "timed out" in exc_info.value.detail
-    assert called == [main_module._pdf_page_count]
+    assert commands and commands[0][1:3] == ["-m", "backend.pdf_probe"]
+    assert elapsed < 1
     assert list((tmp_path / "uploads").rglob("*")) == []
 
 
@@ -613,9 +620,11 @@ def test_expired_processing_lease_is_recovered_on_trial_balance(
         session.add(job)
         now = datetime.now(timezone.utc)
         service.reserve_and_start_processing(
-            user.id, job.id, 5, "stale-reserve", now - timedelta(minutes=5),
-            now - timedelta(minutes=1),
+            user.id, job.id, 5, "stale-reserve", lease_seconds=1,
         )
+        job.processing_started_at = now - timedelta(minutes=5)
+        job.lease_expires_at = now - timedelta(minutes=1)
+        session.commit()
 
     response = client.get("/trial/me")
 
@@ -770,3 +779,77 @@ def test_path_traversal_display_filename_stays_inside_job_directory(
         artifact = (settings.OUTPUT_DIR / job.output_artifact_key).resolve()
         assert artifact.is_relative_to((settings.OUTPUT_DIR / "jobs" / job.id).resolve())
     assert not (tmp_path / "escape.pdf").exists()
+
+
+def test_symlinked_job_root_outside_jobs_is_rejected(trial_client):
+    _, _, tmp_path = trial_client
+    jobs_root = settings.OUTPUT_DIR / "jobs"
+    jobs_root.mkdir()
+    outside = tmp_path / "outside-job"
+    outside.mkdir()
+    (outside / "fixed.pdf").write_bytes(b"private")
+    link = jobs_root / "symlink-job"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(main_module.TrialStateError):
+        main_module._resolve_trial_artifact(
+            "jobs/symlink-job/fixed.pdf", "symlink-job"
+        )
+
+
+def test_resolved_job_root_outside_jobs_is_rejected_without_symlink_privilege(
+    trial_client, monkeypatch, tmp_path
+):
+    jobs_root = settings.OUTPUT_DIR.resolve() / "jobs"
+    expected_job_root = jobs_root / "mock-job"
+    outside = (tmp_path / "resolved-outside").resolve()
+    real_resolve = Path.resolve
+
+    def controlled_resolve(path, *args, **kwargs):
+        if path == expected_job_root:
+            return outside
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", controlled_resolve)
+
+    with pytest.raises(main_module.TrialStateError):
+        main_module._resolve_trial_artifact("jobs/mock-job/fixed.pdf", "mock-job")
+
+
+def test_heartbeat_keeps_tiny_lease_active_through_report_generation(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    upload = upload_pdf(client, pages=1)
+    report_id = seed_report(session_factory, upload.json()["file_id"], "heartbeat-report")
+    report_started = threading.Event()
+    monkeypatch.setattr(main_module, "_trial_lease_seconds", lambda: 0.3)
+    monkeypatch.setattr(main_module, "_trial_heartbeat_interval", lambda lease: 0.05)
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", lambda *args, **kwargs: [])
+
+    def slow_report(*, output_dir, **kwargs):
+        report_started.set()
+        time.sleep(0.45)
+        path = Path(output_dir) / "report.pdf"
+        path.write_bytes(b"%PDF-report")
+        return path
+
+    import backend.remediation_report as report_module
+    monkeypatch.setattr(report_module, "generate_remediation_report_for_api", slow_report)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(client.post, "/remediate", json={"report_id": report_id})
+        assert report_started.wait(timeout=2)
+        time.sleep(0.32)
+        balance_during = client.get("/trial/me")
+        result = future.result(timeout=3)
+
+    assert balance_during.status_code == 200
+    assert balance_during.json()["reserved_pages"] == 1
+    assert result.status_code == 200
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        assert job.status == "succeeded"

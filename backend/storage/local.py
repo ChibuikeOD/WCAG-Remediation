@@ -70,10 +70,10 @@ def _validate_filename(filename: str) -> str:
 class LocalArtifactStore(ArtifactStore):
     """Private artifact storage rooted in one local directory.
 
-    The store owns validation of logical keys and their source paths. For
-    ``materialize``, selection and containment of the destination directory is
-    the caller's responsibility; this class only refuses a symlink at the
-    destination itself and performs the copy atomically.
+    The store owns validation of logical keys and their source paths. Callers
+    choose an explicit trusted ``destination_root`` for ``materialize``; the
+    destination must remain beneath that root and no component at or below the
+    root may be a symlink.
     """
 
     def __init__(self, root: Path) -> None:
@@ -118,17 +118,20 @@ class LocalArtifactStore(ArtifactStore):
         self._atomic_copy(source_path, destination)
         return key
 
-    def materialize(self, user_id: str, key: str, destination: Path) -> Path:
+    def materialize(
+        self,
+        user_id: str,
+        key: str,
+        destination: Path,
+        *,
+        destination_root: Path,
+    ) -> Path:
         source = self._owned_artifact(user_id, key)
-        destination_path = Path(destination)
-        if destination_path.is_symlink():
-            raise ArtifactAccessDenied("materialization destination cannot be a symlink")
-        try:
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise ArtifactStoreError(f"could not create destination directory: {exc}") from exc
+        destination_path = self._safe_materialization_destination(
+            destination, destination_root
+        )
         self._atomic_copy(source, destination_path)
-        return destination_path
+        return Path(destination)
 
     def download(self, user_id: str, key: str) -> ArtifactDownload:
         return ArtifactDownload(local_path=self._owned_artifact(user_id, key))
@@ -242,6 +245,76 @@ class LocalArtifactStore(ArtifactStore):
             raise ArtifactNotFound(f"artifact source does not exist: {source}")
         if not source.is_file():
             raise ArtifactStoreError("artifact source is not a regular file")
+
+    def _safe_materialization_destination(
+        self, destination: Path, destination_root: Path
+    ) -> Path:
+        root_path = Path(destination_root).absolute()
+        if root_path.is_symlink():
+            raise ArtifactAccessDenied("materialization root cannot be a symlink")
+        try:
+            root_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ArtifactStoreError(
+                f"could not create materialization root: {exc}"
+            ) from exc
+        if root_path.is_symlink() or not root_path.is_dir():
+            raise ArtifactAccessDenied("materialization root is unsafe")
+        try:
+            resolved_root = root_path.resolve(strict=True)
+        except OSError as exc:
+            raise ArtifactAccessDenied(
+                f"materialization root cannot be resolved: {exc}"
+            ) from exc
+
+        destination_path = Path(destination).absolute()
+        try:
+            relative = destination_path.relative_to(root_path)
+        except ValueError as exc:
+            raise ArtifactAccessDenied(
+                "materialization destination is outside its root"
+            ) from exc
+        if not relative.parts or ".." in relative.parts:
+            raise ArtifactAccessDenied(
+                "materialization destination is outside its root"
+            )
+
+        try:
+            resolved_destination = destination_path.resolve(strict=False)
+        except OSError as exc:
+            raise ArtifactAccessDenied(
+                f"materialization destination cannot be resolved: {exc}"
+            ) from exc
+        if not resolved_destination.is_relative_to(resolved_root):
+            raise ArtifactAccessDenied(
+                "materialization destination is outside its root"
+            )
+
+        current = root_path
+        for index, part in enumerate(relative.parts):
+            current = current / part
+            if current.is_symlink():
+                raise ArtifactAccessDenied(
+                    "materialization destination contains a symlink"
+                )
+            is_leaf = index == len(relative.parts) - 1
+            if current.exists() and not is_leaf and not current.is_dir():
+                raise ArtifactAccessDenied(
+                    "materialization destination ancestor is not a directory"
+                )
+            if not is_leaf:
+                try:
+                    current.mkdir(exist_ok=True)
+                except OSError as exc:
+                    raise ArtifactStoreError(
+                        f"could not create destination directory: {exc}"
+                    ) from exc
+                if current.is_symlink() or not current.is_dir():
+                    raise ArtifactAccessDenied(
+                        "materialization destination ancestor is unsafe"
+                    )
+
+        return destination_path
 
     def _owned_artifact(self, user_id: str, key: str) -> Path:
         owner, _, _, _ = self._parse_key(key)

@@ -39,8 +39,14 @@ def test_round_trip_put_download_materialize_and_delete(tmp_path: Path) -> None:
     assert download.signed_url is None
     assert download.local_path.read_bytes() == b"artifact"
 
-    destination = tmp_path / "materialized" / "copy.pdf"
-    assert store.materialize("user-1", key, destination) == destination
+    destination_root = tmp_path / "materialized"
+    destination = destination_root / "copy.pdf"
+    assert (
+        store.materialize(
+            "user-1", key, destination, destination_root=destination_root
+        )
+        == destination
+    )
     assert destination.read_bytes() == b"artifact"
 
     store.delete("user-1", key)
@@ -229,8 +235,83 @@ def test_materialize_does_not_overwrite_destination_symlink(tmp_path: Path) -> N
     _symlink_or_skip(destination, outside)
 
     with pytest.raises(ArtifactAccessDenied):
-        store.materialize("user", key, destination)
+        store.materialize("user", key, destination, destination_root=tmp_path)
     assert outside.read_bytes() == b"outside"
+
+
+def test_materialize_rejects_symlinked_destination_ancestor(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    destination_root = tmp_path / "exports"
+    destination_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked_directory = destination_root / "linked"
+    _symlink_or_skip(linked_directory, outside, directory=True)
+
+    with pytest.raises(ArtifactAccessDenied):
+        store.materialize(
+            "user",
+            key,
+            linked_directory / "copy.pdf",
+            destination_root=destination_root,
+        )
+    assert not (outside / "copy.pdf").exists()
+
+
+def test_materialize_rejects_symlinked_destination_root(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination_root = tmp_path / "exports-link"
+    _symlink_or_skip(destination_root, outside, directory=True)
+
+    with pytest.raises(ArtifactAccessDenied):
+        store.materialize(
+            "user",
+            key,
+            destination_root / "copy.pdf",
+            destination_root=destination_root,
+        )
+    assert not (outside / "copy.pdf").exists()
+
+
+def test_materialize_rejects_destination_outside_root(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    destination_root = tmp_path / "exports"
+
+    with pytest.raises(ArtifactAccessDenied, match="outside"):
+        store.materialize(
+            "user",
+            key,
+            destination_root / ".." / "escaped.pdf",
+            destination_root=destination_root,
+        )
+    assert not (tmp_path / "escaped.pdf").exists()
+
+
+def test_materialize_rejects_mocked_destination_resolution_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    destination_root = tmp_path / "exports"
+    destination = destination_root / "copy.pdf"
+    outside = tmp_path / "outside.pdf"
+    original_resolve = Path.resolve
+
+    def redirected_resolve(path: Path, strict: bool = False) -> Path:
+        if path == destination:
+            return outside
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", redirected_resolve)
+    with pytest.raises(ArtifactAccessDenied, match="outside"):
+        store.materialize(
+            "user", key, destination, destination_root=destination_root
+        )
 
 
 def test_put_cleans_temp_file_when_replace_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,7 +338,9 @@ def test_materialize_cleans_temp_file_when_copy_fails(
 
     monkeypatch.setattr("backend.storage.local.shutil.copyfile", fail_copy)
     with pytest.raises(ArtifactStoreError, match="copy failure"):
-        store.materialize("user", key, destination)
+        store.materialize(
+            "user", key, destination, destination_root=destination.parent
+        )
     assert not list(destination.parent.glob("*.tmp"))
 
 

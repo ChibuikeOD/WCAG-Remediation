@@ -55,8 +55,15 @@ class ArtifactStore(ABC):
         """Store a file and return its canonical provider-neutral key."""
 
     @abstractmethod
-    def materialize(self, user_id: str, key: str, destination: Path) -> Path:
-        """Atomically copy an owned artifact to a caller-selected destination."""
+    def materialize(
+        self,
+        user_id: str,
+        key: str,
+        destination: Path,
+        *,
+        destination_root: Path,
+    ) -> Path:
+        """Atomically copy an artifact beneath an explicit trusted boundary."""
 
     @abstractmethod
     def download(self, user_id: str, key: str) -> ArtifactDownload:

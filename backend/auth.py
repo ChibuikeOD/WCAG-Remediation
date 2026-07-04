@@ -1,5 +1,6 @@
 """Supabase bearer authentication for trial deployments."""
 
+import json
 import logging
 from collections.abc import Callable
 from functools import lru_cache
@@ -71,7 +72,7 @@ class SupabaseTokenVerifier:
                 issuer=self.issuer,
                 options={"require": ["exp", "sub", "aud"]},
             )
-        except PyJWKClientConnectionError as exc:
+        except (PyJWKClientConnectionError, json.JSONDecodeError) as exc:
             raise AuthProviderUnavailableError(
                 "Supabase JWKS is unavailable"
             ) from exc

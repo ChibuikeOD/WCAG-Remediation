@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 import threading
 from unittest.mock import MagicMock
@@ -368,6 +369,40 @@ def test_jwks_network_failure_is_provider_unavailable() -> None:
 
     with pytest.raises(auth.AuthProviderUnavailableError):
         verifier._verify_jwt("token")
+
+
+def test_malformed_jwks_json_maps_to_generic_503(
+    app: FastAPI, trial_mode: None
+) -> None:
+    verifier = SupabaseTokenVerifier(
+        "https://project.supabase.co", "publishable-key"
+    )
+    verifier.jwks_client = MagicMock()
+    verifier.jwks_client.get_signing_key_from_jwt.side_effect = (
+        json.JSONDecodeError("malformed JWKS internal detail", "", 0)
+    )
+    app.dependency_overrides[get_token_verifier] = lambda: verifier
+
+    response = TestClient(app, raise_server_exceptions=False).get(
+        "/auth/me", headers={"Authorization": "Bearer malformed-jwks-token"}
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Authentication service unavailable"}
+    assert "malformed JWKS internal detail" not in response.text
+
+
+def test_malformed_jwks_json_is_typed_as_provider_unavailable() -> None:
+    verifier = SupabaseTokenVerifier(
+        "https://project.supabase.co", "publishable-key"
+    )
+    verifier.jwks_client = MagicMock()
+    verifier.jwks_client.get_signing_key_from_jwt.side_effect = (
+        json.JSONDecodeError("malformed JWKS internal detail", "", 0)
+    )
+
+    with pytest.raises(auth.AuthProviderUnavailableError):
+        verifier._verify_jwt("malformed-jwks-token")
 
 
 def test_user_lookup_uses_short_explicit_timeout() -> None:

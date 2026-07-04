@@ -38,6 +38,23 @@ alter table public.uploaded_files
     add constraint fk_uploaded_files_owner_id_users
         foreign key (owner_id) references public.users(id) on delete cascade;
 
+create function public.prevent_uploaded_file_owner_update()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if new.owner_id is distinct from old.owner_id then
+        raise exception 'uploaded file owner is immutable';
+    end if;
+    return new;
+end;
+$$;
+
+create trigger uploaded_files_immutable_owner
+before update of owner_id on public.uploaded_files
+for each row execute function public.prevent_uploaded_file_owner_update();
+
 create table public.trial_accounts (
     user_id text primary key references public.users(id) on delete cascade,
     normalized_email text not null,

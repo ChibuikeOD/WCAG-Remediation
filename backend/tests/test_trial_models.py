@@ -67,6 +67,74 @@ def add_job(db_session, user, uploaded_file, job_id="job-1"):
     return job
 
 
+def test_uploaded_file_owner_reassignment_is_immutable(db_session):
+    original_owner = add_user(db_session, "original-owner")
+    replacement_owner = add_user(db_session, "replacement-owner")
+    uploaded_file = add_file(db_session, original_owner)
+
+    uploaded_file.owner = replacement_owner
+    with pytest.raises(ValueError, match="uploaded file owner is immutable"):
+        db_session.commit()
+    db_session.rollback()
+
+    assert (
+        db_session.get(database.UploadedFile, uploaded_file.id).owner_id
+        == original_owner.id
+    )
+
+
+def test_persisted_anonymous_uploaded_file_cannot_gain_an_owner(db_session):
+    user = add_user(db_session)
+    uploaded_file = database.UploadedFile(
+        id="anonymous-file",
+        filename="source.pdf",
+        file_type="application/pdf",
+        file_path="uploads/anonymous-file.pdf",
+        file_size=123,
+        owner_id=None,
+    )
+    db_session.add(uploaded_file)
+    db_session.commit()
+
+    uploaded_file.owner_id = user.id
+    with pytest.raises(ValueError, match="uploaded file owner is immutable"):
+        db_session.commit()
+
+
+def test_db_file_storage_does_not_reassign_the_same_owner(db_session, monkeypatch):
+    from backend import main
+
+    user = add_user(db_session)
+    uploaded_file = add_file(db_session, user)
+    owner_assignments = []
+
+    def record_owner_assignment(_target, value, _old_value, _initiator):
+        owner_assignments.append(value)
+
+    event.listen(database.UploadedFile.owner_id, "set", record_owner_assignment)
+    monkeypatch.setattr(
+        main, "SessionLocal", sessionmaker(bind=db_session.get_bind())
+    )
+    try:
+        main.DbFileStorage()[uploaded_file.id] = {
+            "original_filename": "renamed.pdf",
+            "file_type": uploaded_file.file_type,
+            "file_path": uploaded_file.file_path,
+            "file_size": uploaded_file.file_size,
+            "uploaded_at": uploaded_file.uploaded_at,
+            "owner_id": user.id,
+        }
+    finally:
+        event.remove(database.UploadedFile.owner_id, "set", record_owner_assignment)
+
+    assert owner_assignments == []
+    db_session.expire_all()
+    assert (
+        db_session.get(database.UploadedFile, uploaded_file.id).filename
+        == "renamed.pdf"
+    )
+
+
 def test_trial_account_is_one_per_user_and_persists_grant_provenance(db_session):
     user = add_user(db_session)
     account = database.TrialAccount(
@@ -611,6 +679,7 @@ def test_trial_model_constraints_match_migration_ddl():
     assert "trial_ledger_entries_append_only" in normalized
     assert "new.user_id is distinct from old.user_id" in normalized
     assert "fk_uploaded_files_owner_id_users" in normalized
+    assert "uploaded_files_immutable_owner" in normalized
 
     job_file_fk = next(iter(database.RemediationJob.__table__.c.file_id.foreign_keys))
     owner_fk = next(iter(database.UploadedFile.__table__.c.owner_id.foreign_keys))
@@ -710,6 +779,7 @@ def test_postgresql_trial_migration_constraints_triggers_and_rls():
                 "remediation_jobs_set_updated_at",
                 "trial_accounts_immutable_grant_provenance",
                 "trial_ledger_entries_append_only",
+                "uploaded_files_immutable_owner",
             } <= trigger_names
             cursor.execute(
                 "select table_name, column_name, data_type from information_schema.columns "
@@ -726,6 +796,26 @@ def test_postgresql_trial_migration_constraints_triggers_and_rls():
                 f'insert into "{schema}".uploaded_files (id, owner_id) values (%s, %s)',
                 ("user-1", "user-2", "file-1", "user-1"),
             )
+            cursor.execute(
+                f'update "{schema}".uploaded_files set owner_id = %s where id = %s',
+                ("user-1", "file-1"),
+            )
+            with pytest.raises(psycopg.errors.RaiseException):
+                with connection.transaction():
+                    cursor.execute(
+                        f'update "{schema}".uploaded_files set owner_id = %s where id = %s',
+                        ("user-2", "file-1"),
+                    )
+            cursor.execute(
+                f'insert into "{schema}".uploaded_files (id, owner_id) values (%s, null)',
+                ("anonymous-file",),
+            )
+            with pytest.raises(psycopg.errors.RaiseException):
+                with connection.transaction():
+                    cursor.execute(
+                        f'update "{schema}".uploaded_files set owner_id = %s where id = %s',
+                        ("user-1", "anonymous-file"),
+                    )
             with pytest.raises(psycopg.errors.ForeignKeyViolation):
                 with connection.transaction():
                     cursor.execute(

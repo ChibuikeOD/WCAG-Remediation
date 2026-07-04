@@ -102,8 +102,9 @@ class DbFileStorage:
                 file_rec.file_type = value["file_type"]
                 file_rec.file_path = value["file_path"]
                 file_rec.file_size = value["file_size"]
-                if value.get("owner_id"):
-                    file_rec.owner_id = value["owner_id"]
+                new_owner_id = value.get("owner_id")
+                if new_owner_id is not None and file_rec.owner_id != new_owner_id:
+                    file_rec.owner_id = new_owner_id
             db.commit()
         finally:
             db.close()

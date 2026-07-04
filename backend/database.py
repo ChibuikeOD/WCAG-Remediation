@@ -101,6 +101,13 @@ class UploadedFile(Base):
     )
 
 
+@event.listens_for(UploadedFile, "before_update")
+def prevent_uploaded_file_owner_update(_mapper, _connection, uploaded_file):
+    """Keep file ownership fixed after the file row is inserted."""
+    if inspect(uploaded_file).attrs.owner_id.history.has_changes():
+        raise ValueError("uploaded file owner is immutable")
+
+
 class AccessibilityReport(Base):
     """WCAG 2.2 analysis report metadata and full JSON response."""
     __tablename__ = "accessibility_reports"

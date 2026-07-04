@@ -819,6 +819,49 @@ def test_resolved_job_root_outside_jobs_is_rejected_without_symlink_privilege(
         main_module._resolve_trial_artifact("jobs/mock-job/fixed.pdf", "mock-job")
 
 
+def test_symlinked_jobs_container_outside_output_is_rejected(trial_client, tmp_path):
+    outside = tmp_path / "outside-jobs"
+    artifact = outside / "container-job" / "fixed.pdf"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"private")
+    jobs_link = settings.OUTPUT_DIR / "jobs"
+    try:
+        jobs_link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(main_module.TrialStateError):
+        main_module._resolve_trial_artifact(
+            "jobs/container-job/fixed.pdf", "container-job"
+        )
+
+
+def test_resolved_jobs_container_outside_output_is_rejected_without_privilege(
+    trial_client, monkeypatch, tmp_path
+):
+    root = settings.OUTPUT_DIR.resolve()
+    lexical_jobs = root / "jobs"
+    outside_jobs = (tmp_path / "resolved-outside-jobs").resolve()
+    outside_artifact = outside_jobs / "container-job" / "fixed.pdf"
+    outside_artifact.parent.mkdir(parents=True)
+    outside_artifact.write_bytes(b"private")
+    real_resolve = Path.resolve
+
+    def controlled_resolve(path, *args, **kwargs):
+        if path == lexical_jobs:
+            return outside_jobs
+        if path == lexical_jobs / "container-job" / "fixed.pdf":
+            return outside_artifact
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", controlled_resolve)
+
+    with pytest.raises(main_module.TrialStateError):
+        main_module._resolve_trial_artifact(
+            "jobs/container-job/fixed.pdf", "container-job"
+        )
+
+
 def test_heartbeat_keeps_tiny_lease_active_through_report_generation(
     trial_client, monkeypatch
 ):

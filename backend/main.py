@@ -736,6 +736,8 @@ def _resolve_trial_artifact(key: str | None, job_id: str) -> Path:
         raise TrialStateError("trial artifact metadata is missing")
     root = settings.OUTPUT_DIR.resolve()
     jobs_root = (root / "jobs").resolve()
+    if jobs_root.parent != root or jobs_root.name != "jobs":
+        raise TrialStateError("trial jobs artifact root is invalid")
     job_root = (jobs_root / job_id).resolve()
     if (
         job_root.parent != jobs_root

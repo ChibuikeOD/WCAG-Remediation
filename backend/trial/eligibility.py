@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import re
 
+import idna
+
 
 _LOCAL_PART_PATTERN = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+")
 _DOMAIN_LABEL_PATTERN = re.compile(
@@ -104,11 +106,13 @@ def _canonicalize_domain(domain: str) -> str | None:
     if not domain:
         return None
     try:
-        ascii_domain = domain.encode("idna").decode("ascii").lower()
-        unicode_domain = ascii_domain.encode("ascii").decode("idna")
-        round_trip = unicode_domain.encode("idna").decode("ascii").lower()
-    except UnicodeError:
+        ascii_domain = idna.encode(
+            domain,
+            uts46=True,
+            std3_rules=True,
+        ).decode("ascii").lower()
+    except idna.IDNAError:
         return None
-    if round_trip != ascii_domain or not _valid_domain(ascii_domain):
+    if not _valid_domain(ascii_domain):
         return None
     return ascii_domain

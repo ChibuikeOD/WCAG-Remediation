@@ -75,6 +75,17 @@ def test_unicode_and_alabel_domains_have_the_same_canonical_decision() -> None:
     assert unicode_decision.granted_pages == 400
 
 
+def test_idna2008_sharp_s_is_distinct_from_ascii_ss_domain() -> None:
+    unicode_decision = classify_verified_email("person@faß.de")
+    alabel_decision = classify_verified_email("person@xn--fa-hia.de")
+    ascii_decision = classify_verified_email("person@fass.de")
+
+    assert unicode_decision == alabel_decision
+    assert unicode_decision.normalized_domain == "xn--fa-hia.de"
+    assert ascii_decision.normalized_domain == "fass.de"
+    assert ascii_decision != unicode_decision
+
+
 def test_unicode_local_part_is_rejected_before_case_normalization() -> None:
     with pytest.raises(ValueError, match="valid email"):
         classify_verified_email("K@example.com")

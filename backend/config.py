@@ -126,6 +126,7 @@ class Settings(BaseSettings):
     # Processing limits
     MAX_FILE_SIZE_MB: int = 50
     MAX_PAGES_PDF: int = 100
+    PDF_UPLOAD_VALIDATION_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0.0)
 
     # Hard wall-clock cap (seconds) for external PDF tooling subprocesses
     # (OpenDataLoader/Java layout extraction and the C++ tagging engine).

@@ -1,12 +1,14 @@
 """API contract tests for trial balances, uploads, and metered remediation."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import fitz
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import backend.database as database
@@ -25,6 +27,17 @@ def pdf_bytes(page_count=1):
     content = document.tobytes()
     document.close()
     return content
+
+
+class CountingUpload:
+    def __init__(self, filename, chunks):
+        self.filename = filename
+        self.chunks = list(chunks)
+        self.read_calls = 0
+
+    async def read(self, size=-1):
+        self.read_calls += 1
+        return self.chunks.pop(0) if self.chunks else b""
 
 
 @pytest.fixture()
@@ -316,6 +329,51 @@ def test_upload_removes_partial_file_when_metadata_persistence_fails(
     assert list((tmp_path / "uploads").iterdir()) == []
 
 
+def test_oversized_upload_stops_streaming_and_removes_staging_file(
+    trial_client, monkeypatch
+):
+    _, session_factory, tmp_path = trial_client
+    monkeypatch.setattr(settings, "MAX_FILE_SIZE_MB", 1)
+    upload = CountingUpload(
+        "large.pdf",
+        [b"%PDF-" + b"a" * (1024 * 1024 - 5), b"more", b"must-not-be-read"],
+    )
+    with session_factory() as session:
+        user = session.get(database.User, "verified-user")
+
+    with pytest.raises(main_module.HTTPException) as exc_info:
+        asyncio.run(main_module.upload_file(upload, user))
+
+    assert exc_info.value.status_code == 400
+    assert upload.read_calls == 2
+    assert list((tmp_path / "uploads").rglob("*")) == []
+
+
+def test_pdf_upload_validation_runs_via_threadpool_and_times_out(
+    trial_client, monkeypatch
+):
+    _, session_factory, tmp_path = trial_client
+    upload = CountingUpload("slow.pdf", [pdf_bytes(1), b""])
+    called = []
+
+    async def never_finishes(function, *args, **kwargs):
+        called.append(function)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(main_module, "run_in_threadpool", never_finishes)
+    monkeypatch.setattr(settings, "PDF_UPLOAD_VALIDATION_TIMEOUT_SECONDS", 0.01, raising=False)
+    with session_factory() as session:
+        user = session.get(database.User, "verified-user")
+
+    with pytest.raises(main_module.HTTPException) as exc_info:
+        asyncio.run(main_module.upload_file(upload, user))
+
+    assert exc_info.value.status_code == 400
+    assert "timed out" in exc_info.value.detail
+    assert called == [main_module._pdf_page_count]
+    assert list((tmp_path / "uploads").rglob("*")) == []
+
+
 @pytest.mark.parametrize(
     ("filename", "content", "media_type"),
     [
@@ -417,7 +475,7 @@ def test_over_balance_rejected_before_pipeline_without_orphan_job(
         assert [entry.entry_type for entry in entries] == ["grant"]
 
 
-def test_successful_remediation_consumes_exact_pages_and_duplicate_is_conflict(
+def test_successful_remediation_replays_without_rerun_or_double_charge(
     trial_client, monkeypatch
 ):
     client, session_factory, _ = trial_client
@@ -440,8 +498,8 @@ def test_successful_remediation_consumes_exact_pages_and_duplicate_is_conflict(
     )
 
     assert first.status_code == 200
-    assert duplicate.status_code == 409
-    assert duplicate.json()["detail"]["code"] == "trial_remediation_conflict"
+    assert duplicate.status_code == 200
+    assert duplicate.json() == first.json()
     assert calls == 1
     balance = client.get("/trial/me").json()
     assert balance["consumed_pages"] == 2
@@ -451,6 +509,147 @@ def test_successful_remediation_consumes_exact_pages_and_duplicate_is_conflict(
         [job] = session.scalars(select(database.RemediationJob)).all()
         assert job.status == "succeeded"
         assert job.idempotency_key == "remediate:verified-user:report-1"
+        assert job.response_json is not None
+        assert job.output_artifact_key.startswith(f"jobs/{job.id}/")
+        assert not Path(job.output_artifact_key).is_absolute()
+        assert (settings.OUTPUT_DIR / job.output_artifact_key).is_file()
+
+
+def test_corrupt_succeeded_replay_is_safe_conflict_without_rerun(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    upload = upload_pdf(client, pages=1)
+    report_id = seed_report(session_factory, upload.json()["file_id"], "corrupt-replay")
+    calls = 0
+
+    def successful(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", successful)
+    assert client.post("/remediate", json={"report_id": report_id}).status_code == 200
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        job.response_json = None
+        session.commit()
+
+    retry = client.post("/remediate", json={"report_id": report_id})
+
+    assert retry.status_code == 409
+    assert retry.json()["detail"]["code"] == "trial_remediation_state_invalid"
+    assert calls == 1
+
+
+def test_completion_failure_cleans_published_artifact_and_releases(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    upload = upload_pdf(client, pages=1)
+    report_id = seed_report(session_factory, upload.json()["file_id"], "complete-fail")
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        main_module.TrialService,
+        "complete",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("commit failed")),
+    )
+
+    response = client.post("/remediate", json={"report_id": report_id})
+
+    assert response.status_code == 500
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        assert job.status == "released"
+        assert job.output_artifact_key is None
+    jobs_root = settings.OUTPUT_DIR / "jobs"
+    assert not jobs_root.exists() or list(jobs_root.iterdir()) == []
+
+
+def test_cancelled_pipeline_releases_and_cleans_artifacts(trial_client, monkeypatch):
+    _, session_factory, _ = trial_client
+    content = pdf_bytes(1)
+    source = settings.UPLOAD_DIR / "cancel.pdf"
+    source.write_bytes(content)
+    with session_factory() as session:
+        session.add(database.UploadedFile(
+            id="cancel-file", filename="cancel.pdf", file_type="pdf",
+            file_path=str(source), file_size=len(content), page_count=1,
+            owner_id="verified-user",
+        ))
+        session.commit()
+    report_id = seed_report(session_factory, "cancel-file", "cancel-report")
+
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(main_module, "run_in_threadpool", cancelled)
+    with session_factory() as session:
+        user = session.get(database.User, "verified-user")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(main_module._remediate_trial(
+            main_module.RemediationRequest(report_id=report_id), user
+        ))
+
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        assert job.status == "released"
+    assert not (settings.OUTPUT_DIR / "jobs" / job.id).exists()
+
+
+def test_expired_processing_lease_is_recovered_on_trial_balance(
+    trial_client
+):
+    client, session_factory, _ = trial_client
+    with session_factory() as session:
+        user = session.get(database.User, "verified-user")
+        service = main_module.TrialService(session)
+        service.ensure_account(user)
+        job = database.RemediationJob(
+            id="stale-api-job", user_id=user.id, status="pending", page_count=5,
+            idempotency_key="stale-api-job",
+        )
+        session.add(job)
+        now = datetime.now(timezone.utc)
+        service.reserve_and_start_processing(
+            user.id, job.id, 5, "stale-reserve", now - timedelta(minutes=5),
+            now - timedelta(minutes=1),
+        )
+
+    response = client.get("/trial/me")
+
+    assert response.status_code == 200
+    assert response.json()["remaining_pages"] == 200
+    with session_factory() as session:
+        assert session.get(database.RemediationJob, "stale-api-job").status == "released"
+
+
+def test_duplicate_creation_integrity_race_does_not_run_pipeline(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    upload = upload_pdf(client, pages=1)
+    report_id = seed_report(session_factory, upload.json()["file_id"], "race-report")
+    called = False
+
+    def race(*args, **kwargs):
+        raise IntegrityError("insert", {}, RuntimeError("duplicate"))
+
+    def forbidden(*args, **kwargs):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(main_module.TrialService, "reserve_and_start_processing", race)
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", forbidden)
+
+    response = client.post("/remediate", json={"report_id": report_id})
+
+    assert response.status_code == 409
+    assert called is False
+    with session_factory() as session:
+        assert session.query(database.RemediationJob).count() == 0
 
 
 @pytest.mark.parametrize(
@@ -492,3 +691,82 @@ def test_pipeline_failure_releases_once_and_restores_balance(
             ).all()
         ]
         assert kinds.count("release") == 1
+    jobs_root = settings.OUTPUT_DIR / "jobs"
+    assert not jobs_root.exists() or list(jobs_root.iterdir()) == []
+    temp_root = settings.OUTPUT_DIR / ".tmp"
+    assert not temp_root.exists() or list(temp_root.iterdir()) == []
+
+
+def test_cross_user_same_filename_artifacts_and_downloads_are_isolated(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    active_user = {"id": "verified-user"}
+    with session_factory() as session:
+        session.add(database.User(id="artifact-user", email="artifact@gmail.com", name="Artifact"))
+        session.commit()
+
+    def current_user():
+        with session_factory() as session:
+            return session.get(database.User, active_user["id"])
+
+    app.dependency_overrides[require_user] = current_user
+    first_bytes = pdf_bytes(1)
+    first_upload = client.post(
+        "/upload", files={"file": ("same.pdf", first_bytes, "application/pdf")}
+    ).json()
+    first_report = seed_report(session_factory, first_upload["file_id"], "artifact-report-1")
+    active_user["id"] = "artifact-user"
+    second_bytes = pdf_bytes(2)
+    second_upload = client.post(
+        "/upload", files={"file": ("same.pdf", second_bytes, "application/pdf")}
+    ).json()
+    second_report = seed_report(session_factory, second_upload["file_id"], "artifact-report-2")
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", lambda *args, **kwargs: [])
+
+    second_result = client.post(
+        "/remediate", json={"report_id": second_report, "apply_all_automatable": True}
+    )
+    second_download = client.get(f"/remediate/download/{second_report}")
+    second_report_download = client.get(f"/remediate/report/{second_report}")
+    active_user["id"] = "verified-user"
+    first_result = client.post(
+        "/remediate", json={"report_id": first_report, "apply_all_automatable": True}
+    )
+    first_download = client.get(f"/remediate/download/{first_report}")
+    first_report_download = client.get(f"/remediate/report/{first_report}")
+    forbidden = client.get(f"/remediate/download/{second_report}")
+    forbidden_report = client.get(f"/remediate/report/{second_report}")
+
+    assert first_result.status_code == second_result.status_code == 200
+    assert first_download.content == first_bytes
+    assert second_download.content == second_bytes
+    assert first_download.content != second_download.content
+    assert first_report_download.status_code == second_report_download.status_code == 200
+    assert first_report_download.content.startswith(b"%PDF")
+    assert second_report_download.content.startswith(b"%PDF")
+    assert forbidden.status_code == 403
+    assert forbidden_report.status_code == 403
+    with session_factory() as session:
+        jobs = session.scalars(select(database.RemediationJob)).all()
+        assert len({job.output_artifact_key for job in jobs}) == 2
+
+
+def test_path_traversal_display_filename_stays_inside_job_directory(
+    trial_client, monkeypatch
+):
+    client, session_factory, tmp_path = trial_client
+    upload = upload_pdf(client, pages=1, filename="../../escape.pdf")
+    report_id = seed_report(session_factory, upload.json()["file_id"], "traversal-report")
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", lambda *args, **kwargs: [])
+
+    response = client.post(
+        "/remediate", json={"report_id": report_id, "apply_all_automatable": True}
+    )
+
+    assert response.status_code == 200
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        artifact = (settings.OUTPUT_DIR / job.output_artifact_key).resolve()
+        assert artifact.is_relative_to((settings.OUTPUT_DIR / "jobs" / job.id).resolve())
+    assert not (tmp_path / "escape.pdf").exists()

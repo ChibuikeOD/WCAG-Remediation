@@ -100,6 +100,7 @@ class TrialService:
                 )
             )
             if existing is not None:
+                self._validate_job_lifecycle(job)
                 if not self._matches_reserve(existing, job_id, pages):
                     raise TrialStateError("idempotency key conflicts with reservation")
                 if job.status != "reserved":
@@ -112,6 +113,7 @@ class TrialService:
 
             if job.status != "pending":
                 raise TrialStateError("remediation job must be pending")
+            self._validate_job_lifecycle(job)
 
             balance = self._get_balance(user_id)
             if pages > balance.remaining:
@@ -147,6 +149,7 @@ class TrialService:
             job = self._lock_job(job_id)
             if job is None or job.user_id != unlocked_job.user_id:
                 raise TrialStateError("remediation job ownership changed")
+            self._validate_job_lifecycle(job)
             key = f"consume:{job_id}"
             existing = self._entry_for_key(job.user_id, key)
             if job.status == "succeeded":
@@ -159,7 +162,6 @@ class TrialService:
                 raise TrialStateError("only a reserved job can be consumed")
             if existing is not None:
                 raise TrialStateError("consume idempotency state conflicts with job")
-            self._require_active_reservation(job)
 
             self.session.add(
                 TrialLedgerEntry(
@@ -192,6 +194,7 @@ class TrialService:
             job = self._lock_job(job_id)
             if job is None or job.user_id != unlocked_job.user_id:
                 raise TrialStateError("remediation job ownership changed")
+            self._validate_job_lifecycle(job)
             key = f"release:{job_id}"
             existing = self._entry_for_key(job.user_id, key)
             if job.status == "released":
@@ -206,7 +209,6 @@ class TrialService:
                 raise TrialStateError("job cannot be released from its current state")
             if existing is not None:
                 raise TrialStateError("release idempotency state conflicts with job")
-            self._require_active_reservation(job)
 
             self.session.add(
                 TrialLedgerEntry(
@@ -251,6 +253,10 @@ class TrialService:
         )
 
     def _get_balance(self, user_id: str) -> TrialBalance:
+        account = self.session.get(TrialAccount, user_id)
+        if account is None:
+            raise TrialStateError("invalid trial balance")
+        self._validate_account_grant(account)
         totals = self.session.execute(
             select(
                 func.coalesce(func.sum(TrialLedgerEntry.granted_delta), 0),
@@ -260,10 +266,8 @@ class TrialService:
         ).one()
         granted, consumed, reserved = (int(value) for value in totals)
         remaining = granted - reserved - consumed
-        account = self.session.get(TrialAccount, user_id)
         if (
-            account is None
-            or granted != account.granted_pages
+            granted != account.granted_pages
             or min(granted, consumed, reserved, remaining) < 0
         ):
             raise TrialStateError("invalid trial balance")
@@ -282,7 +286,9 @@ class TrialService:
             or grants[0].idempotency_key != expected_key
             or not self._matches_grant(grants[0], account.granted_pages)
         ):
-            raise TrialStateError("trial grant state conflicts with account provenance")
+            raise TrialStateError(
+                "invalid trial balance: trial grant state conflicts with account provenance"
+            )
 
     def _entry_for_key(self, user_id: str, key: str) -> TrialLedgerEntry | None:
         return self.session.scalar(
@@ -292,7 +298,7 @@ class TrialService:
             )
         )
 
-    def _require_active_reservation(self, job: RemediationJob) -> None:
+    def _validate_job_lifecycle(self, job: RemediationJob) -> None:
         rows = self.session.scalars(
             select(TrialLedgerEntry).where(
                 TrialLedgerEntry.user_id == job.user_id,
@@ -300,13 +306,38 @@ class TrialService:
             )
         ).all()
         reserves = [row for row in rows if row.entry_type == "reserve"]
-        active = sum(row.reserved_delta for row in rows)
-        if (
-            len(reserves) != 1
-            or reserves[0].reserved_delta != job.page_count
-            or active != job.page_count
-        ):
-            raise TrialStateError("job does not have an exact active reservation")
+        consumes = [row for row in rows if row.entry_type == "consume"]
+        releases = [row for row in rows if row.entry_type == "release"]
+
+        valid_reserve = (
+            len(reserves) == 1
+            and self._matches_reserve(reserves[0], job.id, job.page_count)
+        )
+        if job.status == "pending":
+            valid = not rows
+        elif job.status in {"reserved", "processing"}:
+            valid = len(rows) == 1 and valid_reserve
+        elif job.status == "succeeded":
+            valid = (
+                len(rows) == 2
+                and valid_reserve
+                and len(consumes) == 1
+                and consumes[0].idempotency_key == f"consume:{job.id}"
+                and self._matches_consume(consumes[0], job.id, job.page_count)
+            )
+        elif job.status == "released":
+            valid = (
+                len(rows) == 2
+                and valid_reserve
+                and len(releases) == 1
+                and releases[0].idempotency_key == f"release:{job.id}"
+                and self._matches_release(releases[0], job.id, job.page_count)
+            )
+        else:
+            valid = False
+
+        if not valid:
+            raise TrialStateError("remediation job ledger lifecycle is invalid")
 
     @staticmethod
     def _matches_grant(entry: TrialLedgerEntry | None, pages: int) -> bool:

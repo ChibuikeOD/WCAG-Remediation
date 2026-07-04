@@ -238,6 +238,49 @@ def test_get_balance_rejects_grant_that_conflicts_with_account_provenance(db):
         TrialService(db).get_balance(user.id)
 
 
+def test_balance_and_reserve_reject_two_grants_that_sum_to_account_total(db):
+    user = add_user(db)
+    db.add(
+        database.TrialAccount(
+            user_id=user.id,
+            normalized_email="person@gmail.com",
+            normalized_domain="gmail.com",
+            granted_pages=200,
+            eligibility_rule_version="2026-07-04",
+        )
+    )
+    db.add_all(
+        [
+            database.TrialLedgerEntry(
+                id=f"split-grant-{index}",
+                user_id=user.id,
+                entry_type="grant",
+                granted_delta=100,
+                idempotency_key=f"split-grant:{index}",
+            )
+            for index in range(2)
+        ]
+    )
+    job = database.RemediationJob(
+        id="job-1",
+        user_id=user.id,
+        status="pending",
+        page_count=3,
+        idempotency_key="job:job-1",
+    )
+    db.add(job)
+    db.commit()
+    service = TrialService(db)
+
+    with pytest.raises(TrialStateError, match="grant"):
+        service.get_balance(user.id)
+    db.rollback()
+    with pytest.raises(TrialStateError, match="grant"):
+        service.reserve(user.id, job.id, 3, "reserve")
+
+    assert len(entries(db, user.id)) == 2
+
+
 def test_reserve_moves_pending_job_and_appends_delta(db):
     user = add_user(db)
     service = TrialService(db)
@@ -371,6 +414,30 @@ def test_reserve_retry_rejects_missing_authoritative_job(db):
     assert len(entries(db, user_id)) == 2
 
 
+def test_reserve_retry_rejects_release_hidden_by_reserved_status(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    service.reserve(user.id, job.id, 3, "reserve")
+    db.add(
+        database.TrialLedgerEntry(
+            id="hidden-release",
+            user_id=user.id,
+            job_id=job.id,
+            entry_type="release",
+            reserved_delta=-3,
+            idempotency_key="hidden-release",
+        )
+    )
+    db.commit()
+
+    with pytest.raises(TrialStateError, match="lifecycle"):
+        service.reserve(user.id, job.id, 3, "reserve")
+
+    assert len(entries(db, user.id)) == 3
+
+
 def test_idempotent_retry_finishes_transaction_and_releases_locks(db):
     user = add_user(db)
     service = TrialService(db)
@@ -434,6 +501,41 @@ def test_consume_succeeds_and_is_idempotent(db):
     ]
 
 
+def test_consume_retry_rejects_extra_reserve_release_pair(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    service.reserve(user.id, job.id, 3, "reserve")
+    service.consume(job.id)
+    db.add_all(
+        [
+            database.TrialLedgerEntry(
+                id="extra-reserve",
+                user_id=user.id,
+                job_id=job.id,
+                entry_type="reserve",
+                reserved_delta=3,
+                idempotency_key="extra-reserve",
+            ),
+            database.TrialLedgerEntry(
+                id="extra-release",
+                user_id=user.id,
+                job_id=job.id,
+                entry_type="release",
+                reserved_delta=-3,
+                idempotency_key="extra-release",
+            ),
+        ]
+    )
+    db.commit()
+
+    with pytest.raises(TrialStateError, match="lifecycle"):
+        service.consume(job.id)
+
+    assert len(entries(db, user.id)) == 5
+
+
 @pytest.mark.parametrize("status", ["pending", "reserved", "released", "failed"])
 def test_consume_rejects_illegal_lifecycle(db, status):
     user = add_user(db)
@@ -461,6 +563,42 @@ def test_release_succeeds_and_is_idempotent(db):
     assert isinstance(stored.completed_at, datetime)
     assert service.release(job.id, "renderer failed") == expected
     assert entries(db, user.id)[-1].idempotency_key == f"release:{job.id}"
+
+
+def test_release_retry_rejects_extra_reserve_consume_pair(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    job = add_job(db, user, pages=3)
+    service.reserve(user.id, job.id, 3, "reserve")
+    service.release(job.id, "renderer failed")
+    db.add_all(
+        [
+            database.TrialLedgerEntry(
+                id="extra-reserve",
+                user_id=user.id,
+                job_id=job.id,
+                entry_type="reserve",
+                reserved_delta=3,
+                idempotency_key="extra-reserve",
+            ),
+            database.TrialLedgerEntry(
+                id="extra-consume",
+                user_id=user.id,
+                job_id=job.id,
+                entry_type="consume",
+                reserved_delta=-3,
+                consumed_delta=3,
+                idempotency_key="extra-consume",
+            ),
+        ]
+    )
+    db.commit()
+
+    with pytest.raises(TrialStateError, match="lifecycle"):
+        service.release(job.id, "renderer failed")
+
+    assert len(entries(db, user.id)) == 5
 
 
 def test_release_rejects_succeeded_or_reason_conflict(db):

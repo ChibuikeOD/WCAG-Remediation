@@ -1,226 +1,193 @@
-"""
-Authentication Router implementing OpenID Connect (OIDC) via Authlib,
-with a fallback Mock SSO mode for development/testing environments.
-"""
+"""Supabase bearer authentication for trial deployments."""
+
 import logging
-from typing import Optional
-from fastapi import APIRouter, Depends, Request, HTTPException, status
-from fastapi.responses import RedirectResponse, JSONResponse
+from typing import Protocol
+
+import httpx
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 from sqlalchemy.orm import Session
-from authlib.integrations.starlette_client import OAuth, OAuthError
+
 from .config import settings
-from .database import get_db, User
+from .database import User, get_db
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+bearer_scheme = HTTPBearer(auto_error=False)
 
-# Initialize OAuth registry
-oauth = OAuth()
+ALLOWED_ALGORITHMS = ["RS256", "ES256"]
 
-# Flag indicating if OIDC is configured
-OIDC_CONFIGURED = all([
-    settings.OIDC_CLIENT_ID,
-    settings.OIDC_CLIENT_SECRET,
-    settings.OIDC_DISCOVERY_URL,
-    settings.OIDC_CLIENT_ID != "your_oidc_client_id"
-])
 
-if OIDC_CONFIGURED:
-    try:
-        oauth.register(
-            name="oidc",
-            client_id=settings.OIDC_CLIENT_ID,
-            client_secret=settings.OIDC_CLIENT_SECRET,
-            server_metadata_url=settings.OIDC_DISCOVERY_URL,
-            client_kwargs={"scope": "openid profile email"}
+class TokenVerificationError(Exception):
+    """Raised when a bearer token cannot establish a trusted identity."""
+
+
+class TokenVerifier(Protocol):
+    async def verify(self, token: str) -> dict:
+        """Return identity data derived from verified Supabase responses."""
+
+
+class SupabaseTokenVerifier:
+    """Verify a Supabase access token and retrieve its trusted user record."""
+
+    def __init__(self, supabase_url: str | None, publishable_key: str | None):
+        self.supabase_url = (supabase_url or "").rstrip("/")
+        self.publishable_key = publishable_key or ""
+        self.issuer = f"{self.supabase_url}/auth/v1"
+        self.jwks_client = PyJWKClient(
+            f"{self.issuer}/.well-known/jwks.json"
         )
-        logger.info("OIDC SSO Auth client registered successfully.")
-    except Exception as e:
-        logger.error(f"Failed to register OIDC client: {e}. Falling back to Mock SSO.")
-        OIDC_CONFIGURED = False
-else:
-    logger.info("OIDC SSO credentials not fully configured. Running in Mock SSO mode.")
 
-
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> Optional[User]:
-    """
-    Dependency provider to retrieve the logged-in user from the session.
-    Returns None if no user is authenticated.
-    """
-    # ── Auth-bypass mode (testing/demo only) ──────────────────────
-    if settings.DISABLE_AUTH:
-        mock_id = "dev_user_001"
-        mock_email = "dev@accesspdf.local"
-        mock_name = "Dev User"
-        
-        user = db.query(User).filter(User.id == mock_id).first()
-        if not user:
-            try:
-                user = User(id=mock_id, email=mock_email, name=mock_name)
-                db.add(user)
-                db.commit()
-                db.refresh(user)
-            except Exception as e:
-                db.rollback()
-                logger.error(f"Failed to create mock user in db: {e}")
-                return User(id=mock_id, email=mock_email, name=mock_name)
-        return user
-
-    user_id = request.session.get("user_id")
-    if not user_id:
-        return None
-    return db.query(User).filter(User.id == user_id).first()
-
-
-def require_user(user: Optional[User] = Depends(get_current_user)) -> User:
-    """
-    Dependency provider that enforces authentication.
-    Raises 401 Unauthorized if the user is not authenticated.
-    """
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please log in through SSO."
+    def _verify_jwt(self, token: str) -> dict:
+        signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=ALLOWED_ALGORITHMS,
+            audience="authenticated",
+            issuer=self.issuer,
+            options={"require": ["exp", "sub", "aud"]},
         )
+        if claims.get("role") != "authenticated":
+            raise TokenVerificationError("Token role is not authenticated")
+        return claims
+
+    async def verify(self, token: str) -> dict:
+        if not self.supabase_url or not self.publishable_key:
+            raise TokenVerificationError("Supabase authentication is not configured")
+
+        try:
+            claims = self._verify_jwt(token)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.issuer}/user",
+                    headers={
+                        "apikey": self.publishable_key,
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+            if response.status_code != status.HTTP_200_OK:
+                raise TokenVerificationError("Supabase rejected the access token")
+            user_data = response.json()
+        except TokenVerificationError:
+            raise
+        except (jwt.PyJWTError, httpx.HTTPError, ValueError, TypeError) as exc:
+            raise TokenVerificationError("Invalid Supabase access token") from exc
+
+        if user_data.get("id") != claims.get("sub"):
+            raise TokenVerificationError("Token subject does not match Supabase user")
+
+        metadata = user_data.get("user_metadata") or {}
+        return {
+            "sub": claims.get("sub"),
+            "email": user_data.get("email"),
+            "name": metadata.get("full_name") or metadata.get("name"),
+            "role": claims.get("role"),
+            "email_confirmed_at": user_data.get("email_confirmed_at"),
+        }
+
+
+def get_token_verifier() -> TokenVerifier:
+    """Build the production verifier; tests override this dependency."""
+    return SupabaseTokenVerifier(
+        settings.SUPABASE_URL,
+        settings.SUPABASE_PUBLISHABLE_KEY,
+    )
+
+
+def _synchronize_user(db: Session, identity: dict) -> User:
+    subject = identity["sub"]
+    email = identity["email"]
+    name = identity.get("name") or email
+    user = db.get(User, subject)
+    if user is None:
+        user = User(id=subject, email=email, name=name)
+        db.add(user)
+    else:
+        user.email = email
+        user.name = name
+    db.commit()
+    db.refresh(user)
     return user
 
 
-@router.get("/login")
-async def login(request: Request, redirect_to: Optional[str] = "/"):
-    """
-    Initiates the authentication flow.
-    - DISABLE_AUTH=true : instantly creates a mock session, no click required.
-    - OIDC configured   : redirects to the identity provider.
-    - Neither           : mock SSO fallback for local development.
-    """
-    request.session["auth_redirect_to"] = redirect_to
+def _development_user(db: Session) -> User:
+    return _synchronize_user(
+        db,
+        {
+            "sub": "dev_user_001",
+            "email": "dev@accesspdf.local",
+            "name": "Dev User",
+        },
+    )
 
-    # ── Auth-bypass mode (testing only) ──────────────────────────
-    if settings.DISABLE_AUTH:
-        logger.info("DISABLE_AUTH=true: auto-logging in as mock user.")
-        request.session["user_id"]    = "dev_user_001"
-        request.session["user_name"]  = "Dev User"
-        request.session["user_email"] = "dev@accesspdf.local"
-        frontend_url = settings.CORS_ORIGINS[1] if len(settings.CORS_ORIGINS) > 1 else settings.CORS_ORIGINS[0]
-        return RedirectResponse(url=f"{frontend_url}{redirect_to}")
 
-    if OIDC_CONFIGURED:
-        callback_uri = str(request.url_for("auth_callback"))
-        # Force HTTPS redirect URI in production/non-localhost
-        if "localhost" not in callback_uri and callback_uri.startswith("http:"):
-            callback_uri = callback_uri.replace("http:", "https:")
-        return await oauth.oidc.authorize_redirect(request, callback_uri)
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    verifier: TokenVerifier = Depends(get_token_verifier),
+    db: Session = Depends(get_db),
+) -> User:
+    """Resolve the development identity or authenticate a trial bearer token."""
+    if settings.DEPLOYMENT_MODE == "testing":
+        return _development_user(db)
 
-    # Mock authentication flow (OIDC not configured)
-    logger.info("Mock Login: Authenticating developer user.")
-    mock_id    = "mock_umass_prof_101"
-    mock_email = "prof_johndoe@umass.edu"
-    mock_name  = "Professor John Doe"
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bearer authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    db = next(get_db())
     try:
-        user = db.query(User).filter(User.id == mock_id).first()
-        if not user:
-            user = User(id=mock_id, email=mock_email, name=mock_name)
-            db.add(user)
-            db.commit()
-            db.refresh(user)
+        identity = await verifier.verify(credentials.credentials)
+    except TokenVerificationError:
+        logger.info("Supabase bearer authentication failed")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
 
-        request.session["user_id"]    = user.id
-        request.session["user_name"]  = user.name
-        request.session["user_email"] = user.email
-    finally:
-        db.close()
+    if (
+        not identity.get("sub")
+        or not identity.get("email")
+        or identity.get("role") != "authenticated"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authenticated identity",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not identity.get("email_confirmed_at"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A verified email address is required",
+        )
 
-    frontend_url = settings.CORS_ORIGINS[1] if len(settings.CORS_ORIGINS) > 1 else settings.CORS_ORIGINS[0]
-    return RedirectResponse(url=f"{frontend_url}{redirect_to}")
-
-
-@router.get("/callback")
-async def auth_callback(request: Request, db: Session = Depends(get_db)):
-    """
-    OIDC identity provider redirect callback endpoint.
-    Exchanges authorization code for tokens and registers user.
-    """
-    if not OIDC_CONFIGURED:
-        raise HTTPException(status_code=400, detail="OIDC is not configured. Use /login for Mock SSO.")
-        
-    try:
-        token = await oauth.oidc.authorize_access_token(request)
-        userinfo = token.get("userinfo")
-        if not userinfo:
-            # Fallback parsing ID token if userinfo endpoint is not present
-            userinfo = await oauth.oidc.parse_id_token(request, token)
-            
-        sub = userinfo.get("sub")
-        email = userinfo.get("email")
-        name = userinfo.get("name", email)
-        
-        if not sub or not email:
-            raise HTTPException(status_code=400, detail="Invalid token claims: email and sub are required.")
-            
-        # Synchronize user with database
-        user = db.query(User).filter(User.id == sub).first()
-        if not user:
-            user = User(id=sub, email=email, name=name)
-            db.add(user)
-        else:
-            user.name = name  # Update name in case it changed on IdP
-        db.commit()
-        db.refresh(user)
-        
-        # Set session variables
-        request.session["user_id"] = user.id
-        request.session["user_name"] = user.name
-        request.session["user_email"] = user.email
-        
-        redirect_to = request.session.pop("auth_redirect_to", "/")
-        frontend_url = settings.CORS_ORIGINS[1] if len(settings.CORS_ORIGINS) > 1 else settings.CORS_ORIGINS[0]
-        return RedirectResponse(url=f"{frontend_url}{redirect_to}")
-        
-    except OAuthError as oe:
-        logger.error(f"OAuth callback validation error: {oe.description}")
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {oe.description}")
-    except Exception as e:
-        logger.error(f"OAuth callback unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Internal SSO communication error.")
+    return _synchronize_user(db, identity)
 
 
-@router.get("/logout")
-async def logout(request: Request):
-    """
-    Clears the login session and redirects user to login.
-    """
-    request.session.clear()
-    frontend_url = settings.CORS_ORIGINS[1] if len(settings.CORS_ORIGINS) > 1 else settings.CORS_ORIGINS[0]
-    return RedirectResponse(url=frontend_url)
+def require_user(user: User = Depends(get_current_user)) -> User:
+    """Require the authenticated user resolved by the shared dependency."""
+    return user
 
 
 @router.get("/me")
-async def get_me(request: Request, user: Optional[User] = Depends(get_current_user)):
-    """
-    Returns user details for active sessions.
-    When DISABLE_AUTH=true, always returns a mock authenticated user so the
-    frontend skips the login screen without any click required.
-    """
-    # ── Auth-bypass mode (testing only) ──────────────────────────
-    if settings.DISABLE_AUTH:
-        return {
-            "authenticated": True,
-            "id":    "dev_user_001",
-            "name":  "Dev User",
-            "email": "dev@accesspdf.local",
-        }
-
-    if not user:
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"authenticated": False, "message": "No active session"}
-        )
+async def get_me(user: User = Depends(require_user)) -> dict:
+    """Return the current bearer-authenticated or development identity."""
     return {
         "authenticated": True,
-        "id":         user.id,
-        "name":       user.name,
-        "email":      user.email,
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
         "created_at": user.created_at.isoformat(),
     }
+
+
+@router.post("/logout")
+async def logout() -> dict:
+    """Supabase sessions are cleared by the client that owns them."""
+    return {"message": "Sign out with the Supabase client"}

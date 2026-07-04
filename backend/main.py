@@ -23,7 +23,6 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundT
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.middleware.sessions import SessionMiddleware
 
 from .config import settings
 from .models import (
@@ -249,13 +248,6 @@ async def api_prefix_middleware(request: Request, call_next):
         request.scope["path"] = path[4:] or "/"
     response = await call_next(request)
     return response
-
-# Register SSO Session Middleware
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.SECRET_KEY,
-    max_age=settings.RETENTION_PERIOD_HOURS * 3600  # Sync session timeout with document expiration
-)
 
 # CORS middleware
 app.add_middleware(

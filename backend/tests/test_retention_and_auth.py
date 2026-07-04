@@ -1,6 +1,4 @@
-"""
-Unit tests for data retention policies and OIDC SSO authentication configuration.
-"""
+"""Unit tests for data retention and authenticated-user relationships."""
 import os
 import pytest
 from datetime import datetime, timedelta

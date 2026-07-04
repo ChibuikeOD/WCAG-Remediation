@@ -5,6 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+import re
+import unicodedata
 
 
 class ArtifactStoreError(Exception):
@@ -21,6 +23,67 @@ class ArtifactAccessDenied(ArtifactStoreError):
 
 class InvalidArtifactKey(ArtifactAccessDenied, ValueError):
     """Raised when a key or one of its logical segments is invalid."""
+
+
+_KINDS = frozenset({"original", "remediated", "report"})
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9._@+-]+$")
+
+
+def _validate_segment(value: str, label: str) -> str:
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        raise InvalidArtifactKey(f"invalid {label}")
+    if "/" in value or "\\" in value:
+        raise InvalidArtifactKey(f"{label} must be one path segment")
+    if any(unicodedata.category(character) == "Cc" for character in value):
+        raise InvalidArtifactKey(f"{label} contains a control character")
+    return value
+
+
+def _validate_identifier(value: str, label: str) -> str:
+    _validate_segment(value, label)
+    if _IDENTIFIER.fullmatch(value) is None:
+        raise InvalidArtifactKey(f"{label} contains unsafe characters")
+    return value
+
+
+@dataclass(frozen=True)
+class ArtifactKey:
+    """Canonical logical artifact identity with exact UTF-8 semantics."""
+
+    user_id: str
+    job_id: str
+    kind: str
+    filename: str
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.user_id, "user_id")
+        _validate_identifier(self.job_id, "job_id")
+        _validate_segment(self.kind, "kind")
+        if self.kind not in _KINDS:
+            raise InvalidArtifactKey(f"unsupported artifact kind: {self.kind}")
+        _validate_segment(self.filename, "filename")
+
+    @property
+    def key(self) -> str:
+        return (
+            f"users/{self.user_id}/jobs/{self.job_id}/"
+            f"{self.kind}/{self.filename}"
+        )
+
+    @classmethod
+    def parse(cls, key: str) -> "ArtifactKey":
+        if not isinstance(key, str) or key.startswith(("/", "\\")) or "\\" in key:
+            raise InvalidArtifactKey("invalid artifact key")
+        parts = key.split("/")
+        if len(parts) != 6 or parts[0] != "users" or parts[2] != "jobs":
+            raise InvalidArtifactKey("artifact key has an invalid shape")
+        return cls(parts[1], parts[3], parts[4], parts[5])
+
+    def for_owner(self, user_id: str) -> "ArtifactKey":
+        _validate_identifier(user_id, "user_id")
+        if self.user_id != user_id:
+            raise ArtifactAccessDenied("artifact belongs to another user")
+        return self
 
 
 @dataclass(frozen=True)

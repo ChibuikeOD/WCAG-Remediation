@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import os
+import stat
+import subprocess
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from backend.storage import (
     ArtifactAccessDenied,
+    ArtifactKey,
     ArtifactNotFound,
     ArtifactStoreError,
     InvalidArtifactKey,
@@ -25,6 +31,56 @@ def _symlink_or_skip(link: Path, target: Path, *, directory: bool = False) -> No
         link.symlink_to(target, target_is_directory=directory)
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"real symlinks are unavailable: {exc}")
+
+
+def _junction_or_skip(link: Path, target: Path) -> None:
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {result.stderr.strip()}")
+
+
+def test_artifact_key_build_parse_owner_and_utf8_exactness() -> None:
+    composed = ArtifactKey("USER", "job-1", "report", "Résumé.pdf")
+    decomposed = ArtifactKey("USER", "job-1", "report", "Résumé.pdf")
+
+    assert composed.key == "users/USER/jobs/job-1/report/Résumé.pdf"
+    assert ArtifactKey.parse(composed.key) == composed
+    assert composed.for_owner("USER") is composed
+    assert composed.key.encode("utf-8") != decomposed.key.encode("utf-8")
+    with pytest.raises(ArtifactAccessDenied):
+        composed.for_owner("user")
+
+
+def test_case_distinct_logical_keys_have_distinct_physical_objects(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    source = _source(tmp_path, b"upper")
+    upper = store.put("USER", "job", "report", source, "Report.pdf")
+    source.write_bytes(b"lower")
+    lower_owner = store.put("user", "job", "report", source, "Report.pdf")
+    source.write_bytes(b"lower filename")
+    lower_filename = store.put("USER", "job", "report", source, "report.pdf")
+
+    paths = {
+        store.download("USER", upper).local_path,
+        store.download("user", lower_owner).local_path,
+        store.download("USER", lower_filename).local_path,
+    }
+    assert None not in paths
+    assert len(paths) == 3
+    assert {path.read_bytes() for path in paths if path is not None} == {
+        b"upper",
+        b"lower",
+        b"lower filename",
+    }
+    for path in paths:
+        assert path is not None
+        assert path.is_relative_to(store.root / "objects")
+        assert "USER" not in path.parts
+        assert "Report.pdf" not in path.parts
 
 
 def test_round_trip_put_download_materialize_and_delete(tmp_path: Path) -> None:
@@ -91,7 +147,6 @@ def test_put_uses_requested_basename_and_atomically_overwrites(tmp_path: Path) -
         ("filename", "dir/file.pdf"),
         ("filename", "dir\\file.pdf"),
         ("filename", "/absolute.pdf"),
-        ("filename", "stream:name.pdf"),
         ("filename", "bad\x7fname.pdf"),
     ],
 )
@@ -165,7 +220,7 @@ def test_existing_artifact_symlink_is_never_followed(tmp_path: Path) -> None:
     store = LocalArtifactStore(tmp_path / "private")
     source = _source(tmp_path)
     key = "users/user/jobs/job/original/source.pdf"
-    artifact = tmp_path / "private" / key
+    artifact = store._path_for_artifact(ArtifactKey.parse(key))
     artifact.parent.mkdir(parents=True)
     outside = tmp_path / "outside.pdf"
     outside.write_bytes(b"outside")
@@ -195,7 +250,7 @@ def test_mocked_key_resolution_escape_is_rejected(
 ) -> None:
     store = LocalArtifactStore(tmp_path / "private")
     key = store.put("user", "job", "original", _source(tmp_path))
-    artifact = store.root.joinpath(*key.split("/"))
+    artifact = store._path_for_artifact(ArtifactKey.parse(key))
     outside = tmp_path / "outside.pdf"
     original_resolve = Path.resolve
 
@@ -205,7 +260,7 @@ def test_mocked_key_resolution_escape_is_rejected(
         return original_resolve(path, strict=strict)
 
     monkeypatch.setattr(Path, "resolve", redirected_resolve)
-    with pytest.raises(ArtifactAccessDenied, match="escapes"):
+    with pytest.raises(ArtifactAccessDenied, match="outside"):
         store.download("user", key)
 
 
@@ -368,10 +423,225 @@ def test_delete_job_rejects_symlinked_job_subtree(tmp_path: Path) -> None:
     outside.mkdir()
     marker = outside / "keep.txt"
     marker.write_text("keep")
-    job = tmp_path / "private" / "users" / "user" / "jobs" / "job"
-    job.parent.mkdir(parents=True)
+    job = store._job_path("user", "job")
+    job.parent.mkdir(parents=True, exist_ok=True)
     _symlink_or_skip(job, outside, directory=True)
 
     with pytest.raises(ArtifactAccessDenied):
         store.delete_job("user", "job")
     assert marker.read_text() == "keep"
+
+
+def test_mocked_windows_reparse_component_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows reparse attributes are platform-specific")
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    artifact = store.download("user", key).local_path
+    assert artifact is not None
+    original_lstat = os.lstat
+
+    def reparse_lstat(path: os.PathLike[str] | str):
+        result = original_lstat(path)
+        if Path(path) == artifact.parent:
+            return SimpleNamespace(
+                st_mode=result.st_mode,
+                st_file_attributes=getattr(result, "st_file_attributes", 0) | 0x400,
+            )
+        return result
+
+    monkeypatch.setattr("backend.storage.local.os.lstat", reparse_lstat)
+    with pytest.raises(ArtifactAccessDenied, match="reparse"):
+        store.download("user", key)
+
+
+def test_windows_junction_in_object_path_is_rejected(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junction test")
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    artifact = store.download("user", key).local_path
+    assert artifact is not None
+    junction = artifact.parent
+    artifact.unlink()
+    junction.rmdir()
+    outside = tmp_path / "junction-target"
+    outside.mkdir()
+    _junction_or_skip(junction, outside)
+    try:
+        with pytest.raises(ArtifactAccessDenied, match="reparse"):
+            store.download("user", key)
+    finally:
+        junction.rmdir()
+    assert list(outside.iterdir()) == []
+
+
+def test_windows_junction_ancestor_of_store_root_is_rejected(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junction test")
+    outside = tmp_path / "store-target"
+    outside.mkdir()
+    junction = tmp_path / "store-junction"
+    _junction_or_skip(junction, outside)
+    try:
+        with pytest.raises(ArtifactAccessDenied, match="reparse"):
+            LocalArtifactStore(junction / "private")
+    finally:
+        junction.rmdir()
+    assert list(outside.iterdir()) == []
+
+
+def test_windows_junction_ancestor_of_materialization_root_is_rejected(
+    tmp_path: Path,
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junction test")
+    store = LocalArtifactStore(tmp_path / "private")
+    key = store.put("user", "job", "original", _source(tmp_path))
+    outside = tmp_path / "materialization-target"
+    outside.mkdir()
+    junction = tmp_path / "materialization-junction"
+    _junction_or_skip(junction, outside)
+    try:
+        with pytest.raises(ArtifactAccessDenied, match="reparse"):
+            store.materialize(
+                "user",
+                key,
+                junction / "exports" / "copy.pdf",
+                destination_root=junction / "exports",
+            )
+    finally:
+        junction.rmdir()
+    assert list(outside.iterdir()) == []
+
+
+def test_adapters_for_same_root_share_lock_and_serialize_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = LocalArtifactStore(tmp_path / "private")
+    second = LocalArtifactStore(tmp_path / "private")
+    assert first._lock is second._lock
+    source_one = _source(tmp_path, b"one")
+    source_two = tmp_path / "source-two.pdf"
+    source_two.write_bytes(b"two")
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[Path] = []
+    original_copy = __import__("shutil").copyfile
+
+    def controlled_copy(source: Path, target: Path) -> str:
+        calls.append(Path(source))
+        if Path(source) == source_one:
+            entered.set()
+            assert release.wait(timeout=5)
+        return original_copy(source, target)
+
+    monkeypatch.setattr("backend.storage.local.shutil.copyfile", controlled_copy)
+    errors: list[BaseException] = []
+
+    def put(store: LocalArtifactStore, source: Path) -> None:
+        try:
+            store.put("user", "job", "original", source, "same.pdf")
+        except BaseException as exc:  # captured for assertion in the test thread
+            errors.append(exc)
+
+    thread_one = threading.Thread(target=put, args=(first, source_one))
+    thread_two = threading.Thread(target=put, args=(second, source_two))
+    thread_one.start()
+    assert entered.wait(timeout=5)
+    thread_two.start()
+    time.sleep(0.1)
+    assert calls == [source_one]
+    release.set()
+    thread_one.join(timeout=5)
+    thread_two.join(timeout=5)
+    assert not errors
+    assert len(calls) == 2
+
+
+def test_two_adapters_can_delete_same_artifact_concurrently(tmp_path: Path) -> None:
+    first = LocalArtifactStore(tmp_path / "private")
+    second = LocalArtifactStore(tmp_path / "private")
+    key = first.put("user", "job", "original", _source(tmp_path))
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def delete(store: LocalArtifactStore) -> None:
+        try:
+            barrier.wait(timeout=5)
+            store.delete("user", key)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=delete, args=(store,)) for store in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+    assert not errors
+    with pytest.raises(ArtifactNotFound):
+        first.download("user", key)
+
+
+def test_concurrent_delete_job_is_idempotent(tmp_path: Path) -> None:
+    first = LocalArtifactStore(tmp_path / "private")
+    second = LocalArtifactStore(tmp_path / "private")
+    first.put("user", "job", "original", _source(tmp_path))
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def delete_job(store: LocalArtifactStore) -> None:
+        try:
+            barrier.wait(timeout=5)
+            store.delete_job("user", "job")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=delete_job, args=(store,))
+        for store in (first, second)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+    assert not errors
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_store_directories_and_artifacts_are_owner_only(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o777)
+    store = LocalArtifactStore(root)
+    key = store.put("user", "job", "original", _source(tmp_path))
+    artifact = store.download("user", key).local_path
+    assert artifact is not None
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    for directory in [artifact.parent, *artifact.parents]:
+        if directory == root.parent:
+            break
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+
+
+def test_cleanup_failure_is_reported_alongside_primary_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    original_unlink = Path.unlink
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        raise OSError("injected replace failure")
+
+    def fail_temp_unlink(path: Path, *args, **kwargs) -> None:
+        if path.name.endswith(".tmp"):
+            raise PermissionError("injected cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_temp_unlink)
+    with pytest.raises(ArtifactStoreError, match="cleanup also failed") as captured:
+        store.put("user", "job", "original", _source(tmp_path))
+    assert str(tmp_path) not in str(captured.value)

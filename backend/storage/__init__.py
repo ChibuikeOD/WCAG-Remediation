@@ -3,6 +3,7 @@
 from .base import (
     ArtifactAccessDenied,
     ArtifactDownload,
+    ArtifactKey,
     ArtifactNotFound,
     ArtifactStore,
     ArtifactStoreError,
@@ -13,6 +14,7 @@ from .local import LocalArtifactStore
 __all__ = [
     "ArtifactAccessDenied",
     "ArtifactDownload",
+    "ArtifactKey",
     "ArtifactNotFound",
     "ArtifactStore",
     "ArtifactStoreError",

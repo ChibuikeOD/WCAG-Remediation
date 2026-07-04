@@ -55,9 +55,9 @@ def _normalize_tessdata_prefix() -> None:
 
 _normalize_tessdata_prefix()
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Literal, Optional
 
 
 class Settings(BaseSettings):
@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "WCAG Accessibility Remediation Platform"
     APP_VERSION: str = "1.0.0"
+    DEPLOYMENT_MODE: Literal["trial", "testing"] = "testing"
     DEBUG: bool = True
     SECRET_KEY: str = "development_secret_key_change_me_to_something_secure"
     
@@ -91,6 +92,14 @@ class Settings(BaseSettings):
     OIDC_CLIENT_ID: Optional[str] = None
     OIDC_CLIENT_SECRET: Optional[str] = None
     OIDC_DISCOVERY_URL: Optional[str] = None
+
+    # Supabase identity and private trial artifact storage
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_PUBLISHABLE_KEY: Optional[str] = None
+    SUPABASE_SECRET_KEY: Optional[str] = None
+    SUPABASE_PROJECT_REF: Optional[str] = None
+    SUPABASE_ORIGINALS_BUCKET: Optional[str] = None
+    SUPABASE_RESULTS_BUCKET: Optional[str] = None
 
     # Development / Testing
     # Set DISABLE_AUTH=true to skip the login screen entirely.
@@ -142,6 +151,35 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "https://wcag-remediation.vercel.app"
     ]
+
+    @model_validator(mode="after")
+    def validate_trial_deployment(self) -> "Settings":
+        if self.DEPLOYMENT_MODE != "trial":
+            return self
+
+        if self.DISABLE_AUTH:
+            raise ValueError("DISABLE_AUTH must be false in trial mode")
+
+        required_supabase_settings = (
+            "SUPABASE_URL",
+            "SUPABASE_PUBLISHABLE_KEY",
+            "SUPABASE_SECRET_KEY",
+            "SUPABASE_PROJECT_REF",
+            "SUPABASE_ORIGINALS_BUCKET",
+            "SUPABASE_RESULTS_BUCKET",
+        )
+        missing_settings = [
+            name
+            for name in required_supabase_settings
+            if not (getattr(self, name) or "").strip()
+        ]
+        if missing_settings:
+            raise ValueError(
+                "Trial mode requires Supabase settings: "
+                + ", ".join(missing_settings)
+            )
+
+        return self
     
     class Config:
         env_file = (".env", "backend/.env")

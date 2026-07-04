@@ -44,6 +44,7 @@ pytest-asyncio==0.23.5
 # Authentication & Database
 PyJWT[crypto]==2.10.1
 SQLAlchemy==2.0.25
+psycopg[binary]==3.2.9
 
 # Utilities
 idna==3.10

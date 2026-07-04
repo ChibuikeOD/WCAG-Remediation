@@ -1,12 +1,13 @@
 """
 SQL Database Models and Connections for the WCAG Platform.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    func,
     inspect,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -27,6 +29,11 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+def utc_now():
+    """Return an aware UTC timestamp for ORM-side timestamp defaults."""
+    return datetime.now(timezone.utc)
+
+
 class User(Base):
     """User representation representing an authenticated SSO entity."""
     __tablename__ = "users"
@@ -36,19 +43,22 @@ class User(Base):
     name = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    files = relationship("UploadedFile", back_populates="owner", cascade="all, delete-orphan")
+    files = relationship(
+        "UploadedFile", back_populates="owner", cascade="all, delete-orphan"
+    )
     trial_account = relationship(
         "TrialAccount",
         back_populates="user",
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
+        passive_deletes="all",
         single_parent=True,
         uselist=False,
     )
     trial_ledger_entries = relationship(
-        "TrialLedgerEntry", back_populates="user", cascade="all, delete-orphan"
+        "TrialLedgerEntry", back_populates="user", passive_deletes="all"
     )
     remediation_jobs = relationship(
-        "RemediationJob", back_populates="user", cascade="all, delete-orphan"
+        "RemediationJob", back_populates="user", passive_deletes="all"
     )
 
 
@@ -63,15 +73,20 @@ class UploadedFile(Base):
     file_size = Column(Integer)
     page_count = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
-    owner_id = Column(String, ForeignKey("users.id"), nullable=True)  # Allow anonymous in debug/demo mode
+    owner_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # Allow anonymous in debug/demo mode
     
     owner = relationship("User", back_populates="files")
     reports = relationship("AccessibilityReport", back_populates="file", cascade="all, delete-orphan")
     remediation_jobs = relationship(
-        "RemediationJob", back_populates="file", cascade="all, delete-orphan"
+        "RemediationJob",
+        back_populates="file",
+        cascade="save-update, merge",
+        passive_deletes="all",
+        overlaps="remediation_jobs,user",
     )
 
     __table_args__ = (
+        UniqueConstraint("id", "owner_id", name="uq_uploaded_files_id_owner_id"),
         CheckConstraint(
             "page_count IS NULL OR page_count >= 0",
             name="ck_uploaded_files_page_count_nonnegative",
@@ -104,7 +119,12 @@ class TrialAccount(Base):
     normalized_domain = Column(String, nullable=False)
     granted_pages = Column(Integer, nullable=False)
     eligibility_rule_version = Column(String, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
 
     user = relationship("User", back_populates="trial_account")
 
@@ -127,11 +147,15 @@ class TrialAccount(Base):
 def prevent_trial_grant_provenance_update(_mapper, _connection, account):
     """Keep the original grant amount and rule version as audit evidence."""
     state = inspect(account)
-    if (
-        state.attrs.granted_pages.history.has_changes()
-        or state.attrs.eligibility_rule_version.history.has_changes()
-    ):
-        raise ValueError("trial account grant provenance is immutable")
+    immutable_fields = (
+        "normalized_email",
+        "normalized_domain",
+        "granted_pages",
+        "eligibility_rule_version",
+        "created_at",
+    )
+    if any(state.attrs[field].history.has_changes() for field in immutable_fields):
+        raise ValueError("trial account eligibility provenance is immutable")
 
 
 class TrialLedgerEntry(Base):
@@ -143,29 +167,60 @@ class TrialLedgerEntry(Base):
     user_id = Column(
         String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    job_id = Column(
-        String, ForeignKey("remediation_jobs.id", ondelete="SET NULL"), nullable=True
-    )
+    job_id = Column(String, nullable=True)
     entry_type = Column(String, nullable=False)
     granted_delta = Column(Integer, nullable=False, default=0)
     reserved_delta = Column(Integer, nullable=False, default=0)
     consumed_delta = Column(Integer, nullable=False, default=0)
     idempotency_key = Column(String, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
 
     user = relationship("User", back_populates="trial_ledger_entries")
-    job = relationship("RemediationJob", back_populates="ledger_entries")
+    job = relationship(
+        "RemediationJob",
+        back_populates="ledger_entries",
+        overlaps="trial_ledger_entries,user",
+    )
 
     __table_args__ = (
         UniqueConstraint(
             "user_id", "idempotency_key", name="uq_trial_ledger_user_idempotency"
         ),
+        ForeignKeyConstraint(
+            ["job_id", "user_id"],
+            ["remediation_jobs.id", "remediation_jobs.user_id"],
+            name="fk_trial_ledger_job_owner",
+        ),
         CheckConstraint(
             "entry_type IN ('grant', 'reserve', 'consume', 'release')",
             name="ck_trial_ledger_entry_type",
         ),
+        CheckConstraint(
+            "(entry_type = 'grant' AND granted_delta > 0 "
+            "AND reserved_delta = 0 AND consumed_delta = 0 AND job_id IS NULL) OR "
+            "(entry_type = 'reserve' AND granted_delta = 0 "
+            "AND reserved_delta > 0 AND consumed_delta = 0 AND job_id IS NOT NULL) OR "
+            "(entry_type = 'release' AND granted_delta = 0 "
+            "AND reserved_delta < 0 AND consumed_delta = 0 AND job_id IS NOT NULL) OR "
+            "(entry_type = 'consume' AND granted_delta = 0 "
+            "AND reserved_delta < 0 AND consumed_delta > 0 "
+            "AND consumed_delta = -reserved_delta AND job_id IS NOT NULL)",
+            name="ck_trial_ledger_signed_deltas",
+        ),
         Index("ix_trial_ledger_entries_job_id", "job_id"),
     )
+
+
+@event.listens_for(TrialLedgerEntry, "before_update")
+@event.listens_for(TrialLedgerEntry, "before_delete")
+def prevent_trial_ledger_mutation(_mapper, _connection, _entry):
+    """Reject ORM mutation of the append-only trial ledger."""
+    raise ValueError("trial ledger entries are append-only")
 
 
 class RemediationJob(Base):
@@ -177,9 +232,7 @@ class RemediationJob(Base):
     user_id = Column(
         String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    file_id = Column(
-        String, ForeignKey("uploaded_files.id", ondelete="CASCADE"), nullable=False
-    )
+    file_id = Column(String, nullable=False)
     report_id = Column(
         String,
         ForeignKey("accessibility_reports.id", ondelete="SET NULL"),
@@ -189,20 +242,46 @@ class RemediationJob(Base):
     page_count = Column(Integer, nullable=False)
     idempotency_key = Column(String, nullable=False)
     failure_reason = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
     )
-    completed_at = Column(DateTime, nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
-    user = relationship("User", back_populates="remediation_jobs")
-    file = relationship("UploadedFile", back_populates="remediation_jobs")
+    user = relationship(
+        "User", back_populates="remediation_jobs", overlaps="remediation_jobs"
+    )
+    file = relationship(
+        "UploadedFile",
+        back_populates="remediation_jobs",
+        overlaps="remediation_jobs,user",
+    )
     report = relationship("AccessibilityReport", back_populates="remediation_jobs")
-    ledger_entries = relationship("TrialLedgerEntry", back_populates="job")
+    ledger_entries = relationship(
+        "TrialLedgerEntry",
+        back_populates="job",
+        overlaps="trial_ledger_entries,user",
+    )
 
     __table_args__ = (
         UniqueConstraint(
             "user_id", "idempotency_key", name="uq_remediation_jobs_user_idempotency"
+        ),
+        UniqueConstraint("id", "user_id", name="uq_remediation_jobs_id_user_id"),
+        ForeignKeyConstraint(
+            ["file_id", "user_id"],
+            ["uploaded_files.id", "uploaded_files.owner_id"],
+            name="fk_remediation_jobs_file_owner",
+            ondelete="CASCADE",
         ),
         CheckConstraint(
             "status IN ('pending', 'reserved', 'processing', 'succeeded', 'failed', 'released')",

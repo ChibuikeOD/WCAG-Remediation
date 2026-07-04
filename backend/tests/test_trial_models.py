@@ -1,6 +1,10 @@
 """Persistence and relationship tests for the durable trial ledger schema."""
 
-from datetime import datetime
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -49,6 +53,20 @@ def add_file(db_session, user, file_id="file-1", page_count=None):
     return uploaded_file
 
 
+def add_job(db_session, user, uploaded_file, job_id="job-1"):
+    job = database.RemediationJob(
+        id=job_id,
+        user=user,
+        file=uploaded_file,
+        status="pending",
+        page_count=2,
+        idempotency_key=job_id,
+    )
+    db_session.add(job)
+    db_session.commit()
+    return job
+
+
 def test_trial_account_is_one_per_user_and_persists_grant_provenance(db_session):
     user = add_user(db_session)
     account = database.TrialAccount(
@@ -82,7 +100,19 @@ def test_trial_account_is_one_per_user_and_persists_grant_provenance(db_session)
         db_session.commit()
 
 
-def test_trial_account_grant_provenance_is_immutable(db_session):
+@pytest.mark.parametrize(
+    ("attribute", "replacement"),
+    [
+        ("normalized_email", "changed@example.com"),
+        ("normalized_domain", "changed.example"),
+        ("granted_pages", 20),
+        ("eligibility_rule_version", "changed"),
+        ("created_at", datetime(2030, 1, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_trial_account_eligibility_provenance_is_immutable(
+    db_session, attribute, replacement
+):
     user = add_user(db_session)
     account = database.TrialAccount(
         user=user,
@@ -94,13 +124,8 @@ def test_trial_account_grant_provenance_is_immutable(db_session):
     db_session.add(account)
     db_session.commit()
 
-    account.granted_pages = 20
-    with pytest.raises(ValueError, match="grant provenance is immutable"):
-        db_session.commit()
-    db_session.rollback()
-
-    account.eligibility_rule_version = "changed"
-    with pytest.raises(ValueError, match="grant provenance is immutable"):
+    setattr(account, attribute, replacement)
+    with pytest.raises(ValueError, match="eligibility provenance is immutable"):
         db_session.commit()
 
 
@@ -135,21 +160,96 @@ def test_trial_ledger_entry_enforces_user_idempotency_and_signed_deltas(db_sessi
         db_session.commit()
 
 
-@pytest.mark.parametrize("entry_type", ["grant", "reserve", "consume", "release"])
-def test_trial_ledger_entry_allows_supported_types(db_session, entry_type):
+@pytest.mark.parametrize(
+    ("entry_type", "granted", "reserved", "consumed"),
+    [
+        ("grant", 10, 0, 0),
+        ("reserve", 0, 3, 0),
+        ("release", 0, -3, 0),
+        ("consume", 0, -3, 3),
+    ],
+)
+def test_trial_ledger_entry_allows_each_legal_signed_delta_form(
+    db_session, entry_type, granted, reserved, consumed
+):
     user = add_user(db_session)
+    uploaded_file = add_file(db_session, user)
+    job = None if entry_type == "grant" else add_job(db_session, user, uploaded_file)
     db_session.add(
         database.TrialLedgerEntry(
             id=f"ledger-{entry_type}",
             user=user,
+            job=job,
             entry_type=entry_type,
-            granted_delta=0,
-            reserved_delta=0,
-            consumed_delta=0,
+            granted_delta=granted,
+            reserved_delta=reserved,
+            consumed_delta=consumed,
             idempotency_key=entry_type,
         )
     )
     db_session.commit()
+
+
+@pytest.mark.parametrize(
+    ("entry_type", "granted", "reserved", "consumed", "needs_job"),
+    [
+        ("grant", 0, 0, 0, False),
+        ("grant", -1, 0, 0, False),
+        ("grant", 1, 1, 0, False),
+        ("reserve", 0, 0, 0, True),
+        ("reserve", 0, -1, 0, True),
+        ("reserve", 1, 1, 0, True),
+        ("release", 0, 1, 0, True),
+        ("release", 0, -1, 1, True),
+        ("consume", 0, 1, 1, True),
+        ("consume", 0, -2, 1, True),
+        ("consume", 1, -1, 1, True),
+    ],
+)
+def test_trial_ledger_entry_rejects_each_illegal_signed_delta_form(
+    db_session, entry_type, granted, reserved, consumed, needs_job
+):
+    user = add_user(db_session)
+    uploaded_file = add_file(db_session, user)
+    job = add_job(db_session, user, uploaded_file) if needs_job else None
+    db_session.add(
+        database.TrialLedgerEntry(
+            id="bad-ledger",
+            user=user,
+            job=job,
+            entry_type=entry_type,
+            granted_delta=granted,
+            reserved_delta=reserved,
+            consumed_delta=consumed,
+            idempotency_key="bad-ledger",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+@pytest.mark.parametrize("entry_type", ["reserve", "release", "consume"])
+def test_non_grant_ledger_entries_require_a_job(db_session, entry_type):
+    user = add_user(db_session)
+    deltas = {
+        "reserve": (0, 1, 0),
+        "release": (0, -1, 0),
+        "consume": (0, -1, 1),
+    }
+    granted, reserved, consumed = deltas[entry_type]
+    db_session.add(
+        database.TrialLedgerEntry(
+            id=f"jobless-{entry_type}",
+            user=user,
+            entry_type=entry_type,
+            granted_delta=granted,
+            reserved_delta=reserved,
+            consumed_delta=consumed,
+            idempotency_key=f"jobless-{entry_type}",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
 
 
 def test_remediation_job_persists_ownership_file_state_and_idempotency(db_session):
@@ -185,6 +285,47 @@ def test_remediation_job_persists_ownership_file_state_and_idempotency(db_sessio
             status="reserved",
             page_count=4,
             idempotency_key="remediate-file-1",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_remediation_job_rejects_a_file_owned_by_another_user(db_session):
+    file_owner = add_user(db_session, "file-owner")
+    job_owner = add_user(db_session, "job-owner")
+    uploaded_file = add_file(db_session, file_owner)
+
+    db_session.add(
+        database.RemediationJob(
+            id="cross-user-job",
+            user_id=job_owner.id,
+            file_id=uploaded_file.id,
+            status="pending",
+            page_count=1,
+            idempotency_key="cross-user-job",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_trial_ledger_entry_rejects_a_job_owned_by_another_user(db_session):
+    job_owner = add_user(db_session, "job-owner")
+    ledger_owner = add_user(db_session, "ledger-owner")
+    uploaded_file = add_file(db_session, job_owner)
+    job = add_job(db_session, job_owner, uploaded_file)
+
+    db_session.add(
+        database.TrialLedgerEntry(
+            id="cross-user-ledger",
+            user_id=ledger_owner.id,
+            job_id=job.id,
+            entry_type="reserve",
+            granted_delta=0,
+            reserved_delta=1,
+            consumed_delta=0,
+            idempotency_key="cross-user-ledger",
         )
     )
     with pytest.raises(IntegrityError):
@@ -260,9 +401,10 @@ def test_uploaded_file_page_count_is_nullable_and_nonnegative(db_session):
         db_session.commit()
 
 
-def test_deleting_user_cascades_all_user_owned_trial_data(db_session):
+def test_deleting_user_cascades_trial_provenance_and_ledger_without_orm_guards(
+    db_session,
+):
     user = add_user(db_session)
-    uploaded_file = add_file(db_session, user)
     account = database.TrialAccount(
         user=user,
         normalized_email="person@example.com",
@@ -270,14 +412,30 @@ def test_deleting_user_cascades_all_user_owned_trial_data(db_session):
         granted_pages=10,
         eligibility_rule_version="v1",
     )
-    job = database.RemediationJob(
-        id="job-1",
+    ledger = database.TrialLedgerEntry(
+        id="ledger-1",
         user=user,
-        file=uploaded_file,
-        status="reserved",
-        page_count=2,
-        idempotency_key="job-1",
+        entry_type="grant",
+        granted_delta=10,
+        reserved_delta=0,
+        consumed_delta=0,
+        idempotency_key="initial-grant",
     )
+    db_session.add_all([account, ledger])
+    db_session.commit()
+    user_id, ledger_id = user.id, ledger.id
+
+    db_session.delete(user)
+    db_session.commit()
+
+    assert db_session.get(database.TrialAccount, user_id) is None
+    assert db_session.get(database.TrialLedgerEntry, ledger_id) is None
+
+
+def test_trial_ledger_entry_rejects_direct_update(db_session):
+    user = add_user(db_session)
+    uploaded_file = add_file(db_session, user)
+    job = add_job(db_session, user, uploaded_file)
     ledger = database.TrialLedgerEntry(
         id="ledger-1",
         user=user,
@@ -288,45 +446,42 @@ def test_deleting_user_cascades_all_user_owned_trial_data(db_session):
         consumed_delta=0,
         idempotency_key="reserve-job-1",
     )
-    db_session.add_all([account, job, ledger])
+    db_session.add(ledger)
     db_session.commit()
 
-    db_session.delete(user)
-    db_session.commit()
-
-    assert db_session.get(database.TrialAccount, user.id) is None
-    assert db_session.get(database.TrialLedgerEntry, ledger.id) is None
-    assert db_session.get(database.RemediationJob, job.id) is None
+    ledger.reserved_delta = 3
+    with pytest.raises(ValueError, match="append-only"):
+        db_session.commit()
 
 
-def test_deleting_job_preserves_ledger_history_and_clears_job_link(db_session):
+def test_trial_ledger_entry_rejects_direct_delete(db_session):
     user = add_user(db_session)
-    uploaded_file = add_file(db_session, user)
-    job = database.RemediationJob(
-        id="job-1",
-        user=user,
-        file=uploaded_file,
-        status="released",
-        page_count=2,
-        idempotency_key="job-1",
-    )
     ledger = database.TrialLedgerEntry(
         id="ledger-1",
         user=user,
-        job=job,
-        entry_type="release",
-        granted_delta=0,
-        reserved_delta=-2,
+        entry_type="grant",
+        granted_delta=10,
+        reserved_delta=0,
         consumed_delta=0,
-        idempotency_key="release-job-1",
+        idempotency_key="initial-grant",
     )
-    db_session.add_all([job, ledger])
+    db_session.add(ledger)
     db_session.commit()
 
-    db_session.delete(job)
+    db_session.delete(ledger)
+    with pytest.raises(ValueError, match="append-only"):
+        db_session.commit()
+
+
+def test_remediation_job_remains_mutable(db_session):
+    user = add_user(db_session)
+    uploaded_file = add_file(db_session, user)
+    job = add_job(db_session, user, uploaded_file)
+
+    job.status = "processing"
     db_session.commit()
 
-    assert db_session.get(database.TrialLedgerEntry, ledger.id).job_id is None
+    assert db_session.get(database.RemediationJob, job.id).status == "processing"
 
 
 def test_deleting_uploaded_file_cascades_its_remediation_jobs(db_session):
@@ -342,8 +497,224 @@ def test_deleting_uploaded_file_cascades_its_remediation_jobs(db_session):
     )
     db_session.add(job)
     db_session.commit()
+    job_id = job.id
 
     db_session.delete(uploaded_file)
     db_session.commit()
 
-    assert db_session.get(database.RemediationJob, job.id) is None
+    assert db_session.get(database.RemediationJob, job_id) is None
+
+
+def test_trial_timestamp_columns_are_timezone_aware_and_nonnullable(db_session):
+    trial_timestamp_columns = [
+        database.TrialAccount.__table__.c.created_at,
+        database.TrialLedgerEntry.__table__.c.created_at,
+        database.RemediationJob.__table__.c.created_at,
+        database.RemediationJob.__table__.c.updated_at,
+        database.RemediationJob.__table__.c.completed_at,
+    ]
+    for column in trial_timestamp_columns:
+        assert column.type.timezone is True
+    for column in trial_timestamp_columns[:-1]:
+        assert column.nullable is False
+        assert column.server_default is not None
+    assert trial_timestamp_columns[-1].nullable is True
+
+    user = add_user(db_session)
+    account = database.TrialAccount(
+        user=user,
+        normalized_email="person@example.com",
+        normalized_domain="example.com",
+        granted_pages=10,
+        eligibility_rule_version="v1",
+    )
+    db_session.add(account)
+    db_session.commit()
+    # SQLite strips timezone offsets; PostgreSQL behavior is covered by the opt-in test.
+    assert account.created_at is not None
+
+
+def test_trial_model_constraints_match_migration_ddl():
+    migration = (
+        Path(__file__).parents[2]
+        / "supabase"
+        / "migrations"
+        / "202607040001_trial_core.sql"
+    ).read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", migration.lower())
+
+    assert "unique (id, owner_id)" in normalized
+    assert "foreign key (file_id, user_id)" in normalized
+    assert "references public.uploaded_files(id, owner_id)" in normalized
+    assert "unique (id, user_id)" in normalized
+    assert "foreign key (job_id, user_id)" in normalized
+    assert "references public.remediation_jobs(id, user_id)" in normalized
+    assert "constraint ck_trial_ledger_signed_deltas" in normalized
+    assert "timestamp with time zone" in normalized
+    assert "trial_ledger_entries_append_only" in normalized
+
+    model_constraint_names = {
+        constraint.name
+        for table in (
+            database.UploadedFile.__table__,
+            database.TrialAccount.__table__,
+            database.RemediationJob.__table__,
+            database.TrialLedgerEntry.__table__,
+        )
+        for constraint in table.constraints
+        if constraint.name
+    }
+    migration_constraint_names = set(
+        re.findall(r"constraint ([a-z0-9_]+)", normalized)
+    )
+    assert model_constraint_names <= migration_constraint_names
+
+
+@pytest.mark.skipif(
+    not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not configured"
+)
+def test_postgresql_trial_migration_constraints_triggers_and_rls():
+    import psycopg
+
+    url = os.environ["TEST_DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://")
+    schema = f"trial_migration_{uuid4().hex}"
+    migration = (
+        Path(__file__).parents[2]
+        / "supabase"
+        / "migrations"
+        / "202607040001_trial_core.sql"
+    ).read_text(encoding="utf-8")
+    migration = migration.replace("public.", f'"{schema}".')
+    migration = migration.replace("auth.uid()", "nullif(current_setting('test.user_id', true), '')")
+    migration = migration.replace("to authenticated", "to public")
+
+    with psycopg.connect(url, autocommit=False) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f'create schema "{schema}"')
+            cursor.execute(
+                f'create table "{schema}".users (id text primary key);'
+                f'create table "{schema}".uploaded_files ('
+                "id text primary key, owner_id text null references "
+                f'"{schema}".users(id) on delete cascade);'
+                f'create table "{schema}".accessibility_reports ('
+                "id text primary key)"
+            )
+            cursor.execute(migration, prepare=False)
+
+            cursor.execute(
+                "select relname, relrowsecurity from pg_class "
+                "join pg_namespace on pg_namespace.oid = pg_class.relnamespace "
+                "where nspname = %s and relname in "
+                "('trial_accounts', 'trial_ledger_entries', 'remediation_jobs') "
+                "order by relname",
+                (schema,),
+            )
+            assert cursor.fetchall() == [
+                ("remediation_jobs", True),
+                ("trial_accounts", True),
+                ("trial_ledger_entries", True),
+            ]
+
+            cursor.execute(
+                "select policyname from pg_policies where schemaname = %s "
+                "order by policyname",
+                (schema,),
+            )
+            assert [row[0] for row in cursor.fetchall()] == [
+                "Users can view their own remediation jobs",
+                "Users can view their own trial account",
+                "Users can view their own trial ledger entries",
+            ]
+            cursor.execute(
+                "select trigger_name from information_schema.triggers "
+                "where trigger_schema = %s order by trigger_name",
+                (schema,),
+            )
+            trigger_names = {row[0] for row in cursor.fetchall()}
+            assert {
+                "remediation_jobs_set_updated_at",
+                "trial_accounts_immutable_grant_provenance",
+                "trial_ledger_entries_append_only",
+            } <= trigger_names
+            cursor.execute(
+                "select table_name, column_name, data_type from information_schema.columns "
+                "where table_schema = %s and column_name in "
+                "('created_at', 'updated_at', 'completed_at') "
+                "and table_name in "
+                "('trial_accounts', 'trial_ledger_entries', 'remediation_jobs')",
+                (schema,),
+            )
+            assert all(row[2] == "timestamp with time zone" for row in cursor.fetchall())
+
+            cursor.execute(
+                f'insert into "{schema}".users values (%s), (%s);'
+                f'insert into "{schema}".uploaded_files (id, owner_id) values (%s, %s)',
+                ("user-1", "user-2", "file-1", "user-1"),
+            )
+            with pytest.raises(psycopg.errors.ForeignKeyViolation):
+                with connection.transaction():
+                    cursor.execute(
+                        f'insert into "{schema}".remediation_jobs '
+                        "(id, user_id, file_id, status, page_count, idempotency_key) "
+                        "values ('cross-user-job', 'user-2', 'file-1', "
+                        "'pending', 1, 'cross-user-job')"
+                    )
+
+            cursor.execute(
+                f'insert into "{schema}".remediation_jobs '
+                "(id, user_id, file_id, status, page_count, idempotency_key) "
+                "values ('job-1', 'user-1', 'file-1', 'pending', 1, 'job-1')"
+            )
+            with pytest.raises(psycopg.errors.CheckViolation):
+                with connection.transaction():
+                    cursor.execute(
+                        f'insert into "{schema}".trial_ledger_entries '
+                        "(id, user_id, entry_type, idempotency_key) "
+                        "values ('bad-grant', 'user-1', 'grant', 'bad-grant')"
+                    )
+            with pytest.raises(psycopg.errors.ForeignKeyViolation):
+                with connection.transaction():
+                    cursor.execute(
+                        f'insert into "{schema}".trial_ledger_entries '
+                        "(id, user_id, job_id, entry_type, reserved_delta, idempotency_key) "
+                        "values ('cross-user-ledger', 'user-2', 'job-1', "
+                        "'reserve', 1, 'cross-user-ledger')"
+                    )
+
+            cursor.execute(
+                f'insert into "{schema}".trial_accounts '
+                "(user_id, normalized_email, normalized_domain, granted_pages, "
+                "eligibility_rule_version) values "
+                "('user-1', 'person@example.com', 'example.com', 10, 'v1')"
+            )
+            cursor.execute(
+                f'insert into "{schema}".trial_ledger_entries '
+                "(id, user_id, job_id, entry_type, reserved_delta, idempotency_key) "
+                "values ('ledger-1', 'user-1', 'job-1', 'reserve', 1, 'ledger-1')"
+            )
+            with pytest.raises(psycopg.errors.RaiseException):
+                with connection.transaction():
+                    cursor.execute(
+                        f'update "{schema}".trial_accounts '
+                        "set normalized_domain = 'changed.example' where user_id = 'user-1'"
+                    )
+            with pytest.raises(psycopg.errors.RaiseException):
+                with connection.transaction():
+                    cursor.execute(
+                        f'update "{schema}".trial_ledger_entries '
+                        "set reserved_delta = 2 where id = 'ledger-1'"
+                    )
+            with pytest.raises(psycopg.errors.RaiseException):
+                with connection.transaction():
+                    cursor.execute(
+                        f'delete from "{schema}".trial_ledger_entries '
+                        "where id = 'ledger-1'"
+                    )
+
+            cursor.execute(f'delete from "{schema}".users where id = %s', ("user-1",))
+            cursor.execute(
+                f'select count(*) from "{schema}".trial_ledger_entries '
+                "where user_id = 'user-1'"
+            )
+            assert cursor.fetchone()[0] == 0
+            connection.rollback()

@@ -45,7 +45,7 @@ from .database import (
     RemediationJob,
 )
 from .retention_runner import clean_expired_documents
-from .auth import router as auth_router, require_user, User
+from .auth import router as auth_router, require_trial_user, require_user, User
 from .trial import InsufficientPages, TrialService, TrialStateError
 
 # Configure logging
@@ -163,16 +163,21 @@ class DbReportStorage:
         finally:
             db.close()
             
-    def __setitem__(self, report_id: str, report_model: AccessibilityReport):
+    def save(
+        self,
+        report_id: str,
+        report_model: AccessibilityReport,
+        *,
+        file_id: str | None,
+    ) -> None:
+        """Persist a report with an explicit authoritative file association."""
         db = SessionLocal()
         try:
+            if file_id is not None and db.get(UploadedFile, file_id) is None:
+                raise ValueError("report file does not exist")
             report_rec = db.query(DbReport).filter(DbReport.id == report_id).first()
             report_json_str = report_model.model_dump_json()
-            
-            # Find file_id if it matches the filename
-            file_rec = db.query(UploadedFile).filter(UploadedFile.filename == report_model.document.filename).first()
-            file_id = file_rec.id if file_rec else None
-            
+
             if not report_rec:
                 report_rec = DbReport(
                     id=report_id,
@@ -186,6 +191,16 @@ class DbReportStorage:
             db.commit()
         finally:
             db.close()
+
+    def __setitem__(self, report_id: str, report_model: AccessibilityReport):
+        """Legacy mapping write that preserves, but never infers, a file link."""
+        db = SessionLocal()
+        try:
+            existing = db.get(DbReport, report_id)
+            file_id = existing.file_id if existing is not None else None
+        finally:
+            db.close()
+        self.save(report_id, report_model, file_id=file_id)
 
     def get(self, report_id: str, default=None) -> Optional[AccessibilityReport]:
         try:
@@ -306,10 +321,8 @@ async def health_check():
 # =============================================================================
 
 @app.get("/trial/me", response_model=TrialBalanceResponse)
-async def get_trial_balance(user: User = Depends(require_user)):
+async def get_trial_balance(user: User = Depends(require_trial_user)):
     """Return the authenticated user's trial balance and grant provenance."""
-    if settings.DEPLOYMENT_MODE != "trial":
-        raise HTTPException(status_code=404, detail="Not found")
     db = SessionLocal()
     try:
         service = TrialService(db)
@@ -447,7 +460,9 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
         db_conn = SessionLocal()
         try:
             file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == request.file_id).first()
-            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+            if file_rec is None:
+                raise HTTPException(status_code=404, detail="File not found")
+            if file_rec.owner_id and file_rec.owner_id != user.id:
                 raise HTTPException(status_code=403, detail="Access denied to this file.")
         finally:
             db_conn.close()
@@ -636,7 +651,7 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
             )
     
     # Store report
-    report_storage[report.id] = report
+    report_storage.save(report.id, report, file_id=request.file_id)
     
     logger.info(f"Analysis complete: {report.total_issues} issues found")
     
@@ -1832,10 +1847,13 @@ async def resolve_alt_text_endpoint(
     db_conn = SessionLocal()
     try:
         report_rec = db_conn.query(DbReport).filter(DbReport.id == report_id).first()
-        if report_rec:
-            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
-            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
-                raise HTTPException(status_code=403, detail="Access denied to this report.")
+        if report_rec is None or report_rec.file_id is None:
+            raise HTTPException(status_code=404, detail="Report file not found")
+        file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+        if file_rec is None:
+            raise HTTPException(status_code=404, detail="Report file not found")
+        if file_rec.owner_id and file_rec.owner_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied to this report.")
     finally:
         db_conn.close()
         
@@ -1926,7 +1944,7 @@ async def resolve_alt_text_endpoint(
         report.total_issues = remaining_errors + remaining_warnings
         report.total_passed = len([i for i in updated_issues if i.fixed or i.status == IssueStatus.PASS])
         
-        report_storage[report.id] = report
+        report_storage.save(report.id, report, file_id=report_rec.file_id)
         
     import shutil
     output_filename = f"remediated_{report.document.filename}"

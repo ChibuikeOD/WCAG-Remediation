@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 import backend.database as database
 import backend.main as main_module
+import backend.pdf_accessibility as pdf_accessibility_module
 from backend.auth import get_token_verifier, require_user
 from backend.config import settings
 from backend.main import app
@@ -92,6 +93,27 @@ def seed_report(session_factory, file_id, report_id="report-1"):
     return report_id
 
 
+def install_fast_pdf_analyzer(monkeypatch):
+    class FastPDFAnalyzer:
+        def __init__(self, file_path):
+            self.file_path = file_path
+
+        def analyze(self):
+            with fitz.open(self.file_path) as document:
+                page_count = document.page_count
+            return {
+                "metadata": {"page_count": page_count},
+                "issues": [],
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        pdf_accessibility_module, "PDFAccessibilityAnalyzer", FastPDFAnalyzer
+    )
+
+
 def test_trial_me_returns_balance_and_does_not_duplicate_grant(trial_client):
     client, session_factory, _ = trial_client
 
@@ -121,6 +143,39 @@ def test_trial_me_is_not_available_in_testing_mode(trial_client, monkeypatch):
     assert response.status_code == 404
     with session_factory() as session:
         assert session.query(database.TrialAccount).count() == 0
+
+
+def test_testing_mode_trial_me_returns_404_before_authentication(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    app.dependency_overrides.clear()
+    monkeypatch.setattr(settings, "DEPLOYMENT_MODE", "testing")
+
+    class ForbiddenVerifier:
+        def __init__(self):
+            self.called = False
+
+        def verify(self, token):
+            self.called = True
+            raise AssertionError("verifier must not run")
+
+    verifier = ForbiddenVerifier()
+    provider_calls = []
+
+    def forbidden_provider():
+        provider_calls.append(True)
+        return verifier
+
+    app.dependency_overrides[get_token_verifier] = forbidden_provider
+
+    response = client.get("/trial/me")
+
+    assert response.status_code == 404
+    assert provider_calls == []
+    assert verifier.called is False
+    with session_factory() as session:
+        assert session.get(database.User, "dev_user_001") is None
 
 
 def test_trial_me_without_auth_is_blocked_by_existing_auth(trial_client):
@@ -165,6 +220,83 @@ def test_trial_pdf_upload_counts_pages_and_persists_owner(trial_client):
         uploaded = session.get(database.UploadedFile, response.json()["file_id"])
         assert uploaded.page_count == 3
         assert uploaded.owner_id == "verified-user"
+
+
+def test_same_filename_reports_bind_and_meter_the_requested_file(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    install_fast_pdf_analyzer(monkeypatch)
+    first_file = upload_pdf(client, pages=1, filename="collision.pdf").json()["file_id"]
+    second_file = upload_pdf(client, pages=3, filename="collision.pdf").json()["file_id"]
+
+    first = client.post("/analyze", json={"file_id": first_file})
+    second = client.post("/analyze", json={"file_id": second_file})
+
+    assert first.status_code == second.status_code == 200
+    with session_factory() as session:
+        assert session.get(database.AccessibilityReport, first.json()["id"]).file_id == first_file
+        assert session.get(database.AccessibilityReport, second.json()["id"]).file_id == second_file
+
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", lambda *args, **kwargs: [])
+    response = client.post(
+        "/remediate",
+        json={"report_id": second.json()["id"], "apply_all_automatable": True},
+    )
+
+    assert response.status_code == 200
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        assert job.file_id == second_file
+        assert job.page_count == 3
+    assert client.get("/trial/me").json()["consumed_pages"] == 3
+
+
+def test_same_filename_across_users_does_not_cross_bind_or_leak(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    install_fast_pdf_analyzer(monkeypatch)
+    active_user = {"id": "verified-user"}
+    with session_factory() as session:
+        session.add(database.User(id="other-user", email="other@gmail.com", name="Other"))
+        session.commit()
+
+    def current_user():
+        with session_factory() as session:
+            return session.get(database.User, active_user["id"])
+
+    app.dependency_overrides[require_user] = current_user
+    first_file = upload_pdf(client, pages=1, filename="shared.pdf").json()["file_id"]
+    first_report = client.post("/analyze", json={"file_id": first_file}).json()["id"]
+    active_user["id"] = "other-user"
+    second_file = upload_pdf(client, pages=4, filename="shared.pdf").json()["file_id"]
+    second_response = client.post("/analyze", json={"file_id": second_file})
+    second_report = second_response.json()["id"]
+
+    with session_factory() as session:
+        assert session.get(database.AccessibilityReport, first_report).file_id == first_file
+        assert session.get(database.AccessibilityReport, second_report).file_id == second_file
+
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", lambda *args, **kwargs: [])
+    remediated = client.post(
+        "/remediate",
+        json={"report_id": second_report, "apply_all_automatable": True},
+    )
+    assert remediated.status_code == 200
+
+    active_user["id"] = "verified-user"
+    forbidden = client.post(
+        "/remediate",
+        json={"report_id": second_report, "apply_all_automatable": True},
+    )
+
+    assert forbidden.status_code == 403
+    with session_factory() as session:
+        [job] = session.scalars(select(database.RemediationJob)).all()
+        assert job.user_id == "other-user"
+        assert job.file_id == second_file
+        assert job.page_count == 4
 
 
 def test_upload_removes_partial_file_when_metadata_persistence_fails(

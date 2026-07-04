@@ -256,6 +256,20 @@ def require_user(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_trial_mode() -> None:
+    """Stop trial-only routes before any authentication work outside trial mode."""
+    if settings.DEPLOYMENT_MODE != "trial":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
+def require_trial_user(
+    _trial_mode: None = Depends(require_trial_mode),
+    user: User = Depends(require_user),
+) -> User:
+    """Require trial mode first, then resolve the authenticated trial user."""
+    return user
+
+
 @router.get("/me")
 async def get_me(user: User = Depends(require_user)) -> dict:
     """Return the current bearer-authenticated or development identity."""

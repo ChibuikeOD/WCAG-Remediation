@@ -18,18 +18,20 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 import logging
 import json
+import fitz
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 from .config import settings
 from .models import (
     AccessibilityReport, DocumentInfo, WCAGLevel,
     UploadResponse, AnalyzeRequest, RemediationRequest, RemediationResponse,
     RemediationResult, DocumentImageItem, AltTextResolutionRequest, AltTextGenerateRequest,
-    AltTextGenerateResponse
+    AltTextGenerateResponse, TrialBalanceResponse, TrialPageLimitDetail,
 )
 from . import alt_text_context as alt_text_context_service
 from .deepseek_alt_text import call_deepseek_contextual_alt_text
@@ -38,9 +40,13 @@ from .parsers import HTMLParser, PDFParser
 from .remediator import HTMLRemediator, PDFRemediator
 
 # Database & Authentication Imports
-from .database import init_db, SessionLocal, UploadedFile, AccessibilityReport as DbReport
+from .database import (
+    init_db, SessionLocal, UploadedFile, AccessibilityReport as DbReport,
+    RemediationJob,
+)
 from .retention_runner import clean_expired_documents
 from .auth import router as auth_router, require_user, User
+from .trial import InsufficientPages, TrialService, TrialStateError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -73,11 +79,12 @@ class DbFileStorage:
                 "file_type": file_rec.file_type,
                 "file_path": file_rec.file_path,
                 "file_size": file_rec.file_size,
-                "uploaded_at": file_rec.uploaded_at.isoformat()
+                "uploaded_at": file_rec.uploaded_at.isoformat(),
+                "page_count": file_rec.page_count,
             }
         finally:
             db.close()
-            
+
     def __setitem__(self, file_id: str, value: dict):
         db = SessionLocal()
         try:
@@ -94,7 +101,8 @@ class DbFileStorage:
                     file_path=value["file_path"],
                     file_size=value["file_size"],
                     uploaded_at=uploaded_at_val,
-                    owner_id=value.get("owner_id")
+                    owner_id=value.get("owner_id"),
+                    page_count=value.get("page_count"),
                 )
                 db.add(file_rec)
             else:
@@ -102,6 +110,7 @@ class DbFileStorage:
                 file_rec.file_type = value["file_type"]
                 file_rec.file_path = value["file_path"]
                 file_rec.file_size = value["file_size"]
+                file_rec.page_count = value.get("page_count")
                 new_owner_id = value.get("owner_id")
                 if new_owner_id is not None and file_rec.owner_id != new_owner_id:
                     file_rec.owner_id = new_owner_id
@@ -296,6 +305,30 @@ async def health_check():
 # Upload Endpoint
 # =============================================================================
 
+@app.get("/trial/me", response_model=TrialBalanceResponse)
+async def get_trial_balance(user: User = Depends(require_user)):
+    """Return the authenticated user's trial balance and grant provenance."""
+    if settings.DEPLOYMENT_MODE != "trial":
+        raise HTTPException(status_code=404, detail="Not found")
+    db = SessionLocal()
+    try:
+        service = TrialService(db)
+        account = service.ensure_account(user)
+        balance = service.get_balance(user.id)
+        return TrialBalanceResponse(
+            granted_pages=balance.granted,
+            consumed_pages=balance.consumed,
+            reserved_pages=balance.reserved,
+            remaining_pages=balance.remaining,
+            normalized_domain=account.normalized_domain,
+            eligibility_rule_version=account.eligibility_rule_version,
+        )
+    except TrialStateError:
+        logger.exception("Invalid trial account state")
+        raise HTTPException(status_code=409, detail="Trial account state conflict") from None
+    finally:
+        db.close()
+
 @app.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...), user: User = Depends(require_user)):
     """
@@ -311,11 +344,12 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
     filename = file.filename or "unknown"
     file_ext = Path(filename).suffix.lower()
     
-    allowed_extensions = {'.html', '.htm', '.pdf'}
+    allowed_extensions = {'.pdf'} if settings.DEPLOYMENT_MODE == "trial" else {'.html', '.htm', '.pdf'}
     if file_ext not in allowed_extensions:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
+            detail=("Trial uploads must be PDF files" if settings.DEPLOYMENT_MODE == "trial"
+                    else f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}")
         )
     
     # Check file size
@@ -328,6 +362,26 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
             detail=f"File too large: {size_mb:.1f}MB. Maximum: {settings.MAX_FILE_SIZE_MB}MB"
         )
     
+    page_count = None
+    if settings.DEPLOYMENT_MODE == "trial":
+        if not content.startswith(b"%PDF-"):
+            raise HTTPException(status_code=400, detail="Invalid PDF file")
+        try:
+            document = fitz.open(stream=content, filetype="pdf")
+            try:
+                page_count = document.page_count
+            finally:
+                document.close()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid or unreadable PDF file") from None
+        if page_count <= 0:
+            raise HTTPException(status_code=400, detail="PDF must contain at least one page")
+        if page_count > settings.MAX_PAGES_PDF:
+            raise HTTPException(
+                status_code=400,
+                detail=f"PDF has too many pages. Maximum: {settings.MAX_PAGES_PDF}",
+            )
+
     # Generate file ID and save
     file_id = str(uuid.uuid4())
     file_type = "pdf" if file_ext == ".pdf" else "html"
@@ -337,16 +391,22 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
     async with aiofiles.open(save_path, 'wb') as f:
         await f.write(content)
     
-    # Store metadata
-    file_storage[file_id] = {
-        "id": file_id,
-        "original_filename": filename,
-        "file_type": file_type,
-        "file_path": str(save_path),
-        "file_size": len(content),
-        "uploaded_at": datetime.now().isoformat(),
-        "owner_id": user.id
-    }
+    # Store metadata, removing the local artifact if persistence fails.
+    try:
+        file_storage[file_id] = {
+            "id": file_id,
+            "original_filename": filename,
+            "file_type": file_type,
+            "file_path": str(save_path),
+            "file_size": len(content),
+            "page_count": page_count,
+            "uploaded_at": datetime.now().isoformat(),
+            "owner_id": user.id
+        }
+    except Exception:
+        save_path.unlink(missing_ok=True)
+        logger.exception("Failed to persist uploaded file metadata")
+        raise HTTPException(status_code=500, detail="Unable to store uploaded file") from None
     
     logger.info(f"Uploaded file: {filename} ({size_mb:.2f}MB) -> {file_id}")
     
@@ -618,30 +678,123 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
     """
     if request.report_id not in report_storage:
         raise HTTPException(status_code=404, detail="Report not found")
-        
-    db_conn = SessionLocal()
-    try:
-        report_rec = db_conn.query(DbReport).filter(DbReport.id == request.report_id).first()
-        if report_rec:
-            file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
-            if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+
+    trial_db = None
+    trial_service = None
+    trial_job_id = None
+
+    if settings.DEPLOYMENT_MODE == "trial":
+        trial_db = SessionLocal()
+        trial_service = TrialService(trial_db)
+        try:
+            report_rec = trial_db.get(DbReport, request.report_id)
+            file_rec = (
+                trial_db.get(UploadedFile, report_rec.file_id)
+                if report_rec and report_rec.file_id
+                else None
+            )
+            if file_rec is None:
+                raise HTTPException(status_code=404, detail="Original file not found")
+            if file_rec.owner_id != user.id:
                 raise HTTPException(status_code=403, detail="Access denied to this report.")
-    finally:
-        db_conn.close()
-    
-    report = report_storage[request.report_id]
-    
-    # Find the original file
-    file_id = None
-    for fid, finfo in file_storage.items():
-        if finfo["original_filename"] == report.document.filename:
-            file_id = fid
-            break
-    
-    if not file_id:
-        raise HTTPException(status_code=404, detail="Original file not found")
-    
-    file_info = file_storage[file_id]
+            if not file_rec.page_count or file_rec.page_count <= 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "trial_file_page_count_unavailable"},
+                )
+
+            trial_service.ensure_account(user)
+            report = AccessibilityReport.model_validate_json(report_rec.report_json)
+            job_key = f"remediate:{user.id}:{request.report_id}"
+            existing_job = trial_db.query(RemediationJob).filter(
+                RemediationJob.user_id == user.id,
+                RemediationJob.idempotency_key == job_key,
+            ).first()
+            if existing_job is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "trial_remediation_conflict"},
+                )
+
+            trial_job_id = str(uuid.uuid4())
+            trial_db.add(
+                RemediationJob(
+                    id=trial_job_id,
+                    user_id=user.id,
+                    file_id=file_rec.id,
+                    report_id=report_rec.id,
+                    status="pending",
+                    page_count=file_rec.page_count,
+                    idempotency_key=job_key,
+                )
+            )
+            try:
+                trial_service.reserve(
+                    user.id,
+                    trial_job_id,
+                    file_rec.page_count,
+                    f"reserve:{trial_job_id}",
+                )
+            except InsufficientPages as exc:
+                detail = TrialPageLimitDetail(
+                    requested_pages=exc.requested,
+                    remaining_pages=exc.remaining,
+                )
+                raise HTTPException(
+                    status_code=409, detail=detail.model_dump()
+                ) from None
+            except IntegrityError:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "trial_remediation_conflict"},
+                ) from None
+
+            job = trial_db.get(RemediationJob, trial_job_id)
+            job.status = "processing"
+            trial_db.commit()
+            file_id = file_rec.id
+            file_info = {
+                "id": file_rec.id,
+                "original_filename": file_rec.filename,
+                "file_type": file_rec.file_type,
+                "file_path": file_rec.file_path,
+                "file_size": file_rec.file_size,
+                "page_count": file_rec.page_count,
+            }
+        except HTTPException:
+            trial_db.rollback()
+            trial_db.close()
+            raise
+        except (TrialStateError, ValueError):
+            trial_db.rollback()
+            trial_db.close()
+            logger.exception("Trial remediation state conflict")
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "trial_remediation_conflict"},
+            ) from None
+    else:
+        report = report_storage[request.report_id]
+        db_conn = SessionLocal()
+        try:
+            report_rec = db_conn.query(DbReport).filter(DbReport.id == request.report_id).first()
+            if report_rec:
+                file_rec = db_conn.query(UploadedFile).filter(UploadedFile.id == report_rec.file_id).first()
+                if file_rec and file_rec.owner_id and file_rec.owner_id != user.id:
+                    raise HTTPException(status_code=403, detail="Access denied to this report.")
+        finally:
+            db_conn.close()
+
+        # Preserve the existing filename lookup in unmetered testing mode.
+        file_id = None
+        for fid, finfo in file_storage.items():
+            if finfo["original_filename"] == report.document.filename:
+                file_id = fid
+                break
+        if not file_id:
+            raise HTTPException(status_code=404, detail="Original file not found")
+        file_info = file_storage[file_id]
+
     file_path = Path(file_info["file_path"])
     
     results: list[RemediationResult] = []
@@ -649,86 +802,109 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
     remediation_report_path: Optional[str] = None
     remediation_report_filename: Optional[str] = None
     
-    if file_info["file_type"] == "html":
-        # Remediate HTML
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
-            html_content = await f.read()
+    try:
+        if file_info["file_type"] == "html":
+            # Remediate HTML
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                html_content = await f.read()
         
-        remediator = HTMLRemediator(html_content)
+            remediator = HTMLRemediator(html_content)
         
         # Get issues to fix
-        issues_to_fix = []
-        if request.apply_all_automatable:
-            issues_to_fix = [i for i in report.all_issues if i.automatable_fix]
-        elif request.issue_ids:
-            issues_to_fix = [i for i in report.all_issues if i.id in request.issue_ids]
+            issues_to_fix = []
+            if request.apply_all_automatable:
+                issues_to_fix = [i for i in report.all_issues if i.automatable_fix]
+            elif request.issue_ids:
+                issues_to_fix = [i for i in report.all_issues if i.id in request.issue_ids]
         
         # Apply fixes
-        results = remediator.apply_fixes(issues_to_fix)
+            results = remediator.apply_fixes(issues_to_fix)
         
         # Save remediated file
-        output_filename = f"remediated_{file_info['original_filename']}"
-        output_path = settings.OUTPUT_DIR / output_filename
+            output_filename = f"remediated_{file_info['original_filename']}"
+            output_path = settings.OUTPUT_DIR / output_filename
         
-        async with aiofiles.open(output_path, 'w', encoding='utf-8') as f:
-            await f.write(remediator.get_remediated_html())
+            async with aiofiles.open(output_path, 'w', encoding='utf-8') as f:
+                await f.write(remediator.get_remediated_html())
         
-        remediated_path = str(output_path)
+            remediated_path = str(output_path)
         
-    elif file_info["file_type"] == "pdf":
-        import shutil
+        elif file_info["file_type"] == "pdf":
+            import shutil
 
-        output_filename = f"remediated_{file_info['original_filename']}"
-        output_path = settings.OUTPUT_DIR / output_filename
-        shutil.copy2(file_path, output_path)
+            output_filename = f"remediated_{file_info['original_filename']}"
+            output_path = settings.OUTPUT_DIR / output_filename
+            shutil.copy2(file_path, output_path)
 
-        remediator = PDFRemediator(output_path)
+            remediator = PDFRemediator(output_path)
         # The PDF pipeline shells out to Java (OpenDataLoader), the C++ tagging
         # engine, and Tesseract OCR — all blocking and potentially slow. Run it
         # in a worker thread so it can't stall the event loop / other requests.
-        results = await run_in_threadpool(
-            remediator.fix_all,
-            output_path=output_path,
-            report=report,
-            original_filename=file_info["original_filename"],
-        )
+            results = await run_in_threadpool(
+                remediator.fix_all,
+                output_path=output_path,
+                report=report,
+                original_filename=file_info["original_filename"],
+            )
 
-        remediated_path = str(output_path)
+            remediated_path = str(output_path)
     
-    # Count results
-    total_fixed = len([r for r in results if r.success])
-    total_failed = len([r for r in results if not r.success])
+        # Count results
+        total_fixed = len([r for r in results if r.success])
+        total_failed = len([r for r in results if not r.success])
     
-    logger.info(f"Remediation complete: {total_fixed} fixed, {total_failed} failed")
+        logger.info(f"Remediation complete: {total_fixed} fixed, {total_failed} failed")
 
-    # Always generate remediation report
-    try:
-        from .remediation_report import generate_remediation_report_for_api
+        # Always generate remediation report
+        try:
+            from .remediation_report import generate_remediation_report_for_api
 
-        report_path = generate_remediation_report_for_api(
-            original_filename=file_info["original_filename"],
-            file_id=file_id,
+            report_path = generate_remediation_report_for_api(
+                original_filename=file_info["original_filename"],
+                file_id=file_id,
+                report_id=request.report_id,
+                file_type=file_info["file_type"],
+                analysis_report=report.model_dump(),
+                remediation_results=[r.model_dump() for r in results],
+                remediated_file_path=remediated_path,
+                output_dir=settings.OUTPUT_DIR,
+            )
+            remediation_report_path = str(report_path)
+            remediation_report_filename = report_path.name
+        except Exception:
+            logger.exception("Failed to generate remediation report")
+
+        if trial_service and trial_job_id:
+            trial_service.consume(trial_job_id)
+
+        return RemediationResponse(
             report_id=request.report_id,
-            file_type=file_info["file_type"],
-            analysis_report=report.model_dump(),
-            remediation_results=[r.model_dump() for r in results],
+            total_fixed=total_fixed,
+            total_failed=total_failed,
+            results=results,
             remediated_file_path=remediated_path,
-            output_dir=settings.OUTPUT_DIR,
+            remediation_report_path=remediation_report_path,
+            remediation_report_filename=remediation_report_filename,
         )
-        remediation_report_path = str(report_path)
-        remediation_report_filename = report_path.name
-    except Exception as e:
-        logger.warning(f"Failed to generate remediation report: {e}")
-    
-    return RemediationResponse(
-        report_id=request.report_id,
-        total_fixed=total_fixed,
-        total_failed=total_failed,
-        results=results,
-        remediated_file_path=remediated_path,
-        remediation_report_path=remediation_report_path,
-        remediation_report_filename=remediation_report_filename,
-    )
+    except asyncio.CancelledError:
+        if trial_service and trial_job_id:
+            trial_service.release(trial_job_id, "processing_cancelled")
+        raise
+    except HTTPException:
+        if trial_service and trial_job_id:
+            trial_service.release(trial_job_id, "processing_failed")
+        raise
+    except Exception:
+        if trial_service and trial_job_id:
+            try:
+                trial_service.release(trial_job_id, "processing_failed")
+            except Exception:
+                logger.exception("Failed to release trial reservation")
+        logger.exception("Remediation processing failed")
+        raise HTTPException(status_code=500, detail="Remediation processing failed") from None
+    finally:
+        if trial_db is not None:
+            trial_db.close()
 
 
 @app.get("/remediate/download/{report_id}")

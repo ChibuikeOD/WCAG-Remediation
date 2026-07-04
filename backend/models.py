@@ -188,6 +188,23 @@ class UploadResponse(BaseModel):
     original_filename: Optional[str] = None
 
 
+class TrialBalanceResponse(BaseModel):
+    """Current metered trial balance and immutable eligibility provenance."""
+    granted_pages: int
+    consumed_pages: int
+    reserved_pages: int
+    remaining_pages: int
+    normalized_domain: str
+    eligibility_rule_version: str
+
+
+class TrialPageLimitDetail(BaseModel):
+    """Stable structured detail returned when a trial cannot reserve pages."""
+    code: Literal["trial_page_limit_exceeded"] = "trial_page_limit_exceeded"
+    requested_pages: int
+    remaining_pages: int
+
+
 class AnalyzeRequest(BaseModel):
     """Request to analyze a document or URL."""
     file_id: Optional[str] = None

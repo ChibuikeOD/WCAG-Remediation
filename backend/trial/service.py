@@ -158,8 +158,8 @@ class TrialService:
                 result = self._get_balance(job.user_id)
                 self.session.commit()
                 return result
-            if job.status != "reserved":
-                raise TrialStateError("only a reserved job can be consumed")
+            if job.status not in {"reserved", "processing"}:
+                raise TrialStateError("only a reserved or processing job can be consumed")
             if existing is not None:
                 raise TrialStateError("consume idempotency state conflicts with job")
 

@@ -1,5 +1,5 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from backend.config import Settings
 
@@ -32,6 +32,33 @@ def test_testing_mode_allows_current_bypass():
     )
 
     assert value.DEPLOYMENT_MODE == "testing"
+
+
+def test_trial_mode_accepts_complete_secure_configuration():
+    value = Settings(
+        DEPLOYMENT_MODE="trial",
+        DISABLE_AUTH=False,
+        _env_file=None,
+        **TRIAL_SUPABASE_SETTINGS,
+    )
+
+    assert isinstance(value.SUPABASE_SECRET_KEY, SecretStr)
+    assert value.SUPABASE_SECRET_KEY.get_secret_value() == "sb_secret_example"
+    assert "sb_secret_example" not in repr(value)
+
+
+def test_trial_validation_error_hides_supabase_secret():
+    secret = "never-leak-this-secret"
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            DEPLOYMENT_MODE="trial",
+            DISABLE_AUTH=True,
+            _env_file=None,
+            SUPABASE_SECRET_KEY=secret,
+        )
+
+    assert secret not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("missing_setting", TRIAL_SUPABASE_SETTINGS)

@@ -55,13 +55,19 @@ def _normalize_tessdata_prefix() -> None:
 
 _normalize_tessdata_prefix()
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal, Optional
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "backend/.env"),
+        env_file_encoding="utf-8",
+        hide_input_in_errors=True,
+    )
     
     # Application
     APP_NAME: str = "WCAG Accessibility Remediation Platform"
@@ -96,7 +102,7 @@ class Settings(BaseSettings):
     # Supabase identity and private trial artifact storage
     SUPABASE_URL: Optional[str] = None
     SUPABASE_PUBLISHABLE_KEY: Optional[str] = None
-    SUPABASE_SECRET_KEY: Optional[str] = None
+    SUPABASE_SECRET_KEY: Optional[SecretStr] = None
     SUPABASE_PROJECT_REF: Optional[str] = None
     SUPABASE_ORIGINALS_BUCKET: Optional[str] = None
     SUPABASE_RESULTS_BUCKET: Optional[str] = None
@@ -168,11 +174,13 @@ class Settings(BaseSettings):
             "SUPABASE_ORIGINALS_BUCKET",
             "SUPABASE_RESULTS_BUCKET",
         )
-        missing_settings = [
-            name
-            for name in required_supabase_settings
-            if not (getattr(self, name) or "").strip()
-        ]
+        missing_settings = []
+        for name in required_supabase_settings:
+            value = getattr(self, name)
+            if isinstance(value, SecretStr):
+                value = value.get_secret_value()
+            if not (value or "").strip():
+                missing_settings.append(name)
         if missing_settings:
             raise ValueError(
                 "Trial mode requires Supabase settings: "
@@ -180,10 +188,6 @@ class Settings(BaseSettings):
             )
 
         return self
-    
-    class Config:
-        env_file = (".env", "backend/.env")
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()

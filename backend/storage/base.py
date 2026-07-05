@@ -97,6 +97,7 @@ class ArtifactDownload:
 
     local_path: Path | None = None
     signed_url: str | None = None
+    expires_in_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if (self.local_path is None) == (self.signed_url is None):

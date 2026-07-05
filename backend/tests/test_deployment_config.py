@@ -45,6 +45,7 @@ def test_trial_mode_accepts_complete_secure_configuration():
     assert isinstance(value.SUPABASE_SECRET_KEY, SecretStr)
     assert value.SUPABASE_SECRET_KEY.get_secret_value() == "sb_secret_example"
     assert "sb_secret_example" not in repr(value)
+    assert value.SUPABASE_STORAGE_SIGNED_URL_SECONDS == 300
 
 
 def test_trial_validation_error_hides_supabase_secret():
@@ -74,4 +75,21 @@ def test_trial_mode_rejects_missing_supabase_setting(missing_setting):
             DISABLE_AUTH=False,
             _env_file=None,
             **supplied_settings,
+        )
+
+
+def test_trial_mode_requires_distinct_private_artifact_buckets():
+    with pytest.raises(ValidationError, match="distinct"):
+        Settings(
+            DEPLOYMENT_MODE="trial",
+            DISABLE_AUTH=False,
+            _env_file=None,
+            **(
+                TRIAL_SUPABASE_SETTINGS
+                | {
+                    "SUPABASE_RESULTS_BUCKET": TRIAL_SUPABASE_SETTINGS[
+                        "SUPABASE_ORIGINALS_BUCKET"
+                    ]
+                }
+            ),
         )

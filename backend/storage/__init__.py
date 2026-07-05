@@ -10,6 +10,7 @@ from .base import (
     InvalidArtifactKey,
 )
 from .local import LocalArtifactStore
+from .supabase import SupabaseArtifactStore
 
 __all__ = [
     "ArtifactAccessDenied",
@@ -20,4 +21,5 @@ __all__ = [
     "ArtifactStoreError",
     "InvalidArtifactKey",
     "LocalArtifactStore",
+    "SupabaseArtifactStore",
 ]

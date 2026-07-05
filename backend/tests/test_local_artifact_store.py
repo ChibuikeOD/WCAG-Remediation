@@ -391,7 +391,7 @@ def test_materialize_cleans_temp_file_when_copy_fails(
     def fail_copy(source: Path, target: Path) -> None:
         raise OSError("injected copy failure")
 
-    monkeypatch.setattr("backend.storage.local.shutil.copyfile", fail_copy)
+    monkeypatch.setattr("backend.storage.filesystem.shutil.copyfile", fail_copy)
     with pytest.raises(ArtifactStoreError, match="copy failure"):
         store.materialize(
             "user", key, destination, destination_root=destination.parent
@@ -452,7 +452,7 @@ def test_mocked_windows_reparse_component_is_rejected(
             )
         return result
 
-    monkeypatch.setattr("backend.storage.local.os.lstat", reparse_lstat)
+    monkeypatch.setattr("backend.storage.filesystem.os.lstat", reparse_lstat)
     with pytest.raises(ArtifactAccessDenied, match="reparse"):
         store.download("user", key)
 

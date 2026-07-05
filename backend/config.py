@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     SUPABASE_PROJECT_REF: Optional[str] = None
     SUPABASE_ORIGINALS_BUCKET: Optional[str] = None
     SUPABASE_RESULTS_BUCKET: Optional[str] = None
+    SUPABASE_STORAGE_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0.0)
+    SUPABASE_STORAGE_READ_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
+    SUPABASE_STORAGE_WRITE_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
+    SUPABASE_STORAGE_POOL_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0.0)
+    SUPABASE_STORAGE_SIGNED_URL_SECONDS: int = Field(default=300, gt=0)
 
     # Development / Testing
     # Set DISABLE_AUTH=true to skip the login screen entirely.
@@ -187,6 +192,8 @@ class Settings(BaseSettings):
                 "Trial mode requires Supabase settings: "
                 + ", ".join(missing_settings)
             )
+        if self.SUPABASE_ORIGINALS_BUCKET == self.SUPABASE_RESULTS_BUCKET:
+            raise ValueError("Trial mode requires distinct Supabase artifact buckets")
 
         return self
 

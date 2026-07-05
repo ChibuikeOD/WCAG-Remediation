@@ -199,6 +199,9 @@ def safe_materialization_destination(
 def atomic_write_path(source: Path, destination: Path, *, boundary: Path) -> None:
     def copy_to(target: Path) -> None:
         shutil.copyfile(source, target)
+        with target.open("ab") as output:
+            output.flush()
+            os.fsync(output.fileno())
 
     atomic_write_with_writer(copy_to, destination, boundary=boundary)
 

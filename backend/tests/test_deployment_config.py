@@ -93,3 +93,44 @@ def test_trial_mode_requires_distinct_private_artifact_buckets():
                 }
             ),
         )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://trial-project.supabase.co",
+        "https://user@trial-project.supabase.co",
+        "https://trial-project.supabase.co?token=value",
+        "https://trial-project.supabase.co#fragment",
+        "https://trial-project.supabase.co/storage/v1",
+        "https://other-project.supabase.co",
+    ],
+)
+def test_trial_mode_rejects_unsafe_or_mismatched_supabase_url(url):
+    with pytest.raises(ValidationError, match="SUPABASE_URL"):
+        Settings(
+            DEPLOYMENT_MODE="trial",
+            DISABLE_AUTH=False,
+            _env_file=None,
+            **(TRIAL_SUPABASE_SETTINGS | {"SUPABASE_URL": url}),
+        )
+
+
+@pytest.mark.parametrize("bucket", ["../private", "bucket name", "bad\x00name", "."])
+def test_trial_mode_rejects_unsafe_bucket_names(bucket):
+    with pytest.raises(ValidationError, match="bucket"):
+        Settings(
+            DEPLOYMENT_MODE="trial",
+            DISABLE_AUTH=False,
+            _env_file=None,
+            **(TRIAL_SUPABASE_SETTINGS | {"SUPABASE_ORIGINALS_BUCKET": bucket}),
+        )
+
+
+def test_testing_mode_accepts_explicit_artifact_storage_root():
+    value = Settings(
+        DEPLOYMENT_MODE="testing",
+        ARTIFACT_STORAGE_ROOT="private-artifacts",
+        _env_file=None,
+    )
+    assert value.ARTIFACT_STORAGE_ROOT.name == "private-artifacts"

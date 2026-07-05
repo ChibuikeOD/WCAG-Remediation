@@ -13,8 +13,10 @@ from pydantic import SecretStr
 
 from backend.storage import (
     ArtifactAccessDenied,
+    ArtifactConflictError,
     ArtifactKey,
     ArtifactNotFound,
+    ArtifactRetryableError,
     ArtifactStoreError,
     InvalidArtifactKey,
     SupabaseArtifactStore,
@@ -50,6 +52,7 @@ def _store(recorder: Recorder) -> SupabaseArtifactStore:
         SecretStr(SECRET),
         "trial-originals",
         "trial-results",
+        project_ref="trial-project",
         transport=httpx.MockTransport(recorder.handler),
     )
 
@@ -64,9 +67,49 @@ def _json_body(request: httpx.Request) -> dict[str, Any]:
 )
 def test_constructor_rejects_unsafe_bucket_names(bucket: str) -> None:
     with pytest.raises(InvalidArtifactKey):
-        SupabaseArtifactStore(BASE_URL, SECRET, bucket, "trial-results")
+        SupabaseArtifactStore(
+            BASE_URL, SECRET, bucket, "trial-results", project_ref="trial-project"
+        )
     with pytest.raises(InvalidArtifactKey):
-        SupabaseArtifactStore(BASE_URL, SECRET, "trial-originals", bucket)
+        SupabaseArtifactStore(
+            BASE_URL, SECRET, "trial-originals", bucket, project_ref="trial-project"
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://trial-project.supabase.co",
+        "https://",
+        "https://user@trial-project.supabase.co",
+        "https://trial-project.supabase.co?secret=value",
+        "https://trial-project.supabase.co#fragment",
+        "https://trial-project.supabase.co/storage/v1",
+        "https://trial-project.supabase.co:8443",
+        "https://evil.example",
+        "https://other-project.supabase.co",
+    ],
+)
+def test_constructor_rejects_hostile_or_mismatched_endpoint(url: str) -> None:
+    with pytest.raises(ArtifactStoreError, match="Supabase URL"):
+        SupabaseArtifactStore(
+            url,
+            SECRET,
+            "trial-originals",
+            "trial-results",
+            project_ref="trial-project",
+        )
+
+
+def test_constructor_requires_distinct_buckets() -> None:
+    with pytest.raises(InvalidArtifactKey, match="distinct"):
+        SupabaseArtifactStore(
+            BASE_URL,
+            SECRET,
+            "trial-artifacts",
+            "trial-artifacts",
+            project_ref="trial-project",
+        )
 
 
 def test_put_uploads_original_to_originals_bucket_with_canonical_key_and_secret_headers(
@@ -110,9 +153,10 @@ def test_put_maps_remediated_and_report_to_results_bucket(
         (401, ArtifactAccessDenied),
         (403, ArtifactAccessDenied),
         (404, ArtifactNotFound),
-        (409, ArtifactStoreError),
-        (429, ArtifactStoreError),
-        (500, ArtifactStoreError),
+        (409, ArtifactConflictError),
+        (429, ArtifactRetryableError),
+        (500, ArtifactRetryableError),
+        (418, ArtifactStoreError),
     ],
 )
 def test_put_maps_storage_errors_without_leaking_secret(
@@ -138,6 +182,32 @@ def test_put_rejects_non_regular_reparse_source_without_http(
         store.put("user", "job", "original", tmp_path)
 
     assert recorder.requests == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ConnectError("offline"), httpx.ReadTimeout("slow")],
+)
+def test_network_and_timeout_failures_are_retryable_without_leaking_details(
+    tmp_path: Path, failure: httpx.HTTPError
+) -> None:
+    def fail(_request: httpx.Request) -> httpx.Response:
+        raise failure
+
+    store = SupabaseArtifactStore(
+        BASE_URL,
+        SECRET,
+        "trial-originals",
+        "trial-results",
+        project_ref="trial-project",
+        transport=httpx.MockTransport(fail),
+    )
+
+    with pytest.raises(ArtifactRetryableError) as captured:
+        store.put("user", "job", "original", _source(tmp_path))
+
+    assert "offline" not in str(captured.value)
+    assert "slow" not in str(captured.value)
 
 
 def test_download_rejects_cross_user_before_http() -> None:
@@ -269,6 +339,30 @@ def test_materialize_cleans_temp_file_after_http_error(tmp_path: Path) -> None:
     assert not list(destination_root.glob("*.tmp"))
 
 
+def test_materialize_maps_stream_transport_failure_to_retryable(tmp_path: Path) -> None:
+    def fail(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("do not expose")
+
+    store = SupabaseArtifactStore(
+        BASE_URL,
+        SECRET,
+        "trial-originals",
+        "trial-results",
+        project_ref="trial-project",
+        transport=httpx.MockTransport(fail),
+    )
+
+    with pytest.raises(ArtifactRetryableError) as captured:
+        store.materialize(
+            "user",
+            ArtifactKey("user", "job", "original", "source.pdf").key,
+            tmp_path / "exports" / "copy.pdf",
+            destination_root=tmp_path / "exports",
+        )
+
+    assert "do not expose" not in str(captured.value)
+
+
 def test_materialize_uses_shared_destination_root_process_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -349,9 +443,10 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
                 {"name": "users/user/jobs/job/original/b.pdf"},
             ],
         ),
-        httpx.Response(200, json=[{"name": "users/user/jobs/job/original/c.pdf"}]),
-        httpx.Response(200, json=[]),
         httpx.Response(200, json={}),
+        httpx.Response(200, json=[{"name": "users/user/jobs/job/original/c.pdf"}]),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json=[]),
         httpx.Response(
             200,
             json=[
@@ -359,8 +454,8 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
                 {"name": "users/user/jobs/job/report/report.json"},
             ],
         ),
-        httpx.Response(200, json=[]),
         httpx.Response(200, json={}),
+        httpx.Response(200, json=[]),
     ]
     recorder = Recorder(responses)
     store = SupabaseArtifactStore(
@@ -368,6 +463,7 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
         SECRET,
         "trial-originals",
         "trial-results",
+        project_ref="trial-project",
         transport=httpx.MockTransport(recorder.handler),
         list_page_size=2,
     )
@@ -385,12 +481,13 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
     ]
     assert [_json_body(request) for request in list_requests] == [
         {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 2},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 3},
         {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 2},
+        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
     ]
     assert [str(request.url) for request in delete_requests] == [
+        "https://trial-project.supabase.co/storage/v1/object/trial-originals",
         "https://trial-project.supabase.co/storage/v1/object/trial-originals",
         "https://trial-project.supabase.co/storage/v1/object/trial-results",
     ]
@@ -398,10 +495,12 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
         "prefixes": [
             "users/user/jobs/job/original/a.pdf",
             "users/user/jobs/job/original/b.pdf",
-            "users/user/jobs/job/original/c.pdf",
         ]
     }
     assert _json_body(delete_requests[1]) == {
+        "prefixes": ["users/user/jobs/job/original/c.pdf"]
+    }
+    assert _json_body(delete_requests[2]) == {
         "prefixes": [
             "users/user/jobs/job/remediated/result.pdf",
             "users/user/jobs/job/report/report.json",
@@ -423,12 +522,74 @@ def test_delete_job_rejects_malicious_list_entry_without_batch_delete() -> None:
     assert [request.method for request in recorder.requests] == ["POST"]
 
 
+def test_delete_job_caps_pages_and_deletes_more_than_one_thousand_objects() -> None:
+    prefix = "users/user/jobs/job/"
+    first_page = [
+        {"name": f"{prefix}original/{index}.pdf"} for index in range(1000)
+    ]
+    second_page = [
+        {"name": f"{prefix}original/{index}.pdf"} for index in range(1000, 1005)
+    ]
+    recorder = Recorder(
+        [
+            httpx.Response(200, json=first_page),
+            httpx.Response(200, json={}),
+            httpx.Response(200, json=second_page),
+            httpx.Response(200, json={}),
+            httpx.Response(200, json=[]),
+            httpx.Response(200, json=[]),
+        ]
+    )
+    store = SupabaseArtifactStore(
+        BASE_URL,
+        SECRET,
+        "trial-originals",
+        "trial-results",
+        project_ref="trial-project",
+        transport=httpx.MockTransport(recorder.handler),
+        list_page_size=5000,
+    )
+
+    store.delete_job("user", "job")
+
+    list_bodies = [
+        _json_body(request)
+        for request in recorder.requests
+        if request.method == "POST"
+    ]
+    delete_bodies = [
+        _json_body(request)
+        for request in recorder.requests
+        if request.method == "DELETE"
+    ]
+    assert all(body["limit"] == 1000 and body["offset"] == 0 for body in list_bodies)
+    assert [len(body["prefixes"]) for body in delete_bodies] == [1000, 5]
+
+
+def test_delete_job_stops_when_delete_makes_no_progress() -> None:
+    page = [{"name": "users/user/jobs/job/original/a.pdf"}]
+    recorder = Recorder(
+        [
+            httpx.Response(200, json=page),
+            httpx.Response(200, json={}),
+            httpx.Response(200, json=page),
+        ]
+    )
+    store = _store(recorder)
+
+    with pytest.raises(ArtifactStoreError, match="progress"):
+        store.delete_job("user", "job")
+
+    assert [request.method for request in recorder.requests] == ["POST", "DELETE", "POST"]
+
+
 def test_custom_timeouts_are_applied_to_owned_client() -> None:
     store = SupabaseArtifactStore(
         BASE_URL,
         SECRET,
         "trial-originals",
         "trial-results",
+        project_ref="trial-project",
         transport=httpx.MockTransport(lambda request: httpx.Response(200)),
         connect_timeout=1.0,
         read_timeout=2.0,
@@ -440,3 +601,24 @@ def test_custom_timeouts_are_applied_to_owned_client() -> None:
     assert store._client.timeout.read == 2.0
     assert store._client.timeout.write == 3.0
     assert store._client.timeout.pool == 4.0
+
+
+def test_close_and_context_manager_close_only_owned_client() -> None:
+    owned = _store(Recorder())
+    with owned as entered:
+        assert entered is owned
+    assert owned._client.is_closed
+
+    injected = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    store = SupabaseArtifactStore(
+        BASE_URL,
+        SECRET,
+        "trial-originals",
+        "trial-results",
+        project_ref="trial-project",
+        client=injected,
+    )
+    store.close()
+    store.close()
+    assert not injected.is_closed
+    injected.close()

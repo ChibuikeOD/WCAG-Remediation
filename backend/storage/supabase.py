@@ -14,9 +14,11 @@ from pydantic import SecretStr
 from . import filesystem
 from .base import (
     ArtifactAccessDenied,
+    ArtifactConflictError,
     ArtifactDownload,
     ArtifactKey,
     ArtifactNotFound,
+    ArtifactRetryableError,
     ArtifactStore,
     ArtifactStoreError,
     InvalidArtifactKey,
@@ -24,6 +26,7 @@ from .base import (
 
 
 _BUCKET_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_PROJECT_REF = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$")
 
 
 def _secret_value(secret: SecretStr | str) -> str:
@@ -42,6 +45,30 @@ def _validate_bucket(bucket: str, label: str) -> str:
     return bucket
 
 
+def _validate_endpoint(supabase_url: str, project_ref: str) -> str:
+    if not isinstance(project_ref, str) or _PROJECT_REF.fullmatch(project_ref) is None:
+        raise ArtifactStoreError("invalid Supabase project reference")
+    try:
+        parsed = urlsplit(str(supabase_url))
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ArtifactStoreError("invalid Supabase URL") from exc
+    expected_hostname = f"{project_ref}.supabase.co"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != expected_hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or parsed.netloc != expected_hostname
+    ):
+        raise ArtifactStoreError("invalid Supabase URL")
+    return f"https://{expected_hostname}"
+
+
 class SupabaseArtifactStore(ArtifactStore):
     """Private Supabase Storage adapter using service-role server credentials."""
 
@@ -52,6 +79,7 @@ class SupabaseArtifactStore(ArtifactStore):
         originals_bucket: str,
         results_bucket: str,
         *,
+        project_ref: str,
         client: httpx.Client | None = None,
         transport: httpx.BaseTransport | None = None,
         connect_timeout: float = 5.0,
@@ -63,9 +91,7 @@ class SupabaseArtifactStore(ArtifactStore):
         materialize_chunk_size: int = 1024 * 1024,
         list_page_size: int = 100,
     ) -> None:
-        self._origin = str(supabase_url).rstrip("/")
-        if not self._origin.startswith(("https://", "http://")):
-            raise ArtifactStoreError("invalid Supabase URL")
+        self._origin = _validate_endpoint(supabase_url, project_ref)
         self._storage_url = f"{self._origin}/storage/v1"
         self._secret = _secret_value(backend_secret)
         if not self._secret.strip():
@@ -74,6 +100,8 @@ class SupabaseArtifactStore(ArtifactStore):
             originals_bucket, "originals bucket"
         )
         self._results_bucket = _validate_bucket(results_bucket, "results bucket")
+        if self._originals_bucket == self._results_bucket:
+            raise InvalidArtifactKey("Supabase artifact buckets must be distinct")
         if signed_url_expires_in_seconds <= 0:
             raise ArtifactStoreError("signed URL expiry must be positive")
         if min(upload_chunk_size, materialize_chunk_size, list_page_size) <= 0:
@@ -81,7 +109,7 @@ class SupabaseArtifactStore(ArtifactStore):
         self._signed_url_expires_in_seconds = signed_url_expires_in_seconds
         self._upload_chunk_size = upload_chunk_size
         self._materialize_chunk_size = materialize_chunk_size
-        self._list_page_size = list_page_size
+        self._list_page_size = min(list_page_size, 1000)
         self._owns_client = client is None
         self._client = client or httpx.Client(
             timeout=httpx.Timeout(
@@ -150,7 +178,9 @@ class SupabaseArtifactStore(ArtifactStore):
                         boundary=boundary,
                     )
             except httpx.HTTPError as exc:
-                raise ArtifactStoreError("Supabase storage request failed") from exc
+                raise ArtifactRetryableError(
+                    "Supabase storage request failed"
+                ) from exc
         return Path(destination)
 
     def download(self, user_id: str, key: str) -> ArtifactDownload:
@@ -185,9 +215,22 @@ class SupabaseArtifactStore(ArtifactStore):
         marker = ArtifactKey(user_id, job_id, "original", "validation")
         prefix = f"users/{marker.user_id}/jobs/{marker.job_id}/"
         for bucket in dict.fromkeys((self._originals_bucket, self._results_bucket)):
-            keys = self._list_owned_job_keys(bucket, marker.user_id, marker.job_id, prefix)
-            if keys:
+            previous_page: frozenset[str] | None = None
+            while True:
+                keys = self._list_owned_job_keys(
+                    bucket, marker.user_id, marker.job_id, prefix
+                )
+                if not keys:
+                    break
+                page = frozenset(keys)
+                if page == previous_page:
+                    raise ArtifactStoreError("Supabase delete made no progress")
                 self._delete_prefixes(bucket, keys)
+                previous_page = page
+
+    def close(self) -> None:
+        if self._owns_client and not self._client.is_closed:
+            self._client.close()
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         headers = {
@@ -228,7 +271,7 @@ class SupabaseArtifactStore(ArtifactStore):
         try:
             return self._client.request(method, url, **kwargs)
         except httpx.HTTPError as exc:
-            raise ArtifactStoreError("Supabase storage request failed") from exc
+            raise ArtifactRetryableError("Supabase storage request failed") from exc
 
     def _raise_for_status(
         self,
@@ -245,8 +288,10 @@ class SupabaseArtifactStore(ArtifactStore):
             raise ArtifactAccessDenied("Supabase storage access denied")
         if response.status_code == 404:
             raise not_found("Supabase artifact does not exist")
-        if response.status_code in {409, 429} or response.status_code >= 500:
-            raise ArtifactStoreError("Supabase storage request failed")
+        if response.status_code == 409:
+            raise ArtifactConflictError("Supabase storage request conflicted")
+        if response.status_code == 429 or response.status_code >= 500:
+            raise ArtifactRetryableError("Supabase storage request failed")
         raise ArtifactStoreError("Supabase storage request was rejected")
 
     def _validated_signed_url(self, bucket: str, key: str, signed_url: str) -> str:
@@ -277,39 +322,35 @@ class SupabaseArtifactStore(ArtifactStore):
     def _list_owned_job_keys(
         self, bucket: str, user_id: str, job_id: str, prefix: str
     ) -> list[str]:
+        response = self._request(
+            "POST",
+            self._list_url(bucket),
+            headers=self._headers(),
+            json={"prefix": prefix, "limit": self._list_page_size, "offset": 0},
+        )
+        self._raise_for_status(response, not_found_ok=True)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ArtifactStoreError("Supabase list response is invalid") from exc
+        if payload in (None, {}) or payload == []:
+            return []
+        if not isinstance(payload, list) or len(payload) > self._list_page_size:
+            raise ArtifactStoreError("Supabase list response is invalid")
         keys: list[str] = []
-        offset = 0
-        while True:
-            response = self._request(
-                "POST",
-                self._list_url(bucket),
-                headers=self._headers(),
-                json={
-                    "prefix": prefix,
-                    "limit": self._list_page_size,
-                    "offset": offset,
-                },
-            )
-            self._raise_for_status(response, not_found_ok=True)
+        for entry in payload:
+            object_key = self._object_key_from_list_entry(prefix, entry)
+            if not object_key.startswith(prefix):
+                raise ArtifactStoreError("Supabase list returned an unsafe object")
             try:
-                payload = response.json()
-            except ValueError as exc:
-                raise ArtifactStoreError("Supabase list response is invalid") from exc
-            if payload in (None, {}):
-                break
-            if not isinstance(payload, list):
-                raise ArtifactStoreError("Supabase list response is invalid")
-            if not payload:
-                break
-            for entry in payload:
-                object_key = self._object_key_from_list_entry(prefix, entry)
-                if not object_key.startswith(prefix):
-                    raise ArtifactStoreError("Supabase list returned an unsafe object")
                 artifact = ArtifactKey.parse(object_key).for_owner(user_id)
-                if artifact.job_id != job_id or self._bucket_for(artifact) != bucket:
-                    raise ArtifactStoreError("Supabase list returned an unsafe object")
-                keys.append(artifact.key)
-            offset += len(payload)
+            except (InvalidArtifactKey, ArtifactAccessDenied) as exc:
+                raise ArtifactStoreError("Supabase list returned an unsafe object") from exc
+            if artifact.job_id != job_id or self._bucket_for(artifact) != bucket:
+                raise ArtifactStoreError("Supabase list returned an unsafe object")
+            keys.append(artifact.key)
+        if len(set(keys)) != len(keys):
+            raise ArtifactStoreError("Supabase list response is invalid")
         return keys
 
     def _object_key_from_list_entry(self, prefix: str, entry: Any) -> str:

@@ -3,7 +3,9 @@ Configuration settings for the WCAG Accessibility Remediation Platform.
 """
 import glob
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Proactively add standard Windows Tesseract path to PATH to prevent OCR failure if terminal environment is stale
 _tesseract_win_path = r"C:\Program Files\Tesseract-OCR"
@@ -85,6 +87,7 @@ class Settings(BaseSettings):
     RULES_DIR: Path = BASE_DIR / "rules"
     UPLOAD_DIR: Path = BASE_DIR / "uploads"
     OUTPUT_DIR: Path = BASE_DIR / "output"
+    ARTIFACT_STORAGE_ROOT: Path = BASE_DIR / ".artifacts"
     OPENDATALOADER_ROOT: Path = BASE_DIR / "opendataloader-pdf-main"
     LAYOUTLM_MODEL_DIR: Path = BASE_DIR / "layoutLM_trained"
     
@@ -194,6 +197,40 @@ class Settings(BaseSettings):
             )
         if self.SUPABASE_ORIGINALS_BUCKET == self.SUPABASE_RESULTS_BUCKET:
             raise ValueError("Trial mode requires distinct Supabase artifact buckets")
+
+        project_ref = self.SUPABASE_PROJECT_REF or ""
+        if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", project_ref) is None:
+            raise ValueError("Trial mode requires a valid SUPABASE_PROJECT_REF")
+        try:
+            parsed = urlsplit(self.SUPABASE_URL or "")
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Trial mode requires a valid SUPABASE_URL") from exc
+        expected_hostname = f"{project_ref}.supabase.co"
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != expected_hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or parsed.netloc != expected_hostname
+        ):
+            raise ValueError("Trial mode requires a valid SUPABASE_URL")
+
+        bucket_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+        for label, bucket in (
+            ("originals bucket", self.SUPABASE_ORIGINALS_BUCKET),
+            ("results bucket", self.SUPABASE_RESULTS_BUCKET),
+        ):
+            if (
+                bucket is None
+                or bucket in {".", ".."}
+                or bucket_pattern.fullmatch(bucket) is None
+            ):
+                raise ValueError(f"Trial mode requires a safe Supabase {label}")
 
         return self
 

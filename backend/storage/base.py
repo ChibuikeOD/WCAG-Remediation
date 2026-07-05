@@ -13,6 +13,14 @@ class ArtifactStoreError(Exception):
     """Base class for artifact storage failures."""
 
 
+class ArtifactRetryableError(ArtifactStoreError):
+    """Raised when a transient storage failure may succeed on retry."""
+
+
+class ArtifactConflictError(ArtifactStoreError):
+    """Raised when a storage mutation conflicts with current state."""
+
+
 class ArtifactNotFound(ArtifactStoreError):
     """Raised when an artifact does not exist."""
 
@@ -140,3 +148,12 @@ class ArtifactStore(ABC):
     @abstractmethod
     def delete_job(self, user_id: str, job_id: str) -> None:
         """Delete the exact job subtree; absence is idempotently ignored."""
+
+    def close(self) -> None:
+        """Release resources owned by the adapter."""
+
+    def __enter__(self) -> "ArtifactStore":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()

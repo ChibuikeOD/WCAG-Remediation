@@ -381,6 +381,44 @@ def test_put_cleans_temp_file_when_replace_fails(tmp_path: Path, monkeypatch: py
     assert not list((tmp_path / "private").rglob("*.tmp"))
 
 
+def test_put_flushes_and_fsyncs_temporary_file_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+    events: list[str] = []
+    original_fsync = os.fsync
+    original_replace = os.replace
+
+    def recording_fsync(descriptor: int) -> None:
+        events.append("fsync")
+        original_fsync(descriptor)
+
+    def recording_replace(source: Path, destination: Path) -> None:
+        events.append("replace")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    monkeypatch.setattr(os, "replace", recording_replace)
+
+    store.put("user", "job", "original", _source(tmp_path))
+
+    assert events[:2] == ["fsync", "replace"]
+
+
+def test_put_cleans_temp_file_when_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalArtifactStore(tmp_path / "private")
+
+    def fail_fsync(_descriptor: int) -> None:
+        raise OSError("injected fsync failure")
+
+    monkeypatch.setattr(os, "fsync", fail_fsync)
+    with pytest.raises(ArtifactStoreError, match="fsync failure"):
+        store.put("user", "job", "original", _source(tmp_path))
+    assert not list((tmp_path / "private").rglob("*.tmp"))
+
+
 def test_materialize_cleans_temp_file_when_copy_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

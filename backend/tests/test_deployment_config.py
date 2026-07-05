@@ -1,6 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
+import backend.config as config
 from backend.config import Settings
 
 
@@ -33,6 +34,19 @@ def test_trial_mode_rejects_cors_allow_all():
             _env_file=None,
             **TRIAL_SUPABASE_SETTINGS,
         )
+
+
+def test_trial_runtime_rejects_cors_origins_list_override():
+    value = Settings(
+        DEPLOYMENT_MODE="trial",
+        DISABLE_AUTH=False,
+        _env_file=None,
+        **TRIAL_SUPABASE_SETTINGS,
+    )
+    value.CORS_ORIGINS = ["https://evil.example"]
+
+    with pytest.raises(ValueError, match="CORS_ORIGINS_LIST"):
+        config._enforce_runtime_cors_isolation(value)
 
 
 def test_testing_mode_allows_current_bypass():

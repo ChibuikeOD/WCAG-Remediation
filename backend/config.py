@@ -240,6 +240,16 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+
+def _enforce_runtime_cors_isolation(configured_settings: Settings) -> None:
+    """Fail closed after env-derived CORS overrides are applied."""
+    if configured_settings.DEPLOYMENT_MODE != "trial":
+        return
+    if configured_settings.CORS_ORIGINS != ["https://pdfaccess.org"]:
+        raise ValueError(
+            "CORS_ORIGINS_LIST must be exactly https://pdfaccess.org in trial mode"
+        )
+
 # Allow configuring allowed origins via a comma-separated env variable
 _origins_env = os.getenv("CORS_ORIGINS_LIST")
 if _origins_env:
@@ -256,6 +266,8 @@ _allow_all = str(settings.CORS_ALLOW_ALL).lower() in {
 }
 if _allow_all:
     settings.CORS_ORIGINS = ["*"]
+
+_enforce_runtime_cors_isolation(settings)
 
 # Vercel (and many serverless platforms) mount the code package read-only.
 # Use /tmp for runtime writeable directories.

@@ -213,12 +213,18 @@ class SupabaseArtifactStore(ArtifactStore):
 
     def delete_job(self, user_id: str, job_id: str) -> None:
         marker = ArtifactKey(user_id, job_id, "original", "validation")
-        prefix = f"users/{marker.user_id}/jobs/{marker.job_id}/"
-        for bucket in dict.fromkeys((self._originals_bucket, self._results_bucket)):
+        job_prefix = f"users/{marker.user_id}/jobs/{marker.job_id}"
+        kind_locations = (
+            (self._originals_bucket, "original"),
+            (self._results_bucket, "remediated"),
+            (self._results_bucket, "report"),
+        )
+        for bucket, kind in kind_locations:
+            prefix = f"{job_prefix}/{kind}"
             previous_page: frozenset[str] | None = None
             while True:
-                keys = self._list_owned_job_keys(
-                    bucket, marker.user_id, marker.job_id, prefix
+                keys = self._list_owned_kind_keys(
+                    bucket, marker.user_id, marker.job_id, kind, prefix
                 )
                 if not keys:
                     break
@@ -319,8 +325,13 @@ class SupabaseArtifactStore(ArtifactStore):
         )
         self._raise_for_status(response, not_found_ok=True)
 
-    def _list_owned_job_keys(
-        self, bucket: str, user_id: str, job_id: str, prefix: str
+    def _list_owned_kind_keys(
+        self,
+        bucket: str,
+        user_id: str,
+        job_id: str,
+        kind: str,
+        prefix: str,
     ) -> list[str]:
         response = self._request(
             "POST",
@@ -340,13 +351,16 @@ class SupabaseArtifactStore(ArtifactStore):
         keys: list[str] = []
         for entry in payload:
             object_key = self._object_key_from_list_entry(prefix, entry)
-            if not object_key.startswith(prefix):
-                raise ArtifactStoreError("Supabase list returned an unsafe object")
             try:
                 artifact = ArtifactKey.parse(object_key).for_owner(user_id)
             except (InvalidArtifactKey, ArtifactAccessDenied) as exc:
                 raise ArtifactStoreError("Supabase list returned an unsafe object") from exc
-            if artifact.job_id != job_id or self._bucket_for(artifact) != bucket:
+            if (
+                artifact.job_id != job_id
+                or artifact.kind != kind
+                or self._bucket_for(artifact) != bucket
+                or artifact.key != object_key
+            ):
                 raise ArtifactStoreError("Supabase list returned an unsafe object")
             keys.append(artifact.key)
         if len(set(keys)) != len(keys):
@@ -356,9 +370,18 @@ class SupabaseArtifactStore(ArtifactStore):
     def _object_key_from_list_entry(self, prefix: str, entry: Any) -> str:
         if not isinstance(entry, dict):
             raise ArtifactStoreError("Supabase list response is invalid")
+        object_id = entry.get("id")
+        if object_id is None:
+            raise ArtifactStoreError("Supabase list returned an unexpected folder")
+        if not isinstance(object_id, str) or not object_id:
+            raise ArtifactStoreError("Supabase list response is invalid")
         name = entry.get("name")
         if not isinstance(name, str) or not name:
             raise ArtifactStoreError("Supabase list response is invalid")
-        if name.startswith(prefix):
+        if name.startswith("users/"):
+            if not name.startswith(f"{prefix}/"):
+                raise ArtifactStoreError("Supabase list returned an unsafe object")
             return name
-        return f"{prefix}{name}"
+        if name in {".", ".."} or "/" in name or "\\" in name:
+            raise ArtifactStoreError("Supabase list returned an unsafe object")
+        return f"{prefix}/{name}"

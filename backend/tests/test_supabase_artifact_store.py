@@ -434,25 +434,26 @@ def test_delete_uses_storage_batch_delete_and_404_is_idempotent() -> None:
     }
 
 
-def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() -> None:
+def test_delete_job_lists_each_kind_directory_and_handles_concurrent_insertion() -> None:
     responses = [
         httpx.Response(
             200,
             json=[
-                {"name": "users/user/jobs/job/original/a.pdf"},
-                {"name": "users/user/jobs/job/original/b.pdf"},
+                {"name": "a.pdf", "id": "object-a"},
+                {"name": "b.pdf", "id": "object-b"},
             ],
         ),
         httpx.Response(200, json={}),
-        httpx.Response(200, json=[{"name": "users/user/jobs/job/original/c.pdf"}]),
+        # Inserted concurrently after the first page was deleted.
+        httpx.Response(200, json=[{"name": "c.pdf", "id": "object-c"}]),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json=[]),
+        httpx.Response(200, json=[{"name": "result.pdf", "id": "object-r"}]),
         httpx.Response(200, json={}),
         httpx.Response(200, json=[]),
         httpx.Response(
             200,
-            json=[
-                {"name": "users/user/jobs/job/remediated/result.pdf"},
-                {"name": "users/user/jobs/job/report/report.json"},
-            ],
+            json=[{"name": "report.json", "id": "object-report"}],
         ),
         httpx.Response(200, json={}),
         httpx.Response(200, json=[]),
@@ -478,17 +479,22 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
         "https://trial-project.supabase.co/storage/v1/object/list/trial-originals",
         "https://trial-project.supabase.co/storage/v1/object/list/trial-results",
         "https://trial-project.supabase.co/storage/v1/object/list/trial-results",
+        "https://trial-project.supabase.co/storage/v1/object/list/trial-results",
+        "https://trial-project.supabase.co/storage/v1/object/list/trial-results",
     ]
     assert [_json_body(request) for request in list_requests] == [
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
-        {"prefix": "users/user/jobs/job/", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/original", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/original", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/original", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/remediated", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/remediated", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/report", "limit": 2, "offset": 0},
+        {"prefix": "users/user/jobs/job/report", "limit": 2, "offset": 0},
     ]
     assert [str(request.url) for request in delete_requests] == [
         "https://trial-project.supabase.co/storage/v1/object/trial-originals",
         "https://trial-project.supabase.co/storage/v1/object/trial-originals",
+        "https://trial-project.supabase.co/storage/v1/object/trial-results",
         "https://trial-project.supabase.co/storage/v1/object/trial-results",
     ]
     assert _json_body(delete_requests[0]) == {
@@ -501,34 +507,88 @@ def test_delete_job_paginates_both_buckets_and_batch_deletes_exact_owned_keys() 
         "prefixes": ["users/user/jobs/job/original/c.pdf"]
     }
     assert _json_body(delete_requests[2]) == {
-        "prefixes": [
-            "users/user/jobs/job/remediated/result.pdf",
-            "users/user/jobs/job/report/report.json",
-        ]
+        "prefixes": ["users/user/jobs/job/remediated/result.pdf"]
+    }
+    assert _json_body(delete_requests[3]) == {
+        "prefixes": ["users/user/jobs/job/report/report.json"]
     }
 
 
-def test_delete_job_rejects_malicious_list_entry_without_batch_delete() -> None:
+def test_delete_job_never_lists_recursive_job_root_folder_rows() -> None:
+    recorder = Recorder([])
+
+    def directory_handler(request: httpx.Request) -> httpx.Response:
+        request.read()
+        recorder.requests.append(request)
+        if _json_body(request)["prefix"] == "users/user/jobs/job/":
+            return httpx.Response(
+                200,
+                json=[
+                    {"name": "original", "id": None},
+                    {"name": "remediated", "id": None},
+                    {"name": "report", "id": None},
+                ],
+            )
+        return httpx.Response(200, json=[])
+
+    store = SupabaseArtifactStore(
+        BASE_URL,
+        SECRET,
+        "trial-originals",
+        "trial-results",
+        project_ref="trial-project",
+        transport=httpx.MockTransport(directory_handler),
+    )
+
+    store.delete_job("user", "job")
+
+    prefixes = [_json_body(request)["prefix"] for request in recorder.requests]
+    assert prefixes == [
+        "users/user/jobs/job/original",
+        "users/user/jobs/job/remediated",
+        "users/user/jobs/job/report",
+    ]
+    assert "users/user/jobs/job/" not in prefixes
+
+
+def test_delete_job_rejects_nested_folder_row_without_deleting_it() -> None:
     recorder = Recorder(
-        [
-            httpx.Response(200, json=[{"name": "users/other/jobs/job/original/a.pdf"}]),
-        ]
+        [httpx.Response(200, json=[{"name": "nested", "id": None}])]
     )
     store = _store(recorder)
 
-    with pytest.raises(ArtifactStoreError):
+    with pytest.raises(ArtifactStoreError, match="folder"):
+        store.delete_job("user", "job")
+
+    assert [request.method for request in recorder.requests] == ["POST"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../escape.pdf",
+        "nested/file.pdf",
+        "users/other/jobs/job/original/a.pdf",
+        "users/user/jobs/job/report/a.pdf",
+    ],
+)
+def test_delete_job_rejects_malicious_basename_or_foreign_full_key(name: str) -> None:
+    recorder = Recorder([httpx.Response(200, json=[{"name": name, "id": "object"}])])
+    store = _store(recorder)
+
+    with pytest.raises(ArtifactStoreError, match="unsafe"):
         store.delete_job("user", "job")
 
     assert [request.method for request in recorder.requests] == ["POST"]
 
 
 def test_delete_job_caps_pages_and_deletes_more_than_one_thousand_objects() -> None:
-    prefix = "users/user/jobs/job/"
     first_page = [
-        {"name": f"{prefix}original/{index}.pdf"} for index in range(1000)
+        {"name": f"{index}.pdf", "id": f"object-{index}"} for index in range(1000)
     ]
     second_page = [
-        {"name": f"{prefix}original/{index}.pdf"} for index in range(1000, 1005)
+        {"name": f"{index}.pdf", "id": f"object-{index}"}
+        for index in range(1000, 1005)
     ]
     recorder = Recorder(
         [
@@ -536,6 +596,7 @@ def test_delete_job_caps_pages_and_deletes_more_than_one_thousand_objects() -> N
             httpx.Response(200, json={}),
             httpx.Response(200, json=second_page),
             httpx.Response(200, json={}),
+            httpx.Response(200, json=[]),
             httpx.Response(200, json=[]),
             httpx.Response(200, json=[]),
         ]
@@ -567,7 +628,7 @@ def test_delete_job_caps_pages_and_deletes_more_than_one_thousand_objects() -> N
 
 
 def test_delete_job_stops_when_delete_makes_no_progress() -> None:
-    page = [{"name": "users/user/jobs/job/original/a.pdf"}]
+    page = [{"name": "a.pdf", "id": "object-a"}]
     recorder = Recorder(
         [
             httpx.Response(200, json=page),

@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+import threading
 
 import pytest
 from datetime import datetime, timedelta
@@ -22,6 +23,24 @@ class RecordingStore:
         destination.write_bytes(self.source.read_bytes())
         self.materializations.append((user_id, key, destination, destination_root))
         return destination
+
+
+class ThreadRecordingStore:
+    def __init__(self, source: Path):
+        self.source = source
+        self.materialize_thread = None
+        self.download_thread = None
+
+    def materialize(self, user_id, key, destination, *, destination_root):
+        self.materialize_thread = threading.get_ident()
+        ArtifactKey.parse(key).for_owner(user_id)
+        destination.write_bytes(self.source.read_bytes())
+        return destination
+
+    def download(self, user_id, key):
+        self.download_thread = threading.get_ident()
+        ArtifactKey.parse(key).for_owner(user_id)
+        return ArtifactDownload(signed_url="https://example.test/download")
 
 
 def test_factory_testing_local_root_override_is_deployment_scoped(tmp_path):
@@ -57,6 +76,38 @@ def test_materialized_upload_is_unique_and_cleaned(tmp_path, monkeypatch):
 
     assert not first_root.exists()
     assert not first.exists()
+
+
+def test_async_artifact_helpers_offload_blocking_store_calls(tmp_path):
+    from backend import main
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-private")
+    key = ArtifactKey("owner", "file-id", "original", "source.pdf").key
+    store = ThreadRecordingStore(source)
+
+    async def exercise():
+        event_loop_thread = threading.get_ident()
+        async with main.materialized_upload_async(
+            store, "owner", key, "source.pdf"
+        ) as materialized:
+            assert materialized.read_bytes() == b"%PDF-private"
+        response = await main.artifact_download_response_async(
+            store,
+            "owner",
+            key,
+            filename="source.pdf",
+            media_type="application/pdf",
+        )
+        return event_loop_thread, response
+
+    event_loop_thread, response = asyncio.run(exercise())
+
+    assert response.status_code == 303
+    assert store.materialize_thread is not None
+    assert store.download_thread is not None
+    assert store.materialize_thread != event_loop_thread
+    assert store.download_thread != event_loop_thread
 
 
 def test_trial_rejects_legacy_absolute_upload_path(tmp_path, monkeypatch):

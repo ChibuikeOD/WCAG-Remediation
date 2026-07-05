@@ -67,9 +67,9 @@ async def clean_expired_documents(
                 job_ids = list(db.scalars(
                     select(RemediationJob.id).where(RemediationJob.file_id == file_id)
                 ))
-                _delete_original(store, file_rec)
+                await asyncio.to_thread(_delete_original, store, file_rec)
                 for job_id in job_ids:
-                    store.delete_job(file_rec.owner_id, job_id)
+                    await asyncio.to_thread(store.delete_job, file_rec.owner_id, job_id)
                 db.delete(file_rec)
                 db.commit()
             except Exception:

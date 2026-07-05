@@ -55,6 +55,7 @@ from .storage import (
     ArtifactAccessDenied,
     ArtifactKey,
     ArtifactNotFound,
+    ArtifactRetryableError,
     ArtifactStore,
     ArtifactStoreError,
     create_artifact_store,
@@ -250,6 +251,25 @@ def artifact_download_response(
     return RedirectResponse(url=download.signed_url, status_code=303)
 
 
+async def artifact_download_response_async(
+    store: ArtifactStore,
+    user_id: str,
+    key: str,
+    *,
+    filename: str,
+    media_type: str,
+):
+    """Build a download response without blocking the event loop on storage I/O."""
+    return await run_in_threadpool(
+        artifact_download_response,
+        store,
+        user_id,
+        key,
+        filename=filename,
+        media_type=media_type,
+    )
+
+
 @contextmanager
 def materialized_upload(
     store: ArtifactStore,
@@ -291,6 +311,22 @@ def materialized_upload(
             destination,
             destination_root=root,
         )
+
+
+@asynccontextmanager
+async def materialized_upload_async(
+    store: ArtifactStore,
+    user_id: str,
+    key_or_legacy_path: str,
+    filename: str,
+):
+    """Materialize an upload from async route code without blocking the loop."""
+    materializer = materialized_upload(store, user_id, key_or_legacy_path, filename)
+    path = await run_in_threadpool(materializer.__enter__)
+    try:
+        yield path
+    finally:
+        await run_in_threadpool(materializer.__exit__, None, None, None)
 
 
 @asynccontextmanager
@@ -822,7 +858,7 @@ async def analyze_document(
         file_info = file_storage[request.file_id]
     except KeyError:
         raise HTTPException(status_code=404, detail="File not found") from None
-    with materialized_upload(
+    async with materialized_upload_async(
         artifact_store_for(http_request),
         user.id,
         file_info["file_path"],
@@ -851,13 +887,13 @@ async def analyze_url_get(
 # Remediate Endpoint
 # =============================================================================
 
-def _replay_trial_response(
+async def _replay_trial_response(
     job: RemediationJob, store: ArtifactStore, user_id: str
 ) -> RemediationResponse:
     if not job.output_artifact_key or not job.report_artifact_key:
         raise TrialStateError("trial artifact metadata is missing")
-    store.download(user_id, job.output_artifact_key)
-    store.download(user_id, job.report_artifact_key)
+    await run_in_threadpool(store.download, user_id, job.output_artifact_key)
+    await run_in_threadpool(store.download, user_id, job.report_artifact_key)
     if not job.response_json:
         raise TrialStateError("trial response metadata is missing")
     response = RemediationResponse.model_validate_json(job.response_json)
@@ -954,7 +990,12 @@ async def _remediate_trial(
         if existing is not None:
             if existing.status == "succeeded":
                 try:
-                    return _replay_trial_response(existing, store, user.id)
+                    return await _replay_trial_response(existing, store, user.id)
+                except ArtifactRetryableError:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"code": "trial_artifact_storage_unavailable"},
+                    ) from None
                 except (ArtifactStoreError, TrialStateError, ValueError):
                     raise HTTPException(
                         status_code=409,
@@ -1008,7 +1049,8 @@ async def _remediate_trial(
         temp_context = TemporaryDirectory(prefix=f"wcag-job-{job_id}-")
         temp_dir = Path(temp_context.name)
         output_path = temp_dir / output_filename
-        source_path = store.materialize(
+        source_path = await run_in_threadpool(
+            store.materialize,
             user.id,
             file_rec.file_path,
             temp_dir / safe_name,
@@ -1121,7 +1163,7 @@ async def _remediate_trial(
         await _stop_trial_heartbeat(heartbeat_task, propagate=False)
         if published and not committed and job_id is not None:
             try:
-                store.delete_job(user.id, job_id)
+                await run_in_threadpool(store.delete_job, user.id, job_id)
             except Exception:
                 logger.exception("Failed to clean published remediation artifacts")
         if temp_context is not None:
@@ -1180,7 +1222,7 @@ async def remediate_document(
         file_info["file_path"],
         file_info["original_filename"],
     )
-    file_path = materializer.__enter__()
+    file_path = await run_in_threadpool(materializer.__enter__)
     
     results: list[RemediationResult] = []
     remediated_path: Optional[str] = None
@@ -1276,7 +1318,7 @@ async def remediate_document(
         logger.exception("Remediation processing failed")
         raise HTTPException(status_code=500, detail="Remediation processing failed") from None
     finally:
-        materializer.__exit__(None, None, None)
+        await run_in_threadpool(materializer.__exit__, None, None, None)
 
 
 @app.get("/remediate/download/{report_id}")
@@ -1312,13 +1354,18 @@ async def download_remediated_file(
             if job is None:
                 raise HTTPException(status_code=404, detail="Remediated file not found")
             try:
-                return artifact_download_response(
+                return await artifact_download_response_async(
                     artifact_store_for(request),
                     user.id,
                     job.output_artifact_key,
                     filename=f"remediated_{Path(file_rec.filename).name}",
                     media_type="application/pdf",
                 )
+            except ArtifactRetryableError:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "trial_artifact_storage_unavailable"},
+                ) from None
             except (ArtifactStoreError, ValueError):
                 raise HTTPException(
                     status_code=409,
@@ -1381,13 +1428,18 @@ async def download_remediation_report_by_id(
             if job is None or not job.report_artifact_key:
                 raise HTTPException(status_code=404, detail="Remediation report not found")
             try:
-                return artifact_download_response(
+                return await artifact_download_response_async(
                     artifact_store_for(request),
                     user.id,
                     job.report_artifact_key,
                     filename=ArtifactKey.parse(job.report_artifact_key).filename,
                     media_type="application/pdf",
                 )
+            except ArtifactRetryableError:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "trial_artifact_storage_unavailable"},
+                ) from None
             except (ArtifactStoreError, ValueError):
                 raise HTTPException(
                     status_code=409,
@@ -1440,7 +1492,7 @@ async def analyze_pdf_document(
     if file_info["file_type"] != "pdf":
         raise HTTPException(status_code=400, detail="File is not a PDF")
     
-    with materialized_upload(
+    async with materialized_upload_async(
         artifact_store_for(request), user.id, file_info["file_path"],
         file_info["original_filename"],
     ) as file_path:
@@ -1510,7 +1562,7 @@ async def remediate_pdf_document(
         artifact_store_for(request), user.id, file_info["file_path"],
         file_info["original_filename"],
     )
-    file_path = materializer.__enter__()
+    file_path = await run_in_threadpool(materializer.__enter__)
     try:
         from .pdf_accessibility import PDFRemediator, PDFAccessibilityAnalyzer
         
@@ -1599,7 +1651,7 @@ async def remediate_pdf_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        materializer.__exit__(None, None, None)
+        await run_in_threadpool(materializer.__exit__, None, None, None)
 
 
 @app.get("/pdf/report/{filename}")
@@ -1661,7 +1713,7 @@ async def download_pdf(
         ArtifactKey.parse(file_info["file_path"])
     except ValueError:
         try:
-            with materialized_upload(
+            async with materialized_upload_async(
                 artifact_store_for(request), user.id, file_info["file_path"],
                 file_info["original_filename"],
             ) as file_path:
@@ -1672,7 +1724,7 @@ async def download_pdf(
         except ArtifactStoreError:
             raise HTTPException(status_code=404, detail="File not found") from None
     try:
-        return artifact_download_response(
+        return await artifact_download_response_async(
             artifact_store_for(request), user.id, file_info["file_path"],
             filename=file_info["original_filename"], media_type="application/pdf",
         )
@@ -1735,7 +1787,7 @@ async def compare_tagging_pipelines(
         artifact_store_for(http_request), user.id, file_info["file_path"],
         file_info["original_filename"],
     )
-    file_path = materializer.__enter__()
+    file_path = await run_in_threadpool(materializer.__enter__)
 
     try:
         from .tagging_compare import (
@@ -1767,7 +1819,7 @@ async def compare_tagging_pipelines(
         logger.error("Tagging comparison failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Tagging comparison failed: {str(e)}")
     finally:
-        materializer.__exit__(None, None, None)
+        await run_in_threadpool(materializer.__exit__, None, None, None)
 
 
 @app.post("/pdf/debug/overlays")
@@ -1787,7 +1839,7 @@ async def generate_layout_overlays(
         artifact_store_for(http_request), user.id, file_info["file_path"],
         file_info["original_filename"],
     )
-    file_path = materializer.__enter__()
+    file_path = await run_in_threadpool(materializer.__enter__)
 
     try:
         from .layout_model import DocumentLayoutAnalyzer
@@ -1808,7 +1860,7 @@ async def generate_layout_overlays(
         logger.error(f"Overlay generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Overlay generation failed: {str(e)}")
     finally:
-        materializer.__exit__(None, None, None)
+        await run_in_threadpool(materializer.__exit__, None, None, None)
 
 
 # =============================================================================
@@ -2214,7 +2266,7 @@ async def get_document_images(
         db_conn.close()
         
     file_info = _resolve_document_from_report(report_id, user.id)
-    with materialized_upload(
+    async with materialized_upload_async(
         artifact_store_for(request), user.id, file_info["file_path"],
         file_info["original_filename"],
     ) as file_path:
@@ -2288,7 +2340,7 @@ async def generate_alt_text_endpoint(
     user: User = Depends(require_user),
 ):
     file_info = _resolve_document_from_report(report_id, user.id)
-    with materialized_upload(
+    async with materialized_upload_async(
         artifact_store_for(http_request), user.id, file_info["file_path"],
         file_info["original_filename"],
     ) as file_path:
@@ -2433,7 +2485,7 @@ async def resolve_alt_text_endpoint(
     user: User = Depends(require_user),
 ):
     file_info = _resolve_document_from_report(report_id, user.id)
-    with materialized_upload(
+    async with materialized_upload_async(
         artifact_store_for(http_request), user.id, file_info["file_path"],
         file_info["original_filename"],
     ) as file_path:

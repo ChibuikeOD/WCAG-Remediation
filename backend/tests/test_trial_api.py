@@ -22,7 +22,7 @@ from backend.auth import get_token_verifier, require_user
 from backend.config import settings
 from backend.main import app
 from backend.models import AccessibilityReport, DocumentInfo
-from backend.storage import ArtifactKey, LocalArtifactStore
+from backend.storage import ArtifactKey, ArtifactRetryableError, LocalArtifactStore
 
 
 def pdf_bytes(page_count=1):
@@ -556,6 +556,35 @@ def test_corrupt_succeeded_replay_is_safe_conflict_without_rerun(
 
     assert retry.status_code == 409
     assert retry.json()["detail"]["code"] == "trial_remediation_state_invalid"
+    assert calls == 1
+
+
+def test_retryable_storage_failure_on_replay_stays_retryable_without_rerun(
+    trial_client, monkeypatch
+):
+    client, session_factory, _ = trial_client
+    upload = upload_pdf(client, pages=1)
+    report_id = seed_report(session_factory, upload.json()["file_id"], "retry-replay")
+    calls = 0
+
+    def successful(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(main_module.PDFRemediator, "fix_all", successful)
+    first = client.post("/remediate", json={"report_id": report_id})
+    assert first.status_code == 200
+
+    def transient_download(*args, **kwargs):
+        raise ArtifactRetryableError("temporary storage outage")
+
+    monkeypatch.setattr(app.state.artifact_store, "download", transient_download)
+
+    retry = client.post("/remediate", json={"report_id": report_id})
+
+    assert retry.status_code == 503
+    assert retry.json()["detail"]["code"] == "trial_artifact_storage_unavailable"
     assert calls == 1
 
 

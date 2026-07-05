@@ -1,5 +1,10 @@
 """Validate that PDFAccess trial and testing deployments are isolated.
 
+The trial and testing sites must be two separate Vercel project imports from
+the same repository. Configure these values as project-level environment
+variables in each Vercel project; do not rely on shared/global secrets for
+database URLs, Supabase storage identifiers, or auth-bypass flags.
+
 Usage:
     python scripts/validate_deployment.py deployment/trial.env.example deployment/testing.env.example
 """

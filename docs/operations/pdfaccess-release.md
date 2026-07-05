@@ -19,6 +19,7 @@ This runbook keeps the public free-trial deployment and the direct testing deplo
 - Configure Supabase Auth magic links and email confirmation before inviting testers. Only verified users receive trial quota or promotional/question emails.
 - Configure Resend as the Supabase SMTP provider:
   - verified sending domain: `pdfaccess.org`;
+  - DNS records: add the Resend-provided SPF/TXT, DKIM, and return-path/bounce records at the DNS host for `pdfaccess.org`, then wait for Resend verification before enabling production email;
   - sender/reply-to mailbox: `support@pdfaccess.org`;
   - webhook endpoint: the trial deployment only;
   - required physical postal address: enter the business mailing address in Resend/compliance settings, never in tracked files.

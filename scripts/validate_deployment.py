@@ -132,7 +132,13 @@ def _origin_identity(value: str, key: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise DeploymentValidationError(f"{key} must be an http(s) URL")
-    if parsed.username or parsed.password or parsed.path not in {"", "/"}:
+    if (
+        parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
         raise DeploymentValidationError(f"{key} must be an origin without path")
     port = f":{parsed.port}" if parsed.port is not None else ""
     return f"{parsed.scheme}://{parsed.hostname.lower()}{port}"

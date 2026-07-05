@@ -132,6 +132,24 @@ def test_validator_rejects_trial_public_origin_with_insecure_scheme_or_path(key)
         validate_deployment_pair(trial, testing)
 
 
+@pytest.mark.parametrize(
+    "key,bad_value",
+    [
+        ("PUBLIC_SITE_URL", "https://pdfaccess.org?x=1"),
+        ("PUBLIC_APP_ORIGIN", "https://pdfaccess.org#frag"),
+        ("CORS_ORIGINS_LIST", "https://pdfaccess.org?x=1"),
+        ("CORS_ORIGINS_LIST", "https://pdfaccess.org#frag"),
+    ],
+)
+def test_validator_rejects_trial_origins_with_query_or_fragment(key, bad_value):
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    trial[key] = bad_value
+
+    with pytest.raises(DeploymentValidationError, match=key):
+        validate_deployment_pair(trial, testing)
+
+
 def test_validator_rejects_trial_cors_allow_all_bypass():
     trial = load_env_file(TRIAL_ENV)
     testing = load_env_file(TESTING_ENV)

@@ -24,6 +24,17 @@ def test_trial_mode_rejects_auth_bypass():
         )
 
 
+def test_trial_mode_rejects_cors_allow_all():
+    with pytest.raises(ValidationError, match="CORS_ALLOW_ALL"):
+        Settings(
+            DEPLOYMENT_MODE="trial",
+            DISABLE_AUTH=False,
+            CORS_ALLOW_ALL=True,
+            _env_file=None,
+            **TRIAL_SUPABASE_SETTINGS,
+        )
+
+
 def test_testing_mode_allows_current_bypass():
     value = Settings(
         DEPLOYMENT_MODE="testing",

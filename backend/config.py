@@ -166,6 +166,7 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "https://wcag-remediation.vercel.app"
     ]
+    CORS_ALLOW_ALL: bool = False
 
     @model_validator(mode="after")
     def validate_trial_deployment(self) -> "Settings":
@@ -174,6 +175,8 @@ class Settings(BaseSettings):
 
         if self.DISABLE_AUTH:
             raise ValueError("DISABLE_AUTH must be false in trial mode")
+        if self.CORS_ALLOW_ALL:
+            raise ValueError("CORS_ALLOW_ALL must be false in trial mode")
 
         required_supabase_settings = (
             "SUPABASE_URL",
@@ -245,7 +248,7 @@ if _origins_env:
 # In serverless demo deployments it's common to serve the frontend and API
 # from the same origin, but preview domains vary. Allow opting into permissive
 # CORS via env without changing code.
-_allow_all = str(getattr(settings, "CORS_ALLOW_ALL", os.getenv("CORS_ALLOW_ALL", "false"))).lower() in {
+_allow_all = str(settings.CORS_ALLOW_ALL).lower() in {
     "1",
     "true",
     "yes",

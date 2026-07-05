@@ -120,3 +120,35 @@ def test_validator_rejects_trial_cors_origins_outside_exact_public_origin(bad_co
 
     with pytest.raises(DeploymentValidationError, match="CORS_ORIGINS_LIST"):
         validate_deployment_pair(trial, testing)
+
+
+@pytest.mark.parametrize("key", ["PUBLIC_SITE_URL", "PUBLIC_APP_ORIGIN"])
+def test_validator_rejects_trial_public_origin_with_insecure_scheme_or_path(key):
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    trial[key] = "http://pdfaccess.org/some/path?x=1"
+
+    with pytest.raises(DeploymentValidationError, match=key):
+        validate_deployment_pair(trial, testing)
+
+
+def test_validator_rejects_trial_cors_allow_all_bypass():
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    trial["CORS_ALLOW_ALL"] = "true"
+
+    with pytest.raises(DeploymentValidationError, match="CORS_ALLOW_ALL"):
+        validate_deployment_pair(trial, testing)
+
+
+def test_runtime_cors_does_not_allow_vercel_wildcard_regex():
+    from backend.main import app
+    from fastapi.middleware.cors import CORSMiddleware
+
+    cors = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls is CORSMiddleware
+    )
+
+    assert cors.kwargs.get("allow_origin_regex") is None

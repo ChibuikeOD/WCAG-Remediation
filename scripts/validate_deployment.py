@@ -146,9 +146,13 @@ def _validate_origin_field(
     forbidden_domain: str,
     label: str,
 ) -> None:
+    origin = _origin_identity(env[key], key)
     host = _host_for_url(env[key], key)
-    if host != expected_domain:
-        raise DeploymentValidationError(f"{label} {key} must use {expected_domain}")
+    expected_origin = f"https://{expected_domain}"
+    if origin != expected_origin:
+        raise DeploymentValidationError(
+            f"{label} {key} must be exactly {expected_origin}"
+        )
     if host == forbidden_domain:
         raise DeploymentValidationError(
             f"{label} {key} must not use {forbidden_domain}"
@@ -218,6 +222,10 @@ def validate_deployment_pair(
         raise DeploymentValidationError("testing DEPLOYMENT_MODE must be testing")
     if _bool(trial["DISABLE_AUTH"], "trial DISABLE_AUTH"):
         raise DeploymentValidationError("trial DISABLE_AUTH must be false")
+    if _bool(trial.get("CORS_ALLOW_ALL", "false"), "trial CORS_ALLOW_ALL"):
+        raise DeploymentValidationError("trial CORS_ALLOW_ALL must be false")
+    if _bool(testing.get("CORS_ALLOW_ALL", "false"), "testing CORS_ALLOW_ALL"):
+        raise DeploymentValidationError("testing CORS_ALLOW_ALL must be false")
     if not _bool(testing["DISABLE_AUTH"], "testing DISABLE_AUTH"):
         raise DeploymentValidationError(
             "testing DISABLE_AUTH should stay true until tester lockdown"

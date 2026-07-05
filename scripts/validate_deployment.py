@@ -128,6 +128,16 @@ def _host_for_url(value: str, key: str) -> str:
     return parsed.hostname.lower()
 
 
+def _origin_identity(value: str, key: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise DeploymentValidationError(f"{key} must be an http(s) URL")
+    if parsed.username or parsed.password or parsed.path not in {"", "/"}:
+        raise DeploymentValidationError(f"{key} must be an origin without path")
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme}://{parsed.hostname.lower()}{port}"
+
+
 def _validate_origin_field(
     env: dict[str, str],
     *,
@@ -150,13 +160,22 @@ def _validate_cors_origins(
     *,
     expected_domain: str,
     forbidden_domain: str,
+    allowed_origins: set[str],
     label: str,
 ) -> None:
     origins = [origin.strip() for origin in env["CORS_ORIGINS_LIST"].split(",")]
     origins = [origin for origin in origins if origin]
     if not origins:
         raise DeploymentValidationError(f"{label} CORS_ORIGINS_LIST is required")
-    hosts = {_host_for_url(origin, "CORS_ORIGINS_LIST") for origin in origins}
+    normalized_origins = {
+        _origin_identity(origin, "CORS_ORIGINS_LIST") for origin in origins
+    }
+    if normalized_origins != allowed_origins:
+        allowed = ", ".join(sorted(allowed_origins))
+        raise DeploymentValidationError(
+            f"{label} CORS_ORIGINS_LIST must exactly match: {allowed}"
+        )
+    hosts = {urlsplit(origin).hostname for origin in normalized_origins}
     if expected_domain not in hosts:
         raise DeploymentValidationError(
             f"{label} CORS_ORIGINS_LIST must include {expected_domain}"
@@ -171,15 +190,19 @@ def _database_identity(database_url: str) -> tuple[str, str, int | None, str]:
     parsed = urlsplit(database_url)
     if not parsed.scheme:
         raise DeploymentValidationError("DATABASE_URL must include a scheme")
-    if parsed.scheme.startswith("sqlite"):
+    base_scheme = parsed.scheme.split("+", 1)[0]
+    base_scheme = {"postgres": "postgresql"}.get(base_scheme, base_scheme)
+    if base_scheme.startswith("sqlite"):
         database_name = parsed.path or parsed.netloc
-        return (parsed.scheme, "", None, database_name)
+        return (base_scheme, "", None, database_name)
     if not parsed.hostname:
         raise DeploymentValidationError("DATABASE_URL must include a host")
     database_name = parsed.path.lstrip("/")
     if not database_name:
         raise DeploymentValidationError("DATABASE_URL must include a database name")
-    return (parsed.scheme, parsed.hostname.lower(), parsed.port, database_name)
+    default_ports = {"postgresql": 5432, "mysql": 3306, "mariadb": 3306}
+    port = parsed.port if parsed.port is not None else default_ports.get(base_scheme)
+    return (base_scheme, parsed.hostname.lower(), port, database_name)
 
 
 def validate_deployment_pair(
@@ -224,6 +247,7 @@ def validate_deployment_pair(
         trial,
         expected_domain="pdfaccess.org",
         forbidden_domain="wcag-remediation.vercel.app",
+        allowed_origins={"https://pdfaccess.org"},
         label="trial",
     )
     _validate_origin_field(
@@ -244,6 +268,11 @@ def validate_deployment_pair(
         testing,
         expected_domain="wcag-remediation.vercel.app",
         forbidden_domain="pdfaccess.org",
+        allowed_origins={
+            "https://wcag-remediation.vercel.app",
+            "http://localhost:3000",
+            "http://localhost:5173",
+        },
         label="testing",
     )
 

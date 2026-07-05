@@ -72,6 +72,24 @@ def test_validator_rejects_same_database_with_different_credentials():
 
 
 @pytest.mark.parametrize(
+    "testing_database_url",
+    [
+        "postgresql://different_user:different_password@trial-db.example.invalid/pdfaccess_trial",
+        "postgresql+psycopg://different_user:different_password@trial-db.example.invalid:5432/pdfaccess_trial",
+    ],
+)
+def test_validator_rejects_same_database_with_driver_or_default_port_variants(
+    testing_database_url,
+):
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    testing["DATABASE_URL"] = testing_database_url
+
+    with pytest.raises(DeploymentValidationError, match="DATABASE_URL"):
+        validate_deployment_pair(trial, testing)
+
+
+@pytest.mark.parametrize(
     "key,bad_value",
     [
         ("PUBLIC_APP_ORIGIN", "https://wcag-remediation.vercel.app"),
@@ -84,4 +102,21 @@ def test_validator_rejects_trial_origins_pointing_at_testing_domain(key, bad_val
     trial[key] = bad_value
 
     with pytest.raises(DeploymentValidationError, match=key):
+        validate_deployment_pair(trial, testing)
+
+
+@pytest.mark.parametrize(
+    "bad_cors",
+    [
+        "https://pdfaccess.org,https://evil.example",
+        "https://pdfaccess.org,http://localhost:3000",
+        "http://pdfaccess.org",
+    ],
+)
+def test_validator_rejects_trial_cors_origins_outside_exact_public_origin(bad_cors):
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    trial["CORS_ORIGINS_LIST"] = bad_cors
+
+    with pytest.raises(DeploymentValidationError, match="CORS_ORIGINS_LIST"):
         validate_deployment_pair(trial, testing)

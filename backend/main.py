@@ -15,7 +15,8 @@ from glob import escape as glob_escape
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from tempfile import TemporaryDirectory
 import logging
 import json
 import os
@@ -26,7 +27,7 @@ import sys
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
@@ -50,6 +51,14 @@ from .database import (
 from .retention_runner import clean_expired_documents
 from .auth import router as auth_router, require_trial_user, require_user, User
 from .trial import InsufficientPages, TrialService, TrialStateError
+from .storage import (
+    ArtifactAccessDenied,
+    ArtifactKey,
+    ArtifactNotFound,
+    ArtifactStore,
+    ArtifactStoreError,
+    create_artifact_store,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -217,6 +226,73 @@ file_storage = DbFileStorage()
 report_storage = DbReportStorage()
 
 
+def artifact_store_for(request: Request) -> ArtifactStore:
+    """Return this application's owned artifact adapter."""
+    store = getattr(request.app.state, "artifact_store", None)
+    if store is None:
+        raise RuntimeError("artifact store is not initialized")
+    return store
+
+
+def artifact_download_response(
+    store: ArtifactStore,
+    user_id: str,
+    key: str,
+    *,
+    filename: str,
+    media_type: str,
+):
+    download = store.download(user_id, key)
+    if download.local_path is not None:
+        return FileResponse(
+            path=download.local_path, filename=filename, media_type=media_type
+        )
+    return RedirectResponse(url=download.signed_url, status_code=303)
+
+
+@contextmanager
+def materialized_upload(
+    store: ArtifactStore,
+    user_id: str,
+    key_or_legacy_path: str,
+    filename: str,
+):
+    """Yield an owned upload as a local path for the duration of one operation.
+
+    New rows contain provider-neutral artifact keys. Existing testing databases
+    may still contain absolute paths, but only beneath the configured upload
+    directory; trial deployments never read legacy paths.
+    """
+    try:
+        ArtifactKey.parse(key_or_legacy_path).for_owner(user_id)
+    except (ArtifactAccessDenied, ValueError):
+        if settings.DEPLOYMENT_MODE != "testing":
+            raise ArtifactAccessDenied("legacy upload paths are disabled") from None
+        legacy = Path(key_or_legacy_path)
+        if not legacy.is_absolute():
+            raise ArtifactAccessDenied("legacy upload path must be absolute") from None
+        try:
+            resolved = legacy.resolve(strict=True)
+            root = settings.UPLOAD_DIR.resolve(strict=True)
+        except OSError:
+            raise ArtifactNotFound("legacy upload does not exist") from None
+        if not resolved.is_file() or not resolved.is_relative_to(root):
+            raise ArtifactAccessDenied("legacy upload escapes the upload root")
+        yield resolved
+        return
+
+    safe_name = Path(filename).name or "artifact"
+    with TemporaryDirectory(prefix="wcag-artifact-") as directory:
+        root = Path(directory)
+        destination = root / safe_name
+        yield store.materialize(
+            user_id,
+            key_or_legacy_path,
+            destination,
+            destination_root=root,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown."""
@@ -228,20 +304,31 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database schema initialized.")
     
-    # Start retention runner background worker
-    app.state.retention_task = asyncio.create_task(clean_expired_documents())
-    logger.info("Background retention runner task started.")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Stopping background retention runner...")
-    app.state.retention_task.cancel()
+    # Each application instance owns its adapter and retention worker. Passing
+    # the testing root explicitly prevents one test/deployment from inheriting
+    # another instance's local resources.
+    store = create_artifact_store(
+        settings, local_root=settings.ARTIFACT_STORAGE_ROOT
+    )
+    app.state.artifact_store = store
+    retention_task = None
     try:
-        await app.state.retention_task
-    except asyncio.CancelledError:
-        pass
-    logger.info("Shutting down WCAG Accessibility Remediation Platform")
+        retention_task = asyncio.create_task(
+            clean_expired_documents(store=store, session_factory=SessionLocal)
+        )
+        app.state.retention_task = retention_task
+        logger.info("Background retention runner task started.")
+        yield
+    finally:
+        logger.info("Stopping background retention runner...")
+        if retention_task is not None:
+            retention_task.cancel()
+            try:
+                await retention_task
+            except asyncio.CancelledError:
+                pass
+        store.close()
+        logger.info("Shutting down WCAG Accessibility Remediation Platform")
 
 
 app = FastAPI(
@@ -369,7 +456,11 @@ async def get_trial_balance(user: User = Depends(require_trial_user)):
         db.close()
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_file(file: UploadFile = File(...), user: User = Depends(require_user)):
+async def upload_file(
+    file: UploadFile = File(...),
+    user: User = Depends(require_user),
+    request: Request = None,
+):
     """
     Upload an HTML or PDF file for accessibility analysis.
     
@@ -395,10 +486,11 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
     file_type = "pdf" if file_ext == ".pdf" else "html"
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     staging_path = settings.UPLOAD_DIR / f".{file_id}.uploading"
-    save_path = settings.UPLOAD_DIR / f"{file_id}{file_ext}"
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     total_bytes = 0
     page_count = None
+    artifact_key = None
+    store = artifact_store_for(request) if request is not None else app.state.artifact_store
     try:
         async with aiofiles.open(staging_path, "wb") as staged:
             while True:
@@ -440,12 +532,21 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
                     detail=f"PDF has too many pages. Maximum: {settings.MAX_PAGES_PDF}",
                 )
 
-        os.replace(staging_path, save_path)
+        # Uploads use the file id as their namespace until a remediation job
+        # exists. Only the provider-neutral key is persisted.
+        artifact_key = await run_in_threadpool(
+            store.put,
+            user.id,
+            file_id,
+            "original",
+            staging_path,
+            Path(filename).name or f"document{file_ext}",
+        )
         file_storage[file_id] = {
             "id": file_id,
             "original_filename": filename,
             "file_type": file_type,
-            "file_path": str(save_path),
+            "file_path": artifact_key,
             "file_size": total_bytes,
             "page_count": page_count,
             "uploaded_at": datetime.now().isoformat(),
@@ -453,11 +554,14 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
         }
     except HTTPException:
         staging_path.unlink(missing_ok=True)
-        save_path.unlink(missing_ok=True)
         raise
     except Exception:
+        if artifact_key is not None:
+            try:
+                await run_in_threadpool(store.delete, user.id, artifact_key)
+            except Exception:
+                logger.exception("Failed to compensate uploaded artifact")
         staging_path.unlink(missing_ok=True)
-        save_path.unlink(missing_ok=True)
         logger.exception("Failed to persist uploaded file metadata")
         raise HTTPException(status_code=500, detail="Unable to store uploaded file") from None
     finally:
@@ -479,8 +583,11 @@ async def upload_file(file: UploadFile = File(...), user: User = Depends(require
 # Analyze Endpoint
 # =============================================================================
 
-@app.post("/analyze", response_model=AccessibilityReport)
-async def analyze_document(request: AnalyzeRequest, user: User = Depends(require_user)):
+async def _analyze_document_impl(
+    request: AnalyzeRequest,
+    user: User,
+    materialized_path: Path | None = None,
+):
     """
     Analyze a document or URL for accessibility issues.
     
@@ -518,7 +625,9 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
             raise HTTPException(status_code=404, detail="File not found")
         
         file_info = file_storage[request.file_id]
-        file_path = Path(file_info["file_path"])
+        if materialized_path is None:
+            raise RuntimeError("uploaded artifact was not materialized")
+        file_path = materialized_path
         
         if file_info["file_type"] == "html":
             # Parse and analyze HTML
@@ -701,6 +810,27 @@ async def analyze_document(request: AnalyzeRequest, user: User = Depends(require
     return report
 
 
+@app.post("/analyze", response_model=AccessibilityReport)
+async def analyze_document(
+    request: AnalyzeRequest,
+    http_request: Request,
+    user: User = Depends(require_user),
+):
+    if not request.file_id:
+        return await _analyze_document_impl(request, user)
+    try:
+        file_info = file_storage[request.file_id]
+    except KeyError:
+        raise HTTPException(status_code=404, detail="File not found") from None
+    with materialized_upload(
+        artifact_store_for(http_request),
+        user.id,
+        file_info["file_path"],
+        file_info["original_filename"],
+    ) as path:
+        return await _analyze_document_impl(request, user, path)
+
+
 @app.get("/analyze/url")
 async def analyze_url_get(
     url: str = Query(..., description="URL to analyze"),
@@ -714,47 +844,20 @@ async def analyze_url_get(
     Convenience endpoint for quick URL analysis.
     """
     request = AnalyzeRequest(url=url, target_level=target_level, include_aaa=include_aaa)
-    return await analyze_document(request, user)
+    return await _analyze_document_impl(request, user)
 
 
 # =============================================================================
 # Remediate Endpoint
 # =============================================================================
 
-def _remove_contained_tree(path: Path | None, allowed_root: Path) -> None:
-    if path is None or not path.exists():
-        return
-    resolved = path.resolve()
-    root = allowed_root.resolve()
-    if resolved == root or not resolved.is_relative_to(root):
-        raise RuntimeError("Refusing to remove path outside artifact root")
-    shutil.rmtree(resolved)
-
-
-def _resolve_trial_artifact(key: str | None, job_id: str) -> Path:
-    if not key:
+def _replay_trial_response(
+    job: RemediationJob, store: ArtifactStore, user_id: str
+) -> RemediationResponse:
+    if not job.output_artifact_key or not job.report_artifact_key:
         raise TrialStateError("trial artifact metadata is missing")
-    root = settings.OUTPUT_DIR.resolve()
-    jobs_root = (root / "jobs").resolve()
-    if jobs_root.parent != root or jobs_root.name != "jobs":
-        raise TrialStateError("trial jobs artifact root is invalid")
-    job_root = (jobs_root / job_id).resolve()
-    if (
-        job_root.parent != jobs_root
-        or job_root.name != job_id
-        or not job_root.is_relative_to(jobs_root)
-    ):
-        raise TrialStateError("trial job artifact root is invalid")
-    candidate = (root / key).resolve()
-    if not candidate.is_relative_to(job_root) or not candidate.is_file():
-        raise TrialStateError("trial artifact metadata is invalid")
-    return candidate
-
-
-def _replay_trial_response(job: RemediationJob) -> RemediationResponse:
-    _resolve_trial_artifact(job.output_artifact_key, job.id)
-    if job.report_artifact_key:
-        _resolve_trial_artifact(job.report_artifact_key, job.id)
+    store.download(user_id, job.output_artifact_key)
+    store.download(user_id, job.report_artifact_key)
     if not job.response_json:
         raise TrialStateError("trial response metadata is missing")
     response = RemediationResponse.model_validate_json(job.response_json)
@@ -820,14 +923,14 @@ async def _stop_trial_heartbeat(
 
 
 async def _remediate_trial(
-    request: RemediationRequest, user: User
+    request: RemediationRequest, user: User, store: ArtifactStore
 ) -> RemediationResponse:
     db = SessionLocal()
     service = TrialService(db)
     job_id = None
     reservation_active = False
     temp_dir = None
-    final_dir = None
+    temp_context = None
     published = False
     committed = False
     heartbeat_task = None
@@ -851,8 +954,8 @@ async def _remediate_trial(
         if existing is not None:
             if existing.status == "succeeded":
                 try:
-                    return _replay_trial_response(existing)
-                except (TrialStateError, ValueError):
+                    return _replay_trial_response(existing, store, user.id)
+                except (ArtifactStoreError, TrialStateError, ValueError):
                     raise HTTPException(
                         status_code=409,
                         detail={"code": "trial_remediation_state_invalid"},
@@ -902,14 +1005,15 @@ async def _remediate_trial(
 
         safe_name = Path(file_rec.filename).name or "document.pdf"
         output_filename = f"remediated_{safe_name}"
-        temp_root = settings.OUTPUT_DIR / ".tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
-        temp_dir = temp_root / f"{job_id}-{uuid.uuid4()}"
-        temp_dir.mkdir()
-        final_dir = settings.OUTPUT_DIR / "jobs" / job_id
-        final_dir.parent.mkdir(parents=True, exist_ok=True)
+        temp_context = TemporaryDirectory(prefix=f"wcag-job-{job_id}-")
+        temp_dir = Path(temp_context.name)
         output_path = temp_dir / output_filename
-        source_path = Path(file_rec.file_path)
+        source_path = store.materialize(
+            user.id,
+            file_rec.file_path,
+            temp_dir / safe_name,
+            destination_root=temp_dir,
+        )
 
         if file_rec.file_type != "pdf":
             raise HTTPException(status_code=400, detail="Trial remediation requires PDF")
@@ -949,8 +1053,23 @@ async def _remediate_trial(
         if not output_path.is_file():
             raise RuntimeError("Remediation output was not generated")
 
-        output_key = f"jobs/{job_id}/{output_filename}"
-        report_key = f"jobs/{job_id}/{report_filename}"
+        output_key = await run_in_threadpool(
+            store.put,
+            user.id,
+            job_id,
+            "remediated",
+            output_path,
+            output_filename,
+        )
+        published = True
+        report_key = await run_in_threadpool(
+            store.put,
+            user.id,
+            job_id,
+            "report",
+            report_artifact,
+            report_filename,
+        )
         response = RemediationResponse(
             report_id=request.report_id,
             total_fixed=total_fixed,
@@ -960,8 +1079,6 @@ async def _remediate_trial(
             remediation_report_path=report_key,
             remediation_report_filename=report_filename,
         )
-        os.replace(temp_dir, final_dir)
-        published = True
         await _stop_trial_heartbeat(heartbeat_task, propagate=True)
         heartbeat_task = None
         service.complete(
@@ -1002,14 +1119,21 @@ async def _remediate_trial(
         raise HTTPException(status_code=500, detail="Remediation processing failed") from None
     finally:
         await _stop_trial_heartbeat(heartbeat_task, propagate=False)
-        if temp_dir is not None:
-            _remove_contained_tree(temp_dir, settings.OUTPUT_DIR / ".tmp")
-        if published and not committed and final_dir is not None:
-            _remove_contained_tree(final_dir, settings.OUTPUT_DIR / "jobs")
+        if published and not committed and job_id is not None:
+            try:
+                store.delete_job(user.id, job_id)
+            except Exception:
+                logger.exception("Failed to clean published remediation artifacts")
+        if temp_context is not None:
+            temp_context.cleanup()
         db.close()
 
 @app.post("/remediate", response_model=RemediationResponse)
-async def remediate_document(request: RemediationRequest, user: User = Depends(require_user)):
+async def remediate_document(
+    request: RemediationRequest,
+    http_request: Request,
+    user: User = Depends(require_user),
+):
     """
     Apply automated fixes for accessibility issues.
     
@@ -1025,7 +1149,9 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
         raise HTTPException(status_code=404, detail="Report not found")
 
     if settings.DEPLOYMENT_MODE == "trial":
-        return await _remediate_trial(request, user)
+        return await _remediate_trial(
+            request, user, artifact_store_for(http_request)
+        )
 
     report = report_storage[request.report_id]
     db_conn = SessionLocal()
@@ -1048,7 +1174,13 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
         raise HTTPException(status_code=404, detail="Original file not found")
     file_info = file_storage[file_id]
 
-    file_path = Path(file_info["file_path"])
+    materializer = materialized_upload(
+        artifact_store_for(http_request),
+        user.id,
+        file_info["file_path"],
+        file_info["original_filename"],
+    )
+    file_path = materializer.__enter__()
     
     results: list[RemediationResult] = []
     remediated_path: Optional[str] = None
@@ -1143,10 +1275,16 @@ async def remediate_document(request: RemediationRequest, user: User = Depends(r
     except Exception:
         logger.exception("Remediation processing failed")
         raise HTTPException(status_code=500, detail="Remediation processing failed") from None
+    finally:
+        materializer.__exit__(None, None, None)
 
 
 @app.get("/remediate/download/{report_id}")
-async def download_remediated_file(report_id: str, user: User = Depends(require_user)):
+async def download_remediated_file(
+    report_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+):
     """
     Download the remediated file.
     """
@@ -1174,16 +1312,18 @@ async def download_remediated_file(report_id: str, user: User = Depends(require_
             if job is None:
                 raise HTTPException(status_code=404, detail="Remediated file not found")
             try:
-                artifact = _resolve_trial_artifact(job.output_artifact_key, job.id)
-            except TrialStateError:
+                return artifact_download_response(
+                    artifact_store_for(request),
+                    user.id,
+                    job.output_artifact_key,
+                    filename=f"remediated_{Path(file_rec.filename).name}",
+                    media_type="application/pdf",
+                )
+            except (ArtifactStoreError, ValueError):
                 raise HTTPException(
                     status_code=409,
                     detail={"code": "trial_remediation_state_invalid"},
                 ) from None
-            display_name = f"remediated_{Path(file_rec.filename).name}"
-            return FileResponse(
-                path=artifact, filename=display_name, media_type="application/pdf"
-            )
         finally:
             db_conn.close()
     
@@ -1218,6 +1358,7 @@ def _latest_remediation_report_path(report_id: str) -> Optional[Path]:
 @app.get("/remediate/report/{report_id}")
 async def download_remediation_report_by_id(
     report_id: str,
+    request: Request,
     user: User = Depends(require_user),
 ):
     db_conn = SessionLocal()
@@ -1240,17 +1381,18 @@ async def download_remediation_report_by_id(
             if job is None or not job.report_artifact_key:
                 raise HTTPException(status_code=404, detail="Remediation report not found")
             try:
-                artifact = _resolve_trial_artifact(job.report_artifact_key, job.id)
-            except TrialStateError:
+                return artifact_download_response(
+                    artifact_store_for(request),
+                    user.id,
+                    job.report_artifact_key,
+                    filename=ArtifactKey.parse(job.report_artifact_key).filename,
+                    media_type="application/pdf",
+                )
+            except (ArtifactStoreError, ValueError):
                 raise HTTPException(
                     status_code=409,
                     detail={"code": "trial_remediation_state_invalid"},
                 ) from None
-            return FileResponse(
-                path=artifact,
-                filename=Path(job.report_artifact_key).name,
-                media_type="application/pdf",
-            )
     finally:
         db_conn.close()
 
@@ -1270,7 +1412,9 @@ async def download_remediation_report_by_id(
 # =============================================================================
 
 @app.post("/pdf/analyze")
-async def analyze_pdf_document(file_id: str, user: User = Depends(require_user)):
+async def analyze_pdf_document(
+    file_id: str, request: Request, user: User = Depends(require_user)
+):
     """
     Detailed PDF accessibility analysis.
     
@@ -1296,9 +1440,11 @@ async def analyze_pdf_document(file_id: str, user: User = Depends(require_user))
     if file_info["file_type"] != "pdf":
         raise HTTPException(status_code=400, detail="File is not a PDF")
     
-    file_path = Path(file_info["file_path"])
-    
-    try:
+    with materialized_upload(
+        artifact_store_for(request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    ) as file_path:
+      try:
         from .pdf_accessibility import PDFAccessibilityAnalyzer
         
         analyzer = PDFAccessibilityAnalyzer(file_path=file_path)
@@ -1307,18 +1453,19 @@ async def analyze_pdf_document(file_id: str, user: User = Depends(require_user))
         
         return report
         
-    except ImportError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"PDF analysis libraries not installed: {e}"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+      except ImportError as e:
+          raise HTTPException(
+              status_code=500,
+              detail=f"PDF analysis libraries not installed: {e}"
+          )
+      except Exception as e:
+          raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/pdf/remediate")
 async def remediate_pdf_document(
     file_id: str,
+    request: Request,
     title: Optional[str] = None,
     language: Optional[str] = "en",
     add_bookmarks: bool = False,
@@ -1359,8 +1506,11 @@ async def remediate_pdf_document(
     if file_info["file_type"] != "pdf":
         raise HTTPException(status_code=400, detail="File is not a PDF")
     
-    file_path = Path(file_info["file_path"])
-    
+    materializer = materialized_upload(
+        artifact_store_for(request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    )
+    file_path = materializer.__enter__()
     try:
         from .pdf_accessibility import PDFRemediator, PDFAccessibilityAnalyzer
         
@@ -1448,6 +1598,8 @@ async def remediate_pdf_document(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        materializer.__exit__(None, None, None)
 
 
 @app.get("/pdf/report/{filename}")
@@ -1487,7 +1639,9 @@ async def download_remediation_report(filename: str, user: User = Depends(requir
 
 
 @app.get("/pdf/download/{file_id}")
-async def download_pdf(file_id: str, user: User = Depends(require_user)):
+async def download_pdf(
+    file_id: str, request: Request, user: User = Depends(require_user)
+):
     """
     Download the (remediated) PDF file.
     """
@@ -1503,16 +1657,27 @@ async def download_pdf(file_id: str, user: User = Depends(require_user)):
         db_conn.close()
     
     file_info = file_storage[file_id]
-    file_path = Path(file_info["file_path"])
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-    
-    return FileResponse(
-        path=file_path,
-        filename=file_info["original_filename"],
-        media_type="application/pdf"
-    )
+    try:
+        ArtifactKey.parse(file_info["file_path"])
+    except ValueError:
+        try:
+            with materialized_upload(
+                artifact_store_for(request), user.id, file_info["file_path"],
+                file_info["original_filename"],
+            ) as file_path:
+                return FileResponse(
+                    path=file_path, filename=file_info["original_filename"],
+                    media_type="application/pdf"
+                )
+        except ArtifactStoreError:
+            raise HTTPException(status_code=404, detail="File not found") from None
+    try:
+        return artifact_download_response(
+            artifact_store_for(request), user.id, file_info["file_path"],
+            filename=file_info["original_filename"], media_type="application/pdf",
+        )
+    except ArtifactStoreError:
+        raise HTTPException(status_code=404, detail="File not found") from None
 
 
 # =============================================================================
@@ -1531,33 +1696,46 @@ class _CompareTaggingRequest(_BaseModel):
     confidence_threshold: float = 0.0
 
 
-def _resolve_pdf_path_from_report(report_id: str) -> Path:
-    if report_id not in report_storage:
-        raise HTTPException(status_code=404, detail="Report not found")
+def _resolve_file_info_from_report(report_id: str, user_id: str) -> dict:
+    db = SessionLocal()
+    try:
+        report_rec = db.get(DbReport, report_id)
+        file_rec = db.get(UploadedFile, report_rec.file_id) if report_rec else None
+        if file_rec is None:
+            raise HTTPException(status_code=404, detail="Original file not found")
+        if file_rec.owner_id and file_rec.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="Access denied to this report.")
+        return {
+            "id": file_rec.id, "original_filename": file_rec.filename,
+            "file_type": file_rec.file_type, "file_path": file_rec.file_path,
+            "file_size": file_rec.file_size,
+        }
+    finally:
+        db.close()
 
-    report = report_storage[report_id]
-    file_id = None
-    for fid, finfo in file_storage.items():
-        if finfo["original_filename"] == report.document.filename:
-            file_id = fid
-            break
 
-    if not file_id:
-        raise HTTPException(status_code=404, detail="Original file not found")
-
-    file_info = file_storage[file_id]
+def _resolve_pdf_info_from_report(report_id: str, user_id: str) -> dict:
+    file_info = _resolve_file_info_from_report(report_id, user_id)
     if file_info["file_type"] != "pdf":
         raise HTTPException(status_code=400, detail="Only PDF documents are supported")
-
-    return Path(file_info["file_path"])
+    return file_info
 
 
 @app.post("/pdf/debug/compare-tagging")
-async def compare_tagging_pipelines(request: _CompareTaggingRequest):
+async def compare_tagging_pipelines(
+    request: _CompareTaggingRequest,
+    http_request: Request,
+    user: User = Depends(require_user),
+):
     """
     Run LayoutLM and OpenDataLoader on the same PDF and return a comparison report.
     """
-    file_path = _resolve_pdf_path_from_report(request.report_id)
+    file_info = _resolve_pdf_info_from_report(request.report_id, user.id)
+    materializer = materialized_upload(
+        artifact_store_for(http_request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    )
+    file_path = materializer.__enter__()
 
     try:
         from .tagging_compare import (
@@ -1588,17 +1766,28 @@ async def compare_tagging_pipelines(request: _CompareTaggingRequest):
     except Exception as e:
         logger.error("Tagging comparison failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Tagging comparison failed: {str(e)}")
+    finally:
+        materializer.__exit__(None, None, None)
 
 
 @app.post("/pdf/debug/overlays")
-async def generate_layout_overlays(request: _OverlayRequest):
+async def generate_layout_overlays(
+    request: _OverlayRequest,
+    http_request: Request,
+    user: User = Depends(require_user),
+):
     """
     Generate block-level overlay images showing the extracted PDF structure.
 
     Runs LayoutLMv3 layout analysis on the original uploaded PDF and produces a ZIP of
     annotated page PNGs (tag + short text per block).
     """
-    file_path = _resolve_pdf_path_from_report(request.report_id)
+    file_info = _resolve_pdf_info_from_report(request.report_id, user.id)
+    materializer = materialized_upload(
+        artifact_store_for(http_request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    )
+    file_path = materializer.__enter__()
 
     try:
         from .layout_model import DocumentLayoutAnalyzer
@@ -1618,6 +1807,8 @@ async def generate_layout_overlays(request: _OverlayRequest):
     except Exception as e:
         logger.error(f"Overlay generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Overlay generation failed: {str(e)}")
+    finally:
+        materializer.__exit__(None, None, None)
 
 
 # =============================================================================
@@ -1691,22 +1882,8 @@ async def get_rule(rule_id: str):
 
 from typing import List
 
-def _resolve_document_from_report(report_id: str) -> tuple[Path, str]:
-    if report_id not in report_storage:
-        raise HTTPException(status_code=404, detail="Report not found")
-        
-    report = report_storage[report_id]
-    file_id = None
-    for fid, finfo in file_storage.items():
-        if finfo["original_filename"] == report.document.filename:
-            file_id = fid
-            break
-            
-    if not file_id:
-        raise HTTPException(status_code=404, detail="Original file not found")
-        
-    file_info = file_storage[file_id]
-    return Path(file_info["file_path"]), file_info["file_type"]
+def _resolve_document_from_report(report_id: str, user_id: str) -> dict:
+    return _resolve_file_info_from_report(report_id, user_id)
 
 
 def extract_html_images(html_path: Path) -> List[DocumentImageItem]:
@@ -2017,7 +2194,9 @@ async def call_deepseek_vision_or_ocr_fallback(
 
 
 @app.get("/report/{report_id}/images", response_model=List[DocumentImageItem])
-async def get_document_images(report_id: str, user: User = Depends(require_user)):
+async def get_document_images(
+    report_id: str, request: Request, user: User = Depends(require_user)
+):
     """
     Extract all figures and images from a document associated with a report.
     """
@@ -2034,26 +2213,28 @@ async def get_document_images(report_id: str, user: User = Depends(require_user)
     finally:
         db_conn.close()
         
-    file_path, file_type = _resolve_document_from_report(report_id)
-    
-    if file_type == "html":
-        return await run_in_threadpool(alt_text_context_service.extract_html_images, file_path)
-    elif file_type == "pdf":
-        return await run_in_threadpool(alt_text_context_service.extract_pdf_images, file_path)
-    else:
+    file_info = _resolve_document_from_report(report_id, user.id)
+    with materialized_upload(
+        artifact_store_for(request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    ) as file_path:
+        if file_info["file_type"] == "html":
+            return await run_in_threadpool(alt_text_context_service.extract_html_images, file_path)
+        if file_info["file_type"] == "pdf":
+            return await run_in_threadpool(alt_text_context_service.extract_pdf_images, file_path)
         raise HTTPException(status_code=400, detail="Unsupported document type")
 
 
-@app.post("/report/{report_id}/generate-alt-text", response_model=AltTextGenerateResponse)
-async def generate_alt_text_endpoint(
+async def _generate_alt_text_impl(
     report_id: str,
     request: AltTextGenerateRequest,
-    user: User = Depends(require_user)
+    user: User,
+    file_path: Path,
+    file_type: str,
 ):
     """
     Generate context-aware alt-text for an image using DeepSeek API with OCR fallback.
     """
-    file_path, file_type = _resolve_document_from_report(report_id)
     if file_type == "html":
         images = await run_in_threadpool(alt_text_context_service.extract_html_images, file_path)
     elif file_type == "pdf":
@@ -2099,11 +2280,29 @@ async def generate_alt_text_endpoint(
     return {"alt_text": alt_text, "context_used": context.context_used()}
 
 
-@app.post("/report/{report_id}/resolve-alt-text", response_model=RemediationResponse)
-async def resolve_alt_text_endpoint(
+@app.post("/report/{report_id}/generate-alt-text", response_model=AltTextGenerateResponse)
+async def generate_alt_text_endpoint(
+    report_id: str,
+    request: AltTextGenerateRequest,
+    http_request: Request,
+    user: User = Depends(require_user),
+):
+    file_info = _resolve_document_from_report(report_id, user.id)
+    with materialized_upload(
+        artifact_store_for(http_request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    ) as file_path:
+        return await _generate_alt_text_impl(
+            report_id, request, user, file_path, file_info["file_type"]
+        )
+
+
+async def _resolve_alt_text_impl(
     report_id: str,
     request: AltTextResolutionRequest,
-    user: User = Depends(require_user)
+    user: User,
+    file_path: Path,
+    file_type: str,
 ):
     """
     Apply manual or decorative alt-text resolutions to the document.
@@ -2125,7 +2324,6 @@ async def resolve_alt_text_endpoint(
         db_conn.close()
         
     report = report_storage[report_id]
-    file_path, file_type = _resolve_document_from_report(report_id)
     
     results = []
     
@@ -2225,6 +2423,23 @@ async def resolve_alt_text_endpoint(
         results=results,
         remediated_file_path=str(output_path)
     )
+
+
+@app.post("/report/{report_id}/resolve-alt-text", response_model=RemediationResponse)
+async def resolve_alt_text_endpoint(
+    report_id: str,
+    request: AltTextResolutionRequest,
+    http_request: Request,
+    user: User = Depends(require_user),
+):
+    file_info = _resolve_document_from_report(report_id, user.id)
+    with materialized_upload(
+        artifact_store_for(http_request), user.id, file_info["file_path"],
+        file_info["original_filename"],
+    ) as file_path:
+        return await _resolve_alt_text_impl(
+            report_id, request, user, file_path, file_info["file_type"]
+        )
 
 
 # =============================================================================

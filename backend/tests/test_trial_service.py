@@ -121,15 +121,15 @@ def test_complete_commits_artifact_response_and_charge_together(db):
 
     balance = service.complete(
         job.id,
-        output_artifact_key=f"jobs/{job.id}/fixed.pdf",
-        report_artifact_key=f"jobs/{job.id}/report.pdf",
+        output_artifact_key=f"users/{user.id}/jobs/{job.id}/remediated/fixed.pdf",
+        report_artifact_key=f"users/{user.id}/jobs/{job.id}/report/report.pdf",
         response_json='{"report_id":"report-1"}',
     )
 
     stored = db.get(database.RemediationJob, job.id)
     assert stored.status == "succeeded"
-    assert stored.output_artifact_key == f"jobs/{job.id}/fixed.pdf"
-    assert stored.report_artifact_key == f"jobs/{job.id}/report.pdf"
+    assert stored.output_artifact_key == f"users/{user.id}/jobs/{job.id}/remediated/fixed.pdf"
+    assert stored.report_artifact_key == f"users/{user.id}/jobs/{job.id}/report/report.pdf"
     assert stored.response_json == '{"report_id":"report-1"}'
     assert stored.lease_expires_at is None
     assert balance.consumed == 2
@@ -199,7 +199,7 @@ def test_completion_commit_failure_rolls_back_metadata_and_consumption(db, monke
     with pytest.raises(RuntimeError, match="commit failed"):
         service.complete(
             job.id,
-            output_artifact_key=f"jobs/{job.id}/fixed.pdf",
+            output_artifact_key=f"users/{user.id}/jobs/{job.id}/remediated/fixed.pdf",
             report_artifact_key=None,
             response_json='{"report_id":"report"}',
         )

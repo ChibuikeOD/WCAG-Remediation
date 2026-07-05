@@ -46,8 +46,6 @@ def test_generate_alt_text_endpoint_returns_context_used(monkeypatch, tmp_path: 
         """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(main, "_resolve_document_from_report", lambda report_id: (html_path, "html"))
-
     async def fake_legacy_call(*args):
         return "legacy path"
 
@@ -63,10 +61,12 @@ def test_generate_alt_text_endpoint_returns_context_used(monkeypatch, tmp_path: 
     monkeypatch.setattr(main, "call_deepseek_contextual_alt_text", fake_contextual_call, raising=False)
 
     response = asyncio.run(
-        main.generate_alt_text_endpoint(
+        main._generate_alt_text_impl(
             "report-1",
             AltTextGenerateRequest(image_id="html_img_0", api_key="request-key"),
             user=SimpleNamespace(id="dev_user_001"),
+            file_path=html_path,
+            file_type="html",
         )
     )
 

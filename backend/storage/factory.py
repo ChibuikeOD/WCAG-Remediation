@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from pydantic import SecretStr
@@ -14,10 +15,14 @@ if TYPE_CHECKING:
     from backend.config import Settings
 
 
-def create_artifact_store(settings: "Settings") -> ArtifactStore:
+def create_artifact_store(
+    settings: "Settings", *, local_root: Path | None = None
+) -> ArtifactStore:
     """Build the configured adapter without attaching it to app lifecycle."""
     if settings.DEPLOYMENT_MODE == "testing":
-        return LocalArtifactStore(settings.ARTIFACT_STORAGE_ROOT)
+        return LocalArtifactStore(
+            settings.ARTIFACT_STORAGE_ROOT if local_root is None else local_root
+        )
     if settings.DEPLOYMENT_MODE != "trial":
         raise ArtifactStoreError("unsupported artifact storage mode")
     return SupabaseArtifactStore(

@@ -40,8 +40,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "SessionLocal", test_session_local)
     monkeypatch.setattr(settings, "UPLOAD_DIR", upload_dir)
     monkeypatch.setattr(settings, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(settings, "ARTIFACT_STORAGE_ROOT", tmp_path / "artifacts")
 
-    async def idle_retention_worker():
+    async def idle_retention_worker(**_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(main_module, "clean_expired_documents", idle_retention_worker)

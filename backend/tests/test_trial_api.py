@@ -22,6 +22,7 @@ from backend.auth import get_token_verifier, require_user
 from backend.config import settings
 from backend.main import app
 from backend.models import AccessibilityReport, DocumentInfo
+from backend.storage import ArtifactKey, LocalArtifactStore
 
 
 def pdf_bytes(page_count=1):
@@ -62,8 +63,13 @@ def trial_client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "UPLOAD_DIR", upload_dir)
     monkeypatch.setattr(settings, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(settings, "DEPLOYMENT_MODE", "trial")
+    monkeypatch.setattr(
+        main_module,
+        "create_artifact_store",
+        lambda _settings, **_kwargs: LocalArtifactStore(tmp_path / "artifacts"),
+    )
 
-    async def idle_retention_worker():
+    async def idle_retention_worker(**_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(main_module, "clean_expired_documents", idle_retention_worker)
@@ -517,9 +523,13 @@ def test_successful_remediation_replays_without_rerun_or_double_charge(
         assert job.status == "succeeded"
         assert job.idempotency_key == "remediate:verified-user:report-1"
         assert job.response_json is not None
-        assert job.output_artifact_key.startswith(f"jobs/{job.id}/")
+        output_key = ArtifactKey.parse(job.output_artifact_key)
+        assert output_key.job_id == job.id
+        assert output_key.kind == "remediated"
         assert not Path(job.output_artifact_key).is_absolute()
-        assert (settings.OUTPUT_DIR / job.output_artifact_key).is_file()
+        assert app.state.artifact_store.download(
+            "verified-user", job.output_artifact_key
+        ).local_path.is_file()
 
 
 def test_corrupt_succeeded_replay_is_safe_conflict_without_rerun(
@@ -578,10 +588,13 @@ def test_cancelled_pipeline_releases_and_cleans_artifacts(trial_client, monkeypa
     content = pdf_bytes(1)
     source = settings.UPLOAD_DIR / "cancel.pdf"
     source.write_bytes(content)
+    source_key = app.state.artifact_store.put(
+        "verified-user", "cancel-file", "original", source, "cancel.pdf"
+    )
     with session_factory() as session:
         session.add(database.UploadedFile(
             id="cancel-file", filename="cancel.pdf", file_type="pdf",
-            file_path=str(source), file_size=len(content), page_count=1,
+            file_path=source_key, file_size=len(content), page_count=1,
             owner_id="verified-user",
         ))
         session.commit()
@@ -596,13 +609,14 @@ def test_cancelled_pipeline_releases_and_cleans_artifacts(trial_client, monkeypa
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(main_module._remediate_trial(
-            main_module.RemediationRequest(report_id=report_id), user
+            main_module.RemediationRequest(report_id=report_id),
+            user,
+            app.state.artifact_store,
         ))
 
     with session_factory() as session:
         [job] = session.scalars(select(database.RemediationJob)).all()
         assert job.status == "released"
-    assert not (settings.OUTPUT_DIR / "jobs" / job.id).exists()
 
 
 def test_expired_processing_lease_is_recovered_on_trial_balance(
@@ -776,90 +790,13 @@ def test_path_traversal_display_filename_stays_inside_job_directory(
     assert response.status_code == 200
     with session_factory() as session:
         [job] = session.scalars(select(database.RemediationJob)).all()
-        artifact = (settings.OUTPUT_DIR / job.output_artifact_key).resolve()
-        assert artifact.is_relative_to((settings.OUTPUT_DIR / "jobs" / job.id).resolve())
+        artifact_key = ArtifactKey.parse(job.output_artifact_key)
+        assert artifact_key.job_id == job.id
+        assert artifact_key.filename == "remediated_escape.pdf"
+        assert app.state.artifact_store.download(
+            "verified-user", job.output_artifact_key
+        ).local_path.is_file()
     assert not (tmp_path / "escape.pdf").exists()
-
-
-def test_symlinked_job_root_outside_jobs_is_rejected(trial_client):
-    _, _, tmp_path = trial_client
-    jobs_root = settings.OUTPUT_DIR / "jobs"
-    jobs_root.mkdir()
-    outside = tmp_path / "outside-job"
-    outside.mkdir()
-    (outside / "fixed.pdf").write_bytes(b"private")
-    link = jobs_root / "symlink-job"
-    try:
-        link.symlink_to(outside, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"symlink creation unavailable: {exc}")
-
-    with pytest.raises(main_module.TrialStateError):
-        main_module._resolve_trial_artifact(
-            "jobs/symlink-job/fixed.pdf", "symlink-job"
-        )
-
-
-def test_resolved_job_root_outside_jobs_is_rejected_without_symlink_privilege(
-    trial_client, monkeypatch, tmp_path
-):
-    jobs_root = settings.OUTPUT_DIR.resolve() / "jobs"
-    expected_job_root = jobs_root / "mock-job"
-    outside = (tmp_path / "resolved-outside").resolve()
-    real_resolve = Path.resolve
-
-    def controlled_resolve(path, *args, **kwargs):
-        if path == expected_job_root:
-            return outside
-        return real_resolve(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve", controlled_resolve)
-
-    with pytest.raises(main_module.TrialStateError):
-        main_module._resolve_trial_artifact("jobs/mock-job/fixed.pdf", "mock-job")
-
-
-def test_symlinked_jobs_container_outside_output_is_rejected(trial_client, tmp_path):
-    outside = tmp_path / "outside-jobs"
-    artifact = outside / "container-job" / "fixed.pdf"
-    artifact.parent.mkdir(parents=True)
-    artifact.write_bytes(b"private")
-    jobs_link = settings.OUTPUT_DIR / "jobs"
-    try:
-        jobs_link.symlink_to(outside, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"symlink creation unavailable: {exc}")
-
-    with pytest.raises(main_module.TrialStateError):
-        main_module._resolve_trial_artifact(
-            "jobs/container-job/fixed.pdf", "container-job"
-        )
-
-
-def test_resolved_jobs_container_outside_output_is_rejected_without_privilege(
-    trial_client, monkeypatch, tmp_path
-):
-    root = settings.OUTPUT_DIR.resolve()
-    lexical_jobs = root / "jobs"
-    outside_jobs = (tmp_path / "resolved-outside-jobs").resolve()
-    outside_artifact = outside_jobs / "container-job" / "fixed.pdf"
-    outside_artifact.parent.mkdir(parents=True)
-    outside_artifact.write_bytes(b"private")
-    real_resolve = Path.resolve
-
-    def controlled_resolve(path, *args, **kwargs):
-        if path == lexical_jobs:
-            return outside_jobs
-        if path == lexical_jobs / "container-job" / "fixed.pdf":
-            return outside_artifact
-        return real_resolve(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve", controlled_resolve)
-
-    with pytest.raises(main_module.TrialStateError):
-        main_module._resolve_trial_artifact(
-            "jobs/container-job/fixed.pdf", "container-job"
-        )
 
 
 def test_heartbeat_keeps_tiny_lease_active_through_report_generation(

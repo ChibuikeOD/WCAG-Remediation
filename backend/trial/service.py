@@ -9,6 +9,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..storage import ArtifactKey
+
 from backend.database import RemediationJob, TrialAccount, TrialLedgerEntry, User
 
 from .eligibility import classify_verified_email
@@ -411,9 +413,8 @@ class TrialService:
 
     @classmethod
     def _validate_job_artifact_key(cls, key: str, job_id: str) -> None:
-        cls._validate_artifact_key(key)
-        parts = PurePosixPath(key).parts
-        if len(parts) < 3 or parts[:2] != ("jobs", job_id):
+        artifact = ArtifactKey.parse(key)
+        if artifact.job_id != job_id:
             raise ValueError("artifact key must belong to its remediation job")
 
     def _lock_account(self, user_id: str) -> TrialAccount:

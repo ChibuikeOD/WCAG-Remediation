@@ -57,3 +57,31 @@ def test_validator_rejects_shared_database_or_storage_identifiers(shared_identif
 
     with pytest.raises(DeploymentValidationError, match=shared_identifier):
         validate_deployment_pair(trial, testing)
+
+
+def test_validator_rejects_same_database_with_different_credentials():
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    testing["DATABASE_URL"] = (
+        "postgresql://different_user:different_password@"
+        "trial-db.example.invalid:5432/pdfaccess_trial"
+    )
+
+    with pytest.raises(DeploymentValidationError, match="DATABASE_URL"):
+        validate_deployment_pair(trial, testing)
+
+
+@pytest.mark.parametrize(
+    "key,bad_value",
+    [
+        ("PUBLIC_APP_ORIGIN", "https://wcag-remediation.vercel.app"),
+        ("CORS_ORIGINS_LIST", "https://pdfaccess.org,https://wcag-remediation.vercel.app"),
+    ],
+)
+def test_validator_rejects_trial_origins_pointing_at_testing_domain(key, bad_value):
+    trial = load_env_file(TRIAL_ENV)
+    testing = load_env_file(TESTING_ENV)
+    trial[key] = bad_value
+
+    with pytest.raises(DeploymentValidationError, match=key):
+        validate_deployment_pair(trial, testing)

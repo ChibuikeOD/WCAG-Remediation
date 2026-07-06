@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sendMagicLink = vi.hoisted(() => vi.fn())
@@ -77,7 +77,7 @@ describe('LandingPage', () => {
     expect(screen.getByText(/Check your email/i)).toBeInTheDocument()
   })
 
-  it('opens and closes a keyboard-accessible mobile menu', async () => {
+  it('moves focus into the mobile menu and restores it after Escape', async () => {
     const { LandingPage } = await import('./LandingPage')
 
     render(<LandingPage />)
@@ -88,12 +88,32 @@ describe('LandingPage', () => {
     fireEvent.click(openButton)
 
     expect(openButton).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('dialog', { name: /Mobile navigation/i })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: /Mobile navigation/i })).toHaveAttribute('aria-modal', 'true')
     expect(screen.getByRole('link', { name: /Trial allowances/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Close menu/i })).toHaveFocus()
 
-    fireEvent.click(screen.getByRole('button', { name: /Close menu/i }))
+    fireEvent.keyDown(document, { key: 'Escape' })
 
     expect(screen.queryByRole('dialog', { name: /Mobile navigation/i })).not.toBeInTheDocument()
     expect(openButton).toHaveAttribute('aria-expanded', 'false')
+    expect(openButton).toHaveFocus()
+  })
+
+  it('traps forward and backward focus within the mobile menu', async () => {
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Open menu/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /Mobile navigation/i })
+    const closeButton = within(dialog).getByRole('button', { name: /Close menu/i })
+    const lastLink = within(dialog).getByRole('link', { name: /Security/i })
+
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(lastLink).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(closeButton).toHaveFocus()
   })
 })

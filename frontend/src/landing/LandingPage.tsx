@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BarChart3,
   CheckCircle,
@@ -45,13 +45,55 @@ const workflowSteps = [
 export function LandingPage() {
   const auth = useAuth()
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const menuTriggerRef = useRef<HTMLButtonElement>(null)
+  const menuDialogRef = useRef<HTMLDivElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   const closeMenu = () => setIsMenuOpen(false)
+
+  useEffect(() => {
+    if (!isMenuOpen) return
+
+    closeButtonRef.current?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMenu()
+        return
+      }
+
+      if (event.key !== 'Tab') return
+
+      const focusableElements = menuDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href]',
+      )
+      if (!focusableElements?.length) return
+
+      const firstElement = focusableElements[0]
+      const lastElement = focusableElements[focusableElements.length - 1]
+
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault()
+        lastElement.focus()
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault()
+        firstElement.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      menuTriggerRef.current?.focus()
+    }
+  }, [isMenuOpen])
 
   return (
     <div className="pdfaccess-landing min-h-screen bg-[#f9faf5] text-[#1a1c1a]">
       <header className="sticky top-0 z-50 border-b bg-[#f9faf5]" style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}>
-        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-4 md:px-12">
+        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-4 md:px-8 lg:px-12">
           <a href="#" className="flex min-h-[44px] items-center gap-2 rounded-sm text-[#0d1b2a]">
             <FileText className="h-6 w-6 text-[#006a6a]" aria-hidden="true" />
             <span className="text-xl font-bold">PDFAccess</span>
@@ -70,6 +112,7 @@ export function LandingPage() {
               Start free trial
             </a>
             <button
+              ref={menuTriggerRef}
               type="button"
               aria-label="Open menu"
               aria-expanded={isMenuOpen}
@@ -85,14 +128,17 @@ export function LandingPage() {
 
       {isMenuOpen && (
         <div
+          ref={menuDialogRef}
           id="pdfaccess-mobile-menu"
           role="dialog"
+          aria-modal="true"
           aria-label="Mobile navigation"
           className="fixed inset-0 z-[60] bg-[#f9faf5] p-4 md:hidden"
         >
           <div className="flex h-12 items-center justify-between border-b" style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}>
             <span className="text-xl font-bold text-[#0d1b2a]">Menu</span>
             <button
+              ref={closeButtonRef}
               type="button"
               aria-label="Close menu"
               onClick={closeMenu}
@@ -119,7 +165,7 @@ export function LandingPage() {
       )}
 
       <main>
-        <section className="mx-auto grid max-w-[1440px] gap-10 px-4 py-12 md:grid-cols-[1fr_420px] md:items-center md:px-12 md:py-24">
+        <section className="mx-auto grid max-w-[1440px] gap-10 px-4 py-12 md:grid-cols-[1fr_420px] md:items-center md:px-8 md:py-24 lg:px-12">
           <div>
             <p className="pdfaccess-eyebrow">Enterprise PDF accessibility</p>
             <h1 className="mt-5 max-w-3xl text-4xl font-bold leading-tight tracking-[-0.02em] text-[#0d1b2a] md:text-5xl">
@@ -177,7 +223,7 @@ export function LandingPage() {
         </section>
 
         <section className="border-y bg-[#edeeea] py-8" style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}>
-          <div className="mx-auto grid max-w-[1440px] grid-cols-2 gap-6 px-4 text-center md:grid-cols-4 md:px-12">
+          <div className="mx-auto grid max-w-[1440px] grid-cols-2 gap-6 px-4 text-center md:grid-cols-4 md:px-8 lg:px-12">
             {proofItems.map(({ icon: Icon, label }) => (
               <div key={label} className="flex flex-col items-center gap-3">
                 <Icon className="h-6 w-6 text-[#006a6a]" aria-hidden="true" />
@@ -187,7 +233,7 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section id="allowances" className="mx-auto grid max-w-[1440px] gap-8 px-4 py-16 md:grid-cols-3 md:px-12">
+        <section id="allowances" className="mx-auto grid max-w-[1440px] gap-8 px-4 py-16 md:grid-cols-3 md:px-8 lg:px-12">
           <div className="md:col-span-1">
             <p className="pdfaccess-eyebrow">Trial allowances</p>
             <h2 className="mt-3 text-3xl font-bold text-[#0d1b2a]">One verified trial, clear page limits.</h2>
@@ -213,7 +259,7 @@ export function LandingPage() {
         </section>
 
         <section id="workflow" className="bg-white py-16">
-          <div className="mx-auto max-w-[1440px] px-4 md:px-12">
+          <div className="mx-auto max-w-[1440px] px-4 md:px-8 lg:px-12">
             <p className="pdfaccess-eyebrow">Workflow</p>
             <h2 className="mt-3 max-w-2xl text-3xl font-bold text-[#0d1b2a]">
               The public trial uses the same remediation engine as direct testing.
@@ -232,7 +278,7 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section id="capabilities" className="mx-auto grid max-w-[1440px] gap-8 px-4 py-16 md:grid-cols-[1fr_420px] md:px-12">
+        <section id="capabilities" className="mx-auto grid max-w-[1440px] gap-8 px-4 py-16 md:grid-cols-[1fr_420px] md:px-8 lg:px-12">
           <div>
             <p className="pdfaccess-eyebrow">Security and support</p>
             <h2 className="mt-3 text-3xl font-bold text-[#0d1b2a]">
@@ -253,7 +299,7 @@ export function LandingPage() {
       </main>
 
       <footer className="border-t bg-[#edeeea]" style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}>
-        <div className="mx-auto grid max-w-[1440px] gap-8 px-4 py-10 md:grid-cols-4 md:px-12">
+        <div className="mx-auto grid max-w-[1440px] gap-8 px-4 py-10 md:grid-cols-4 md:px-8 lg:px-12">
           <div>
             <p className="text-xl font-bold text-[#0d1b2a]">PDFAccess</p>
             <p className="mt-3 text-sm leading-6 text-[#44474c]">

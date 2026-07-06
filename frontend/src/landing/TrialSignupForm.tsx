@@ -75,6 +75,7 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
 
       {displayError && (
         <div
+          id="landing-trial-email-error"
           role="alert"
           className="mb-5 flex gap-3 rounded-md border p-4 text-sm"
           style={{
@@ -98,6 +99,8 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            aria-invalid={Boolean(displayError)}
+            aria-describedby={displayError ? 'landing-trial-email-error' : undefined}
             autoComplete="email"
             className="mt-2 min-h-[44px] w-full rounded border bg-white px-4 py-3 text-base text-[#1a1c1a]"
             style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}

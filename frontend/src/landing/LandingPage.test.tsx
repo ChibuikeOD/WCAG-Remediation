@@ -1,8 +1,9 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sendMagicLink = vi.hoisted(() => vi.fn())
+let mediaChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
 const authState = vi.hoisted(() => ({
   value: {
     status: 'signed-out',
@@ -20,6 +21,17 @@ vi.mock('../auth/AuthProvider', () => ({
 
 describe('LandingPage', () => {
   beforeEach(() => {
+    mediaChangeHandler = null
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation(() => ({
+        matches: false,
+        addEventListener: (_event: string, handler: (event: MediaQueryListEvent) => void) => {
+          mediaChangeHandler = handler
+        },
+        removeEventListener: vi.fn(),
+      })),
+    })
     sendMagicLink.mockResolvedValue(undefined)
     authState.value = {
       status: 'signed-out',
@@ -48,6 +60,12 @@ describe('LandingPage', () => {
 
     const supportLink = screen.getByRole('link', { name: /Ask a question/i })
     expect(supportLink).toHaveAttribute('href', 'mailto:support@pdfaccess.org')
+
+    expect(screen.getByRole('link', { name: /Skip to main content/i })).toHaveAttribute(
+      'href',
+      '#main-content',
+    )
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
   })
 
   it('submits a normalized email address through the magic-link provider', async () => {
@@ -75,6 +93,19 @@ describe('LandingPage', () => {
     render(<LandingPage />)
 
     expect(screen.getByText(/Check your email/i)).toBeInTheDocument()
+  })
+
+  it('associates validation errors with the email field', async () => {
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    const emailInput = screen.getByLabelText(/Email address/i)
+    fireEvent.click(screen.getByRole('button', { name: /Start free trial/i }))
+
+    const error = screen.getByRole('alert')
+    expect(emailInput).toHaveAttribute('aria-invalid', 'true')
+    expect(emailInput).toHaveAttribute('aria-describedby', error.id)
   })
 
   it('moves focus into the mobile menu and restores it after Escape', async () => {
@@ -115,5 +146,23 @@ describe('LandingPage', () => {
 
     fireEvent.keyDown(document, { key: 'Tab' })
     expect(closeButton).toHaveFocus()
+  })
+
+  it('closes the mobile menu when the desktop breakpoint becomes active', async () => {
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    const openButton = screen.getByRole('button', { name: /Open menu/i })
+    fireEvent.click(openButton)
+    expect(screen.getByRole('dialog', { name: /Mobile navigation/i })).toBeInTheDocument()
+
+    act(() => {
+      mediaChangeHandler?.({ matches: true } as MediaQueryListEvent)
+    })
+
+    expect(screen.queryByRole('dialog', { name: /Mobile navigation/i })).not.toBeInTheDocument()
+    expect(openButton).toHaveAttribute('aria-expanded', 'false')
+    expect(openButton).toHaveFocus()
   })
 })

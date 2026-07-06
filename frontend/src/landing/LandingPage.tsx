@@ -52,6 +52,16 @@ export function LandingPage() {
   const closeMenu = () => setIsMenuOpen(false)
 
   useEffect(() => {
+    const desktopBreakpoint = window.matchMedia('(min-width: 768px)')
+    const handleBreakpointChange = (event: MediaQueryListEvent) => {
+      if (event.matches) closeMenu()
+    }
+
+    desktopBreakpoint.addEventListener('change', handleBreakpointChange)
+    return () => desktopBreakpoint.removeEventListener('change', handleBreakpointChange)
+  }, [])
+
+  useEffect(() => {
     if (!isMenuOpen) return
 
     closeButtonRef.current?.focus()
@@ -92,6 +102,9 @@ export function LandingPage() {
 
   return (
     <div className="pdfaccess-landing min-h-screen bg-[#f9faf5] text-[#1a1c1a]">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-50 border-b bg-[#f9faf5]" style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}>
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between px-4 md:px-8 lg:px-12">
           <a href="#" className="flex min-h-[44px] items-center gap-2 rounded-sm text-[#0d1b2a]">
@@ -164,7 +177,7 @@ export function LandingPage() {
         </div>
       )}
 
-      <main>
+      <main id="main-content">
         <section className="mx-auto grid max-w-[1440px] gap-10 px-4 py-12 md:grid-cols-[1fr_420px] md:items-center md:px-8 md:py-24 lg:px-12">
           <div>
             <p className="pdfaccess-eyebrow">Enterprise PDF accessibility</p>

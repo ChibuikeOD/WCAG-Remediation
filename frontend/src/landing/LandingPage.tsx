@@ -46,15 +46,23 @@ export function LandingPage() {
   const auth = useAuth()
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
+  const desktopTrialLinkRef = useRef<HTMLAnchorElement>(null)
   const menuDialogRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const focusAfterMenuCloseRef = useRef<HTMLElement | null>(null)
 
-  const closeMenu = () => setIsMenuOpen(false)
+  const closeMenu = () => {
+    focusAfterMenuCloseRef.current = menuTriggerRef.current
+    setIsMenuOpen(false)
+  }
 
   useEffect(() => {
     const desktopBreakpoint = window.matchMedia('(min-width: 768px)')
     const handleBreakpointChange = (event: MediaQueryListEvent) => {
-      if (event.matches) closeMenu()
+      if (event.matches) {
+        focusAfterMenuCloseRef.current = desktopTrialLinkRef.current
+        setIsMenuOpen(false)
+      }
     }
 
     desktopBreakpoint.addEventListener('change', handleBreakpointChange)
@@ -96,7 +104,8 @@ export function LandingPage() {
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
-      menuTriggerRef.current?.focus()
+      focusAfterMenuCloseRef.current?.focus()
+      focusAfterMenuCloseRef.current = null
     }
   }, [isMenuOpen])
 
@@ -121,7 +130,11 @@ export function LandingPage() {
           </nav>
 
           <div className="flex items-center gap-3">
-            <a href="#trial-signup" className="pdfaccess-primary-button hidden md:inline-flex">
+            <a
+              ref={desktopTrialLinkRef}
+              href="#trial-signup"
+              className="pdfaccess-primary-button hidden md:inline-flex"
+            >
               Start free trial
             </a>
             <button

@@ -9,7 +9,7 @@ const authState = vi.hoisted(() => ({
     status: 'signed-out',
     user: null,
     accessToken: null,
-    error: null,
+    error: null as string | null,
     sendMagicLink,
     signOut: vi.fn(),
   },
@@ -108,6 +108,22 @@ describe('LandingPage', () => {
     expect(emailInput).toHaveAttribute('aria-describedby', error.id)
   })
 
+  it('keeps authentication failures at the form level', async () => {
+    authState.value = {
+      ...authState.value,
+      status: 'error',
+      error: 'Authentication is unavailable',
+    }
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    const emailInput = screen.getByLabelText(/Email address/i)
+    expect(screen.getByRole('alert')).toHaveTextContent('Authentication is unavailable')
+    expect(emailInput).toHaveAttribute('aria-invalid', 'false')
+    expect(emailInput).not.toHaveAttribute('aria-describedby')
+  })
+
   it('moves focus into the mobile menu and restores it after Escape', async () => {
     const { LandingPage } = await import('./LandingPage')
 
@@ -154,6 +170,9 @@ describe('LandingPage', () => {
     render(<LandingPage />)
 
     const openButton = screen.getByRole('button', { name: /Open menu/i })
+    const desktopTrialLink = document.querySelector<HTMLAnchorElement>(
+      'header a.pdfaccess-primary-button',
+    )
     fireEvent.click(openButton)
     expect(screen.getByRole('dialog', { name: /Mobile navigation/i })).toBeInTheDocument()
 
@@ -163,6 +182,6 @@ describe('LandingPage', () => {
 
     expect(screen.queryByRole('dialog', { name: /Mobile navigation/i })).not.toBeInTheDocument()
     expect(openButton).toHaveAttribute('aria-expanded', 'false')
-    expect(openButton).toHaveFocus()
+    expect(desktopTrialLink).toHaveFocus()
   })
 })

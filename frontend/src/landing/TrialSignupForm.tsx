@@ -11,7 +11,8 @@ interface TrialSignupFormProps {
 
 export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupFormProps) {
   const [email, setEmail] = useState('')
-  const [localError, setLocalError] = useState<string | null>(null)
+  const [fieldError, setFieldError] = useState<string | null>(null)
+  const [submissionError, setSubmissionError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -19,23 +20,24 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
     const normalizedEmail = email.trim().toLowerCase()
 
     if (!normalizedEmail) {
-      setLocalError('Enter your email address to start your PDFAccess trial.')
+      setFieldError('Enter your email address to start your PDFAccess trial.')
       return
     }
 
-    setLocalError(null)
+    setFieldError(null)
+    setSubmissionError(null)
     setIsSubmitting(true)
 
     try {
       await onSendMagicLink(normalizedEmail)
     } catch (sendError) {
-      setLocalError(sendError instanceof Error ? sendError.message : 'Unable to send your sign-in link.')
+      setSubmissionError(sendError instanceof Error ? sendError.message : 'Unable to send your sign-in link.')
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  const displayError = localError ?? (status === 'error' ? error : null)
+  const displayError = fieldError ?? submissionError ?? (status === 'error' ? error : null)
 
   return (
     <section
@@ -75,7 +77,7 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
 
       {displayError && (
         <div
-          id="landing-trial-email-error"
+          id={fieldError ? 'landing-trial-email-error' : 'trial-signup-error'}
           role="alert"
           className="mb-5 flex gap-3 rounded-md border p-4 text-sm"
           style={{
@@ -99,8 +101,8 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
             type="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            aria-invalid={Boolean(displayError)}
-            aria-describedby={displayError ? 'landing-trial-email-error' : undefined}
+            aria-invalid={Boolean(fieldError)}
+            aria-describedby={fieldError ? 'landing-trial-email-error' : undefined}
             autoComplete="email"
             className="mt-2 min-h-[44px] w-full rounded border bg-white px-4 py-3 text-base text-[#1a1c1a]"
             style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}

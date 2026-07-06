@@ -1,4 +1,4 @@
-import { useState, useCallback, type FormEvent } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { UploadZone } from './components/UploadZone';
 import { Dashboard } from './components/Dashboard';
@@ -6,165 +6,37 @@ import { IssueList } from './components/IssueList';
 import { RemediationPanel } from './components/RemediationPanel';
 import { AltTextPanel } from './components/AltTextPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
-import { uploadFile, analyzeDocument, type UserSession } from './api';
+import {
+  APIError,
+  uploadFile,
+  analyzeDocument,
+  getTrialBalance,
+  type TrialBalance,
+  type TrialPageLimitDetail,
+  type UserSession,
+} from './api';
 import { deploymentMode } from './config';
 import { useAuth } from './auth/AuthProvider';
+import { LandingPage } from './landing/LandingPage';
 
 const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@accesspdf.com' };
-import { FileCheck, Mail, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
+import { FileCheck, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
 
 type View = 'upload' | 'dashboard';
-type TrialAuthStatus = 'loading' | 'signed-out' | 'check-email' | 'signed-in' | 'error';
 
-interface TrialLoginProps {
-  status: TrialAuthStatus;
-  error: string | null;
-  onSendMagicLink: (email: string) => Promise<void>;
-}
+function trialPageLimitMessage(error: unknown): string | null {
+  if (!(error instanceof APIError) || error.status !== 409) return null;
 
-function TrialLogin({ status, error, onSendMagicLink }: TrialLoginProps) {
-  const [email, setEmail] = useState('');
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [isSending, setIsSending] = useState(false);
+  const detail = error.detail as Partial<TrialPageLimitDetail> | undefined;
+  if (
+    detail?.code !== 'trial_page_limit_exceeded' ||
+    typeof detail.requested_pages !== 'number' ||
+    typeof detail.remaining_pages !== 'number'
+  ) {
+    return null;
+  }
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (!normalizedEmail) {
-      setLocalError('Enter your email address to request a sign-in link.');
-      return;
-    }
-
-    setLocalError(null);
-    setIsSending(true);
-
-    try {
-      await onSendMagicLink(normalizedEmail);
-    } catch (sendError) {
-      setLocalError(sendError instanceof Error ? sendError.message : 'Unable to send sign-in link.');
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const displayError = localError ?? (status === 'error' ? error : null);
-
-  return (
-    <div
-      className="min-h-screen flex items-center justify-center px-4"
-      style={{ background: '#080c14' }}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl p-8"
-        style={{ background: '#0d1420', border: '1px solid #1a2840' }}
-      >
-        <div className="flex justify-center mb-8">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center"
-            style={{ background: '#2563eb' }}
-          >
-            <FileCheck className="w-7 h-7 text-white" aria-hidden="true" />
-          </div>
-        </div>
-
-        <div className="text-center mb-8">
-          <h1
-            className="text-xl font-semibold mb-2"
-            style={{ color: '#e8edf4', letterSpacing: '-0.01em' }}
-          >
-            Start your PDFAccess free trial
-          </h1>
-          <p className="text-sm leading-relaxed" style={{ color: '#7a90a8' }}>
-            Verify your email to unlock one-time trial remediation credits. Personal
-            emails receive 200 pages; eligible education, nonprofit, and institution
-            domains receive 400 pages.
-          </p>
-        </div>
-
-        {status === 'check-email' && (
-          <div
-            role="status"
-            className="mb-5 rounded-xl p-4 text-sm leading-relaxed"
-            style={{
-              background: 'rgba(37,99,235,0.10)',
-              border: '1px solid rgba(37,99,235,0.25)',
-              color: '#bfdbfe',
-            }}
-          >
-            <strong className="font-semibold">Check your email.</strong> We sent
-            a secure PDFAccess sign-in link. Open it in this browser to continue.
-          </div>
-        )}
-
-        {displayError && (
-          <div
-            role="alert"
-            className="mb-5 rounded-xl p-4 text-sm leading-relaxed"
-            style={{
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.20)',
-              color: '#fca5a5',
-            }}
-          >
-            {displayError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label
-              htmlFor="trial-email"
-              className="block text-sm font-medium mb-2"
-              style={{ color: '#a0b4c8' }}
-            >
-              Email address
-            </label>
-            <input
-              id="trial-email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              autoComplete="email"
-              className="w-full rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-              style={{
-                background: '#080c14',
-                border: '1px solid #1a2840',
-                color: '#e8edf4',
-              }}
-              placeholder="you@organization.org"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={isSending}
-            className="w-full py-3 px-4 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-3 transition-colors duration-150 disabled:opacity-70"
-            style={{ background: '#2563eb' }}
-          >
-            {isSending ? (
-              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Mail className="w-4 h-4" aria-hidden="true" />
-            )}
-            Email me a secure sign-in link
-          </button>
-        </form>
-
-        <div
-          className="mt-8 pt-6 text-center"
-          style={{ borderTop: '1px solid #1a2840' }}
-        >
-          <span
-            className="text-[11px] font-medium uppercase tracking-widest"
-            style={{ color: '#2d4060' }}
-          >
-            PDFAccess.org
-          </span>
-        </div>
-      </div>
-    </div>
-  );
+  return `This PDF has ${detail.requested_pages} pages; ${detail.remaining_pages} trial pages remain.`;
 }
 
 function App() {
@@ -179,6 +51,7 @@ function App() {
   const [selectedPrinciple, setSelectedPrinciple] = useState<string | null>(null);
   const [showRemediation, setShowRemediation] = useState(false);
   const [showAltText, setShowAltText] = useState(false);
+  const [trialBalance, setTrialBalance] = useState<TrialBalance | null>(null);
 
   const user: UserSession | null = isTrialDeployment
     ? auth.status === 'signed-in'
@@ -191,6 +64,27 @@ function App() {
       : null
     : DEMO_USER;
   const isAuthChecking = isTrialDeployment && auth.status === 'loading';
+
+  const refreshTrialBalance = useCallback(async () => {
+    if (!isTrialDeployment || auth.status !== 'signed-in') {
+      setTrialBalance(null);
+      return;
+    }
+
+    try {
+      setTrialBalance(await getTrialBalance());
+    } catch (balanceError) {
+      setError(
+        balanceError instanceof Error
+          ? balanceError.message
+          : 'Unable to load your trial balance.',
+      );
+    }
+  }, [auth.status, isTrialDeployment]);
+
+  useEffect(() => {
+    void refreshTrialBalance();
+  }, [refreshTrialBalance]);
 
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -211,12 +105,16 @@ function App() {
 
       setReport(analysisResult);
       setView('dashboard');
+      await refreshTrialBalance();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      setError(
+        trialPageLimitMessage(err) ??
+          (err instanceof Error ? err.message : 'An error occurred'),
+      );
     } finally {
       setIsLoading(false);
     }
-  }, [targetLevel]);
+  }, [refreshTrialBalance, targetLevel]);
 
   const handleNewAnalysis = useCallback(() => {
     setView('upload');
@@ -252,14 +150,8 @@ function App() {
   }
 
   /* ── Login screen ───────────────────────────────────────────── */
-  if (!user || !user.authenticated) {
-    return (
-      <TrialLogin
-        status={auth.status}
-        error={auth.error}
-        onSendMagicLink={auth.sendMagicLink}
-      />
-    );
+  if (isTrialDeployment && auth.status !== 'signed-in') {
+    return <LandingPage />;
   }
 
   /* ── Authenticated app ──────────────────────────────────────── */
@@ -275,6 +167,7 @@ function App() {
         onSignOut={isTrialDeployment ? auth.signOut : undefined}
         showNewButton={view === 'dashboard'}
         user={user}
+        trialBalance={isTrialDeployment ? trialBalance : null}
       />
 
       <main id="main-content" className="max-w-7xl mx-auto px-6 lg:px-8 py-12 sm:py-16">

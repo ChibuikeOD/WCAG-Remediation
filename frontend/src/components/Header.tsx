@@ -1,14 +1,22 @@
 import { FileCheck, Plus, LogOut, User } from 'lucide-react';
-import type { UserSession } from '../api';
+import type { TrialBalance, UserSession } from '../api';
+import { TrialUsage } from '../trial/TrialUsage';
 
 interface HeaderProps {
   onNewAnalysis: () => void;
   onSignOut?: () => Promise<void> | void;
   showNewButton: boolean;
   user: UserSession | null;
+  trialBalance?: TrialBalance | null;
 }
 
-export function Header({ onNewAnalysis, onSignOut, showNewButton, user }: HeaderProps) {
+export function Header({
+  onNewAnalysis,
+  onSignOut,
+  showNewButton,
+  user,
+  trialBalance,
+}: HeaderProps) {
   return (
     <header
       className="sticky top-0 z-40 backdrop-blur-sm"
@@ -92,6 +100,11 @@ export function Header({ onNewAnalysis, onSignOut, showNewButton, user }: Header
           </div>
 
         </div>
+        {trialBalance && (
+          <div className="pb-2">
+            <TrialUsage balance={trialBalance} />
+          </div>
+        )}
       </nav>
     </header>
   );

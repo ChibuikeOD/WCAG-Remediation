@@ -43,14 +43,37 @@ function withTrialAuthorization(
   };
 }
 
-class APIError extends Error {
-  constructor(public status: number, message: string) {
+export class APIError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public detail?: unknown,
+  ) {
     super(message);
     this.name = 'APIError';
   }
 }
 
-// User representation returned by SSO /auth/me
+export interface TrialBalance {
+  granted_pages: number;
+  consumed_pages: number;
+  reserved_pages: number;
+  remaining_pages: number;
+  normalized_domain: string;
+  eligibility_rule_version: string;
+}
+
+export interface TrialPageLimitDetail {
+  code: 'trial_page_limit_exceeded';
+  requested_pages: number;
+  remaining_pages: number;
+}
+
+function errorMessage(detail: unknown, fallback: string): string {
+  return typeof detail === 'string' ? detail : fallback;
+}
+
+// User representation used by the shared testing and trial workspace.
 export interface UserSession {
   authenticated: boolean;
   id?: string;
@@ -66,32 +89,24 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   });
 
   const response = await fetch(url, {
-    credentials: 'same-origin', // Ensure session cookies are sent for auth
     ...options,
     headers,
   });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new APIError(response.status, error.detail || 'Request failed');
+    throw new APIError(
+      response.status,
+      errorMessage(error.detail, 'Request failed'),
+      error.detail,
+    );
   }
 
   return response.json();
 }
 
-// Fetch active user session
-export async function getCurrentUser(): Promise<UserSession> {
-  return fetchJSON<UserSession>(`${API_BASE}/auth/me`);
-}
-
-// Get OIDC / SSO Login URL
-export function getLoginURL(redirect_to: string = '/'): string {
-  return `${API_BASE}/auth/login?redirect_to=${encodeURIComponent(redirect_to)}`;
-}
-
-// Get OIDC / SSO Logout URL
-export function getLogoutURL(): string {
-  return `${API_BASE}/auth/logout`;
+export async function getTrialBalance(): Promise<TrialBalance> {
+  return fetchJSON<TrialBalance>(`${API_BASE}/trial/me`);
 }
 
 // Upload a file for analysis
@@ -102,13 +117,16 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
   const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
     body: formData,
-    credentials: 'same-origin', // Ensure cookies are sent
     headers: withTrialAuthorization(),
   });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
-    throw new APIError(response.status, error.detail);
+    throw new APIError(
+      response.status,
+      errorMessage(error.detail, 'Upload failed'),
+      error.detail,
+    );
   }
 
   return response.json();
@@ -215,7 +233,6 @@ export function getRemediationReportURL(reportId: string): string {
 
 async function fetchBlob(url: string): Promise<Blob> {
   const response = await fetch(url, {
-    credentials: 'same-origin',
     headers: withTrialAuthorization(),
   });
 

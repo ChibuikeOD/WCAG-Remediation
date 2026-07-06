@@ -24,7 +24,6 @@ describe('API auth headers', () => {
     await api.healthCheck()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/health', {
-      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
       },
@@ -44,7 +43,6 @@ describe('API auth headers', () => {
     await api.analyzeDocument({ file_id: 'file-1', target_level: 'AA' })
 
     expect(fetchMock).toHaveBeenCalledWith('/api/analyze', {
-      credentials: 'same-origin',
       method: 'POST',
       body: JSON.stringify({ file_id: 'file-1', target_level: 'AA' }),
       headers: {
@@ -69,7 +67,6 @@ describe('API auth headers', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/upload', {
       method: 'POST',
       body: expect.any(FormData),
-      credentials: 'same-origin',
       headers: {
         Authorization: 'Bearer trial-token',
       },
@@ -90,7 +87,6 @@ describe('API auth headers', () => {
     await expect(api.downloadRemediatedFile('report-1')).resolves.toBe(blob)
 
     expect(fetchMock).toHaveBeenCalledWith('/api/remediate/download/report-1', {
-      credentials: 'same-origin',
       headers: {
         Authorization: 'Bearer trial-token',
       },
@@ -110,9 +106,36 @@ describe('API auth headers', () => {
     await api.healthCheck()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/health', {
-      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
+      },
+    })
+  })
+
+  it('fetches the authenticated trial balance', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const balance = {
+      granted_pages: 200,
+      consumed_pages: 25,
+      reserved_pages: 5,
+      remaining_pages: 170,
+      normalized_domain: 'example.org',
+      eligibility_rule_version: '2026-07-04',
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => balance,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+
+    await expect(api.getTrialBalance()).resolves.toEqual(balance)
+    expect(fetchMock).toHaveBeenCalledWith('/api/trial/me', {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer trial-token',
       },
     })
   })

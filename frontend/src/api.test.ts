@@ -1,0 +1,76 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+describe('API auth headers', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_API_URL', '')
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('preserves same-origin calls without Authorization in testing mode', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'testing')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok', rules_loaded: 1, timestamp: 'now' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+    await api.healthCheck()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', {
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+  })
+
+  it('attaches a bearer token from the registered getter in trial mode', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+    await api.analyzeDocument({ file_id: 'file-1', target_level: 'AA' })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/analyze', {
+      credentials: 'same-origin',
+      method: 'POST',
+      body: JSON.stringify({ file_id: 'file-1', target_level: 'AA' }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer trial-token',
+      },
+    })
+  })
+
+  it('omits Authorization in trial mode when the getter has no token', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok', rules_loaded: 1, timestamp: 'now' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => null)
+    await api.healthCheck()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', {
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+  })
+})

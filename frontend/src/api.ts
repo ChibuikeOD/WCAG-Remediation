@@ -14,6 +14,20 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || '/api';
 
+type TrialAccessTokenGetter = () => string | null | undefined;
+
+let trialAccessTokenGetter: TrialAccessTokenGetter = () => null;
+
+export function registerTrialAccessTokenGetter(getter: TrialAccessTokenGetter): () => void {
+  trialAccessTokenGetter = getter;
+
+  return () => {
+    if (trialAccessTokenGetter === getter) {
+      trialAccessTokenGetter = () => null;
+    }
+  };
+}
+
 class APIError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -31,13 +45,20 @@ export interface UserSession {
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+  const token = import.meta.env.VITE_DEPLOYMENT_MODE === 'trial' ? trialAccessTokenGetter() : null;
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(url, {
     credentials: 'same-origin', // Ensure session cookies are sent for auth
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {

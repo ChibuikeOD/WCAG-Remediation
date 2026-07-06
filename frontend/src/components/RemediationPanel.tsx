@@ -15,9 +15,9 @@ import type {
   RemediationResult,
 } from '../types';
 import {
+  downloadRemediatedFile,
+  downloadRemediationReport,
   remediateDocument,
-  getRemediatedFileURL,
-  getRemediationReportURL,
 } from '../api';
 
 interface RemediationPanelProps {
@@ -43,9 +43,11 @@ const PDF_ISSUE_ID_TO_RULE: Record<string, string> = {
 
 export function RemediationPanel({ report, onClose, onComplete }: RemediationPanelProps) {
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [results, setResults]           = useState<RemediationResult[] | null>(null);
   const [error, setError]               = useState<string | null>(null);
   const [remediationReportAvailable, setRemediationReportAvailable] = useState(false);
+  const [remediationReportFilename, setRemediationReportFilename] = useState<string | null>(null);
 
   const automatableIssues = report.all_issues.filter((i) => i.automatable_fix && !i.fixed);
 
@@ -63,6 +65,7 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
 
       setResults(response.results);
       setRemediationReportAvailable(Boolean(response.remediation_report_filename));
+      setRemediationReportFilename(response.remediation_report_filename ?? null);
 
       const successfulResults = response.results.filter((r) => r.success);
       const fixedRuleIds      = new Set<string>();
@@ -105,6 +108,46 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
       setError(err instanceof Error ? err.message : 'Remediation failed');
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadRemediationReport = async () => {
+    setIsDownloading(true);
+    setError(null);
+    try {
+      const blob = await downloadRemediationReport(report.id);
+      triggerDownload(
+        blob,
+        remediationReportFilename ?? `Remediation_Report_${report.id}.pdf`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const handleDownloadFixedPdf = async () => {
+    setIsDownloading(true);
+    setError(null);
+    try {
+      const blob = await downloadRemediatedFile(report.id);
+      triggerDownload(blob, `remediated_${report.document.filename}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -409,23 +452,25 @@ export function RemediationPanel({ report, onClose, onComplete }: RemediationPan
                 Close
               </button>
               {remediationReportAvailable && (
-                <a
-                  href={getRemediationReportURL(report.id)}
-                  download
+                <button
+                  type="button"
+                  onClick={handleDownloadRemediationReport}
                   className="btn btn-secondary"
+                  disabled={isDownloading}
                 >
                   <Download className="w-4 h-4" aria-hidden="true" />
                   Download Remediation Report
-                </a>
+                </button>
               )}
-              <a
-                href={getRemediatedFileURL(report.id)}
-                download
+              <button
+                type="button"
+                onClick={handleDownloadFixedPdf}
                 className="btn btn-primary"
+                disabled={isDownloading}
               >
                 <Download className="w-4 h-4" aria-hidden="true" />
                 Download Fixed PDF
-              </a>
+              </button>
             </>
           )}
         </div>

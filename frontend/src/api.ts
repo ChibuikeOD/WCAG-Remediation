@@ -28,6 +28,21 @@ export function registerTrialAccessTokenGetter(getter: TrialAccessTokenGetter): 
   };
 }
 
+function withTrialAuthorization(
+  headers: Record<string, string> = {}
+): Record<string, string> {
+  const token = import.meta.env.VITE_DEPLOYMENT_MODE === 'trial' ? trialAccessTokenGetter() : null;
+
+  if (!token) {
+    return headers;
+  }
+
+  return {
+    ...headers,
+    Authorization: `Bearer ${token}`,
+  };
+}
+
 class APIError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -45,15 +60,10 @@ export interface UserSession {
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
+  const headers = withTrialAuthorization({
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string> | undefined),
-  };
-  const token = import.meta.env.VITE_DEPLOYMENT_MODE === 'trial' ? trialAccessTokenGetter() : null;
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
+  });
 
   const response = await fetch(url, {
     credentials: 'same-origin', // Ensure session cookies are sent for auth
@@ -93,6 +103,7 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
     method: 'POST',
     body: formData,
     credentials: 'same-origin', // Ensure cookies are sent
+    headers: withTrialAuthorization(),
   });
 
   if (!response.ok) {
@@ -202,6 +213,28 @@ export function getRemediationReportURL(reportId: string): string {
   return `${API_BASE}/remediate/report/${reportId}`;
 }
 
+async function fetchBlob(url: string): Promise<Blob> {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    headers: withTrialAuthorization(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Download failed' }));
+    throw new APIError(response.status, error.detail || 'Download failed');
+  }
+
+  return response.blob();
+}
+
+export function downloadRemediatedFile(reportId: string): Promise<Blob> {
+  return fetchBlob(getRemediatedFileURL(reportId));
+}
+
+export function downloadRemediationReport(reportId: string): Promise<Blob> {
+  return fetchBlob(getRemediationReportURL(reportId));
+}
+
 // Compare LayoutLM vs OpenDataLoader tagging (JSON report, or ZIP with overlays)
 export async function compareTaggingPipelines(
   reportId: string,
@@ -209,7 +242,7 @@ export async function compareTaggingPipelines(
 ): Promise<TaggingComparisonReport | Blob> {
   const response = await fetch(`${API_BASE}/pdf/debug/compare-tagging`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withTrialAuthorization({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       report_id: reportId,
       include_overlays: options?.includeOverlays ?? false,
@@ -233,7 +266,7 @@ export async function compareTaggingPipelines(
 export async function generateModelOverlays(reportId: string): Promise<Blob> {
   const response = await fetch(`${API_BASE}/pdf/debug/overlays`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withTrialAuthorization({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ report_id: reportId }),
   });
 

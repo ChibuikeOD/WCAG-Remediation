@@ -54,6 +54,49 @@ describe('API auth headers', () => {
     })
   })
 
+  it('attaches a bearer token to file uploads in trial mode', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, file_id: 'file-1' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+    await api.uploadFile(new File(['pdf'], 'sample.pdf', { type: 'application/pdf' }))
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/upload', {
+      method: 'POST',
+      body: expect.any(FormData),
+      credentials: 'same-origin',
+      headers: {
+        Authorization: 'Bearer trial-token',
+      },
+    })
+  })
+
+  it('downloads remediated files with a bearer token in trial mode', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const blob = new Blob(['fixed'])
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => blob,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+    await expect(api.downloadRemediatedFile('report-1')).resolves.toBe(blob)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/remediate/download/report-1', {
+      credentials: 'same-origin',
+      headers: {
+        Authorization: 'Bearer trial-token',
+      },
+    })
+  })
+
   it('omits Authorization in trial mode when the getter has no token', async () => {
     vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
     const fetchMock = vi.fn().mockResolvedValue({

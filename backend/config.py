@@ -1,5 +1,5 @@
 """
-Configuration settings for the WCAG Accessibility Remediation Platform.
+Configuration settings for PDFAccess.
 """
 import glob
 import os
@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     )
     
     # Application
-    APP_NAME: str = "WCAG Accessibility Remediation Platform"
+    APP_NAME: str = "PDFAccess"
     APP_VERSION: str = "1.0.0"
     DEPLOYMENT_MODE: Literal["trial", "testing"] = "testing"
     DEBUG: bool = True

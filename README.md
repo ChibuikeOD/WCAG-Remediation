@@ -1,6 +1,6 @@
-# WCAG 2.2 Accessibility Remediation Platform
+# PDFAccess
 
-An automated accessibility audit engine for web pages and PDF documents based on the **Web Content Accessibility Guidelines (WCAG) 2.2** standard.
+PDFAccess is an automated accessibility audit and remediation engine for web pages and PDF documents based on the **Web Content Accessibility Guidelines (WCAG) 2.2** standard.
 
 ![WCAG 2.2](https://img.shields.io/badge/WCAG-2.2-blue)
 ![Python](https://img.shields.io/badge/Python-3.10+-green)
@@ -9,7 +9,7 @@ An automated accessibility audit engine for web pages and PDF documents based on
 
 ## Overview
 
-This platform provides:
+PDFAccess provides:
 
 - **Automated Accessibility Audits** - Run documents against 80+ WCAG 2.2 success criteria
 - **Selector-Based Checks** - CSS selector patterns to detect common accessibility issues

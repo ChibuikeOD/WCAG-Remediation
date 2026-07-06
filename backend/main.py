@@ -1,5 +1,5 @@
 """
-WCAG 2.2 Accessibility Remediation Platform - FastAPI Backend
+PDFAccess - FastAPI Backend
 
 Main application entry point providing endpoints for:
 - /upload - Upload HTML/PDF files for analysis
@@ -333,7 +333,7 @@ async def materialized_upload_async(
 async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown."""
     # Startup
-    logger.info("Starting WCAG Accessibility Remediation Platform")
+    logger.info("Starting PDFAccess")
     logger.info(f"Loaded {len(get_rules_engine().get_all_rules())} WCAG rules")
     
     # Initialize SQLite database schema
@@ -364,11 +364,11 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
         store.close()
-        logger.info("Shutting down WCAG Accessibility Remediation Platform")
+        logger.info("Shutting down PDFAccess")
 
 
 app = FastAPI(
-    title="WCAG 2.2 Accessibility Remediation Platform",
+    title="PDFAccess",
     description="""
     An automated accessibility audit engine for web pages and PDF documents.
     

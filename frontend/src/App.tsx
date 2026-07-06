@@ -19,7 +19,7 @@ import { deploymentMode } from './config';
 import { useAuth } from './auth/AuthProvider';
 import { LandingPage } from './landing/LandingPage';
 
-const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@accesspdf.com' };
+const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@pdfaccess.org' };
 import { FileCheck, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
 
 type View = 'upload' | 'dashboard';
@@ -188,7 +188,7 @@ function App() {
                 className="text-base sm:text-lg max-w-xl mx-auto leading-relaxed"
                 style={{ color: '#7a90a8' }}
               >
-                Upload your PDF and AccessPDF will audit structure, tags, and reading order against WCAG&nbsp;2.2 and PDF/UA standards — automatically.
+                Upload your PDF and PDFAccess will audit structure, tags, and reading order against WCAG&nbsp;2.2 and PDF/UA standards — automatically.
               </p>
             </div>
 
@@ -319,7 +319,7 @@ function App() {
                 <FileCheck className="w-3.5 h-3.5 text-white" aria-hidden="true" />
               </div>
               <span className="text-sm font-medium" style={{ color: '#2d4060' }}>
-                AccessPDF Inc.
+                PDFAccess
               </span>
             </div>
             <p className="text-xs" style={{ color: '#2d4060' }}>

@@ -1,4 +1,4 @@
-// API client for WCAG Accessibility Platform
+// API client for PDFAccess
 
 import type {
   AccessibilityReport,

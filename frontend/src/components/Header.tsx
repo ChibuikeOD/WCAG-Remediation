@@ -33,7 +33,7 @@ export function Header({
           <a
             href="/"
             className="flex items-center gap-3 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
-            aria-label="AccessPDF — home"
+            aria-label="PDFAccess — home"
           >
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -46,7 +46,7 @@ export function Header({
                 className="font-semibold text-[15px] tracking-tight transition-colors duration-150"
                 style={{ color: '#e8edf4' }}
               >
-                AccessPDF
+                PDFAccess
               </span>
               <span
                 className="hidden sm:block text-[11px] font-medium uppercase tracking-widest"

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, type FormEvent } from 'react';
 import { Header } from './components/Header';
 import { UploadZone } from './components/UploadZone';
 import { Dashboard } from './components/Dashboard';
@@ -6,15 +6,171 @@ import { IssueList } from './components/IssueList';
 import { RemediationPanel } from './components/RemediationPanel';
 import { AltTextPanel } from './components/AltTextPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
-import { uploadFile, analyzeDocument, getCurrentUser, getLoginURL, type UserSession } from './api';
+import { uploadFile, analyzeDocument, type UserSession } from './api';
+import { deploymentMode } from './config';
+import { useAuth } from './auth/AuthProvider';
 
-const DEMO_MODE = import.meta.env.VITE_DISABLE_AUTH !== 'false';
 const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@accesspdf.com' };
-import { FileCheck, LogIn, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
+import { FileCheck, Mail, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
 
 type View = 'upload' | 'dashboard';
+type TrialAuthStatus = 'loading' | 'signed-out' | 'check-email' | 'signed-in' | 'error';
+
+interface TrialLoginProps {
+  status: TrialAuthStatus;
+  error: string | null;
+  onSendMagicLink: (email: string) => Promise<void>;
+}
+
+function TrialLogin({ status, error, onSendMagicLink }: TrialLoginProps) {
+  const [email, setEmail] = useState('');
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail) {
+      setLocalError('Enter your email address to request a sign-in link.');
+      return;
+    }
+
+    setLocalError(null);
+    setIsSending(true);
+
+    try {
+      await onSendMagicLink(normalizedEmail);
+    } catch (sendError) {
+      setLocalError(sendError instanceof Error ? sendError.message : 'Unable to send sign-in link.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const displayError = localError ?? (status === 'error' ? error : null);
+
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center px-4"
+      style={{ background: '#080c14' }}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl p-8"
+        style={{ background: '#0d1420', border: '1px solid #1a2840' }}
+      >
+        <div className="flex justify-center mb-8">
+          <div
+            className="w-14 h-14 rounded-2xl flex items-center justify-center"
+            style={{ background: '#2563eb' }}
+          >
+            <FileCheck className="w-7 h-7 text-white" aria-hidden="true" />
+          </div>
+        </div>
+
+        <div className="text-center mb-8">
+          <h1
+            className="text-xl font-semibold mb-2"
+            style={{ color: '#e8edf4', letterSpacing: '-0.01em' }}
+          >
+            Start your PDFAccess free trial
+          </h1>
+          <p className="text-sm leading-relaxed" style={{ color: '#7a90a8' }}>
+            Verify your email to unlock one-time trial remediation credits. Personal
+            emails receive 200 pages; eligible education, nonprofit, and institution
+            domains receive 400 pages.
+          </p>
+        </div>
+
+        {status === 'check-email' && (
+          <div
+            role="status"
+            className="mb-5 rounded-xl p-4 text-sm leading-relaxed"
+            style={{
+              background: 'rgba(37,99,235,0.10)',
+              border: '1px solid rgba(37,99,235,0.25)',
+              color: '#bfdbfe',
+            }}
+          >
+            <strong className="font-semibold">Check your email.</strong> We sent
+            a secure PDFAccess sign-in link. Open it in this browser to continue.
+          </div>
+        )}
+
+        {displayError && (
+          <div
+            role="alert"
+            className="mb-5 rounded-xl p-4 text-sm leading-relaxed"
+            style={{
+              background: 'rgba(239,68,68,0.08)',
+              border: '1px solid rgba(239,68,68,0.20)',
+              color: '#fca5a5',
+            }}
+          >
+            {displayError}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label
+              htmlFor="trial-email"
+              className="block text-sm font-medium mb-2"
+              style={{ color: '#a0b4c8' }}
+            >
+              Email address
+            </label>
+            <input
+              id="trial-email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              className="w-full rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              style={{
+                background: '#080c14',
+                border: '1px solid #1a2840',
+                color: '#e8edf4',
+              }}
+              placeholder="you@organization.org"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSending}
+            className="w-full py-3 px-4 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-3 transition-colors duration-150 disabled:opacity-70"
+            style={{ background: '#2563eb' }}
+          >
+            {isSending ? (
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Mail className="w-4 h-4" aria-hidden="true" />
+            )}
+            Email me a secure sign-in link
+          </button>
+        </form>
+
+        <div
+          className="mt-8 pt-6 text-center"
+          style={{ borderTop: '1px solid #1a2840' }}
+        >
+          <span
+            className="text-[11px] font-medium uppercase tracking-widest"
+            style={{ color: '#2d4060' }}
+          >
+            PDFAccess.org
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function App() {
+  const mode = deploymentMode();
+  const isTrialDeployment = mode === 'trial';
+  const auth = useAuth();
   const [view, setView] = useState<View>('upload');
   const [report, setReport] = useState<AccessibilityReport | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -24,25 +180,17 @@ function App() {
   const [showRemediation, setShowRemediation] = useState(false);
   const [showAltText, setShowAltText] = useState(false);
 
-  // Authentication state
-  // DEMO_MODE: skip the /auth/me call entirely and render straight into the app.
-  const [user, setUser] = useState<UserSession | null>(DEMO_MODE ? DEMO_USER : null);
-  const [isAuthChecking, setIsAuthChecking] = useState(!DEMO_MODE);
-
-  // SSO check on mount (skipped when VITE_DISABLE_AUTH=true)
-  useEffect(() => {
-    if (DEMO_MODE) return;
-    getCurrentUser()
-      .then((session) => {
-        setUser(session.authenticated ? session : null);
-      })
-      .catch(() => {
-        setUser(null);
-      })
-      .finally(() => {
-        setIsAuthChecking(false);
-      });
-  }, []);
+  const user: UserSession | null = isTrialDeployment
+    ? auth.status === 'signed-in'
+      ? {
+          authenticated: true,
+          id: auth.user?.id,
+          email: auth.user?.email ?? undefined,
+          name: auth.user?.email ?? 'PDFAccess user',
+        }
+      : null
+    : DEMO_USER;
+  const isAuthChecking = isTrialDeployment && auth.status === 'loading';
 
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -106,63 +254,11 @@ function App() {
   /* ── Login screen ───────────────────────────────────────────── */
   if (!user || !user.authenticated) {
     return (
-      <div
-        className="min-h-screen flex items-center justify-center px-4"
-        style={{ background: '#080c14' }}
-      >
-        <div
-          className="w-full max-w-sm rounded-2xl p-8"
-          style={{ background: '#0d1420', border: '1px solid #1a2840' }}
-        >
-          {/* Logo mark */}
-          <div className="flex justify-center mb-8">
-            <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center"
-              style={{ background: '#2563eb' }}
-            >
-              <FileCheck className="w-7 h-7 text-white" aria-hidden="true" />
-            </div>
-          </div>
-
-          {/* Copy */}
-          <div className="text-center mb-8">
-            <h1
-              className="text-xl font-semibold mb-2"
-              style={{ color: '#e8edf4', letterSpacing: '-0.01em' }}
-            >
-              AccessPDF Enterprise
-            </h1>
-            <p className="text-sm leading-relaxed" style={{ color: '#7a90a8' }}>
-              Secure, automated PDF accessibility remediation for teams that ship compliant documents at scale.
-            </p>
-          </div>
-
-          {/* Login button */}
-          <button
-            onClick={() => { window.location.href = getLoginURL(); }}
-            className="w-full py-3 px-4 rounded-xl font-semibold text-sm text-white flex items-center justify-center gap-3 transition-colors duration-150"
-            style={{ background: '#2563eb' }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#1d4ed8')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = '#2563eb')}
-          >
-            <LogIn className="w-4 h-4" aria-hidden="true" />
-            Sign in with Enterprise SSO
-          </button>
-
-          {/* Footer */}
-          <div
-            className="mt-8 pt-6 text-center"
-            style={{ borderTop: '1px solid #1a2840' }}
-          >
-            <span
-              className="text-[11px] font-medium uppercase tracking-widest"
-              style={{ color: '#2d4060' }}
-            >
-              AccessPDF Inc.
-            </span>
-          </div>
-        </div>
-      </div>
+      <TrialLogin
+        status={auth.status}
+        error={auth.error}
+        onSendMagicLink={auth.sendMagicLink}
+      />
     );
   }
 
@@ -176,6 +272,7 @@ function App() {
 
       <Header
         onNewAnalysis={handleNewAnalysis}
+        onSignOut={isTrialDeployment ? auth.signOut : undefined}
         showNewButton={view === 'dashboard'}
         user={user}
       />

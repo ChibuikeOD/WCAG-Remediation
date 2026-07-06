@@ -3,11 +3,12 @@ import type { UserSession } from '../api';
 
 interface HeaderProps {
   onNewAnalysis: () => void;
+  onSignOut?: () => Promise<void> | void;
   showNewButton: boolean;
   user: UserSession | null;
 }
 
-export function Header({ onNewAnalysis, showNewButton, user }: HeaderProps) {
+export function Header({ onNewAnalysis, onSignOut, showNewButton, user }: HeaderProps) {
   return (
     <header
       className="sticky top-0 z-40 backdrop-blur-sm"
@@ -77,15 +78,16 @@ export function Header({ onNewAnalysis, showNewButton, user }: HeaderProps) {
             )}
 
             {/* Sign out */}
-            {user?.authenticated && (
-              <a
-                href="/api/auth/logout"
+            {user?.authenticated && onSignOut && (
+              <button
+                type="button"
+                onClick={() => { void onSignOut(); }}
                 className="btn btn-ghost"
-                aria-label="Sign out of AccessPDF"
+                aria-label="Sign out of PDFAccess"
               >
                 <LogOut className="w-4 h-4" aria-hidden="true" />
                 <span className="hidden sm:inline">Sign out</span>
-              </a>
+              </button>
             )}
           </div>
 

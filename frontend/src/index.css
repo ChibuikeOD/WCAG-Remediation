@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600&family=Public+Sans:wght@400;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -14,6 +16,14 @@
   --text-primary:    #e8edf4;
   --text-muted:      #7a90a8;
   --text-placeholder:#4a607a;
+  --pdfaccess-primary: #0d1b2a;
+  --pdfaccess-secondary: #006a6a;
+  --pdfaccess-secondary-hover: #004f4f;
+  --pdfaccess-surface: #f9faf5;
+  --pdfaccess-surface-container: #edeeea;
+  --pdfaccess-surface-container-low: #f3f4f0;
+  --pdfaccess-surface-variant: #e2e3df;
+  --pdfaccess-outline-variant: #c4c6cc;
 }
 
 /* ─── Base ───────────────────────────────────────────────────── */
@@ -28,6 +38,127 @@ body {
   font-feature-settings: 'cv01' on, 'ss01' on;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.pdfaccess-landing {
+  font-family: 'Public Sans', Inter, system-ui, sans-serif;
+}
+
+.pdfaccess-landing :focus-visible {
+  outline: 2px solid var(--pdfaccess-secondary);
+  outline-offset: 2px;
+}
+
+.pdfaccess-eyebrow {
+  color: var(--pdfaccess-secondary);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  line-height: 1rem;
+  text-transform: uppercase;
+}
+
+.pdfaccess-label {
+  color: #0d1b2a;
+  display: block;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+}
+
+.pdfaccess-primary-button,
+.pdfaccess-secondary-button {
+  align-items: center;
+  border-radius: 0.25rem;
+  display: inline-flex;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 700;
+  gap: 0.5rem;
+  justify-content: center;
+  line-height: 1.25rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.75rem 1rem;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.pdfaccess-primary-button {
+  background: var(--pdfaccess-secondary);
+  color: #ffffff;
+}
+
+.pdfaccess-primary-button:hover:not(:disabled) {
+  background: var(--pdfaccess-secondary-hover);
+}
+
+.pdfaccess-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.pdfaccess-secondary-button {
+  background: transparent;
+  border: 1px solid var(--pdfaccess-primary);
+  color: var(--pdfaccess-primary);
+}
+
+.pdfaccess-secondary-button:hover {
+  background: var(--pdfaccess-surface-container-low);
+}
+
+.pdfaccess-nav-link,
+.pdfaccess-link,
+.pdfaccess-footer-link {
+  color: #44474c;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-decoration: none;
+}
+
+.pdfaccess-nav-link:hover,
+.pdfaccess-link,
+.pdfaccess-footer-link:hover {
+  color: var(--pdfaccess-secondary);
+}
+
+.pdfaccess-link {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.pdfaccess-mobile-link {
+  align-items: center;
+  border-radius: 9999px;
+  color: #44474c;
+  display: flex;
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0.75rem 1rem;
+}
+
+.pdfaccess-mobile-link:hover,
+.pdfaccess-mobile-link:focus-visible {
+  background: var(--pdfaccess-surface-variant);
+  color: var(--pdfaccess-secondary);
+}
+
+.pdfaccess-card {
+  background: #ffffff;
+  border: 1px solid var(--pdfaccess-outline-variant);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+}
+
+.pdfaccess-footer-link {
+  display: block;
+  margin-top: 0.75rem;
+  width: fit-content;
 }
 
 /* ─── Accessibility ──────────────────────────────────────────── */

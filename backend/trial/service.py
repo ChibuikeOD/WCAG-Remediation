@@ -87,6 +87,46 @@ class TrialService:
             raise TrialStateError("trial account does not exist")
         return self._get_balance(user_id)
 
+    def grant_paid_pages(
+        self,
+        user_id: str,
+        pages: int,
+        idempotency_key: str,
+    ) -> TrialBalance:
+        """Add purchased pages exactly once after trusted payment fulfillment."""
+        if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
+            raise ValueError("pages must be a positive integer")
+        if not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        try:
+            self._lock_account(user_id)
+            existing = self._entry_for_key(user_id, idempotency_key)
+            if existing is not None:
+                if not self._matches_purchase(existing, pages):
+                    raise TrialStateError("idempotency key conflicts with purchase")
+                result = self._get_balance(user_id)
+                self.session.commit()
+                return result
+
+            self.session.add(
+                TrialLedgerEntry(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    entry_type="purchase",
+                    granted_delta=pages,
+                    reserved_delta=0,
+                    consumed_delta=0,
+                    idempotency_key=idempotency_key,
+                )
+            )
+            self.session.flush()
+            result = self._get_balance(user_id)
+            self.session.commit()
+            return result
+        except Exception:
+            self.session.rollback()
+            raise
+
     def get_job_for_idempotency(
         self, user_id: str, idempotency_key: str
     ) -> RemediationJob | None:
@@ -450,10 +490,7 @@ class TrialService:
         ).one()
         granted, consumed, reserved = (int(value) for value in totals)
         remaining = granted - reserved - consumed
-        if (
-            granted != account.granted_pages
-            or min(granted, consumed, reserved, remaining) < 0
-        ):
+        if granted < account.granted_pages or min(granted, consumed, reserved, remaining) < 0:
             raise TrialStateError("invalid trial balance")
         return TrialBalance(granted, consumed, reserved, remaining)
 
@@ -528,6 +565,17 @@ class TrialService:
         return bool(
             entry
             and entry.entry_type == "grant"
+            and entry.job_id is None
+            and entry.granted_delta == pages
+            and entry.reserved_delta == 0
+            and entry.consumed_delta == 0
+        )
+
+    @staticmethod
+    def _matches_purchase(entry: TrialLedgerEntry | None, pages: int) -> bool:
+        return bool(
+            entry
+            and entry.entry_type == "purchase"
             and entry.job_id is None
             and entry.granted_delta == pages
             and entry.reserved_delta == 0

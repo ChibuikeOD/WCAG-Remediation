@@ -50,6 +50,7 @@ describe('App deployment routing', () => {
       sendMagicLink,
       signOut,
     }
+    vi.spyOn(api, 'getBillingCatalog').mockRejectedValue(new Error('offline'))
   })
 
   afterEach(() => {
@@ -98,6 +99,9 @@ describe('App deployment routing', () => {
 
     expect(screen.getByRole('button', { name: /Drop a PDF file/i })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /Accessible PDFs/i })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: /Page credits and institutional billing/i }),
+    ).not.toBeInTheDocument()
     expect(balanceSpy).not.toHaveBeenCalled()
   })
 

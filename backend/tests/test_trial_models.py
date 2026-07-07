@@ -254,6 +254,7 @@ def test_trial_ledger_entry_enforces_user_idempotency_and_signed_deltas(db_sessi
     ("entry_type", "granted", "reserved", "consumed"),
     [
         ("grant", 10, 0, 0),
+        ("purchase", 10, 0, 0),
         ("reserve", 0, 3, 0),
         ("release", 0, -3, 0),
         ("consume", 0, -3, 3),
@@ -264,7 +265,7 @@ def test_trial_ledger_entry_allows_each_legal_signed_delta_form(
 ):
     user = add_user(db_session)
     uploaded_file = add_file(db_session, user)
-    job = None if entry_type == "grant" else add_job(db_session, user, uploaded_file)
+    job = None if entry_type in {"grant", "purchase"} else add_job(db_session, user, uploaded_file)
     db_session.add(
         database.TrialLedgerEntry(
             id=f"ledger-{entry_type}",
@@ -286,6 +287,9 @@ def test_trial_ledger_entry_allows_each_legal_signed_delta_form(
         ("grant", 0, 0, 0, False),
         ("grant", -1, 0, 0, False),
         ("grant", 1, 1, 0, False),
+        ("purchase", 0, 0, 0, False),
+        ("purchase", -1, 0, 0, False),
+        ("purchase", 1, 1, 0, False),
         ("reserve", 0, 0, 0, True),
         ("reserve", 0, -1, 0, True),
         ("reserve", 1, 1, 0, True),

@@ -271,6 +271,30 @@ def test_ensure_account_is_repeatable_without_duplicate_grant(db):
     assert len(entries(db, user.id)) == 1
 
 
+def test_paid_page_grant_is_idempotent_and_increases_balance(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+
+    first = service.grant_paid_pages(user.id, 250, "stripe_checkout:cs_test_123")
+    second = service.grant_paid_pages(user.id, 250, "stripe_checkout:cs_test_123")
+
+    assert first == second == TrialBalance(
+        granted=450, consumed=0, reserved=0, remaining=450
+    )
+    assert [row.entry_type for row in entries(db, user.id)] == ["grant", "purchase"]
+
+
+def test_paid_page_grant_rejects_conflicting_idempotency_key(db):
+    user = add_user(db)
+    service = TrialService(db)
+    service.ensure_account(user)
+    service.grant_paid_pages(user.id, 250, "stripe_checkout:cs_test_123")
+
+    with pytest.raises(TrialStateError, match="idempotency key conflicts"):
+        service.grant_paid_pages(user.id, 1000, "stripe_checkout:cs_test_123")
+
+
 def test_ensure_account_rejects_existing_account_without_matching_grant(db):
     user = add_user(db)
     db.add(

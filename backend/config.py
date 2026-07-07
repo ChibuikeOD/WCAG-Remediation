@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env"),
         env_file_encoding="utf-8",
+        extra="ignore",
         hide_input_in_errors=True,
     )
     
@@ -147,6 +148,20 @@ class Settings(BaseSettings):
     
     # AI Alt-text generation
     DEEPSEEK_API_KEY: Optional[str] = None
+
+    # Stripe billing
+    STRIPE_SECRET_KEY: Optional[SecretStr] = None
+    STRIPE_WEBHOOK_SECRET: Optional[SecretStr] = None
+    STRIPE_REMEDIATION_COMMUNITY_PRICE_ID: Optional[str] = None
+    STRIPE_REMEDIATION_LIBRARY_PRICE_ID: Optional[str] = None
+    STRIPE_REMEDIATION_CAMPUS_PRICE_ID: Optional[str] = None
+    STRIPE_AUDIT_COMMUNITY_PRICE_ID: Optional[str] = None
+    STRIPE_AUDIT_LIBRARY_PRICE_ID: Optional[str] = None
+    STRIPE_AUDIT_CAMPUS_PRICE_ID: Optional[str] = None
+    BILLING_SUCCESS_URL: str = (
+        "http://localhost:5173/billing/success?session_id={CHECKOUT_SESSION_ID}"
+    )
+    BILLING_CANCEL_URL: str = "http://localhost:5173/billing/cancel"
 
     # Ambiguous PDF Unicode verification
     GEMINI_API_KEY: Optional[str] = None

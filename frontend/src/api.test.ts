@@ -139,4 +139,107 @@ describe('API auth headers', () => {
       },
     })
   })
+
+  it('creates a Stripe checkout session with the authenticated bearer token', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const response = {
+      purchase_id: 'purchase-1',
+      checkout_session_id: 'cs_test_123',
+      url: 'https://checkout.stripe.test/pay',
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+
+    await expect(api.createCheckoutSession({
+      pack_key: 'starter',
+      service_mode: 'audit',
+    })).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenCalledWith('/api/billing/checkout-session', {
+      method: 'POST',
+      body: JSON.stringify({ service_mode: 'audit', pack_key: 'starter' }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer trial-token',
+      },
+    })
+  })
+
+  it('creates a Stripe subscription checkout session with the authenticated bearer token', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const response = {
+      purchase_id: 'subscription-1',
+      checkout_session_id: 'cs_sub_123',
+      url: 'https://checkout.stripe.test/subscription',
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+
+    await expect(api.createSubscriptionCheckoutSession({
+      plan_key: 'library',
+      service_mode: 'audit',
+    })).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenCalledWith('/api/billing/subscription-checkout-session', {
+      method: 'POST',
+      body: JSON.stringify({ service_mode: 'audit', plan_key: 'library' }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer trial-token',
+      },
+    })
+  })
+
+  it('submits institutional invoice requests through the billing API', async () => {
+    vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    const response = {
+      request_id: 'invoice-request-1',
+      purchase_id: 'purchase-1',
+      plan_key: 'library',
+      service_mode: 'remediation',
+      domain_verified: true,
+      status: 'requested',
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = await import('./api')
+    api.registerTrialAccessTokenGetter(() => 'trial-token')
+
+    await expect(api.requestInstitutionalInvoice({
+      plan_key: 'library',
+      organization_name: 'City Library',
+      contact_name: 'Avery Buyer',
+      contact_email: 'avery@library.org',
+      po_number: 'PO-42',
+    })).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenCalledWith('/api/billing/invoice-request', {
+      method: 'POST',
+      body: JSON.stringify({
+        service_mode: 'remediation',
+        plan_key: 'library',
+        organization_name: 'City Library',
+        contact_name: 'Avery Buyer',
+        contact_email: 'avery@library.org',
+        po_number: 'PO-42',
+      }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer trial-token',
+      },
+    })
+  })
 })

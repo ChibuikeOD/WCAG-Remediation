@@ -51,6 +51,7 @@ idna==3.10
 python-dotenv==1.0.0
 pydantic==2.6.0
 pydantic-settings==2.1.0
+stripe>=12.0.0
 
 # LayoutLMv3 integration (Disabled on low-memory servers; commented out to speed up Docker builds)
 # torch>=2.0.0

@@ -5,6 +5,7 @@ import { Dashboard } from './components/Dashboard';
 import { IssueList } from './components/IssueList';
 import { RemediationPanel } from './components/RemediationPanel';
 import { AltTextPanel } from './components/AltTextPanel';
+import { BillingPanel } from './components/BillingPanel';
 import type { AccessibilityReport, WCAGLevel } from './types';
 import {
   APIError,
@@ -241,6 +242,8 @@ function App() {
                 <strong className="font-semibold">Error:</strong> {error}
               </div>
             )}
+
+            {isTrialDeployment ? <BillingPanel user={user} /> : null}
 
             {/* Feature cards */}
             <div className="mt-20 grid grid-cols-1 md:grid-cols-3 gap-5 animate-stagger">

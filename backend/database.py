@@ -61,6 +61,14 @@ class User(Base):
     remediation_jobs = relationship(
         "RemediationJob", back_populates="user", passive_deletes="all"
     )
+    credit_purchases = relationship(
+        "CreditPurchase", back_populates="user", passive_deletes="all"
+    )
+    institutional_invoice_requests = relationship(
+        "InstitutionalInvoiceRequest",
+        back_populates="user",
+        passive_deletes="all",
+    )
 
 
 class UploadedFile(Base):
@@ -212,11 +220,13 @@ class TrialLedgerEntry(Base):
             name="fk_trial_ledger_job_owner",
         ),
         CheckConstraint(
-            "entry_type IN ('grant', 'reserve', 'consume', 'release')",
+            "entry_type IN ('grant', 'purchase', 'reserve', 'consume', 'release')",
             name="ck_trial_ledger_entry_type",
         ),
         CheckConstraint(
             "(entry_type = 'grant' AND granted_delta > 0 "
+            "AND reserved_delta = 0 AND consumed_delta = 0 AND job_id IS NULL) OR "
+            "(entry_type = 'purchase' AND granted_delta > 0 "
             "AND reserved_delta = 0 AND consumed_delta = 0 AND job_id IS NULL) OR "
             "(entry_type = 'reserve' AND granted_delta = 0 "
             "AND reserved_delta > 0 AND consumed_delta = 0 AND job_id IS NOT NULL) OR "
@@ -311,6 +321,98 @@ class RemediationJob(Base):
         Index("ix_remediation_jobs_file_id", "file_id"),
         Index("ix_remediation_jobs_report_id", "report_id"),
         Index("ix_remediation_jobs_status", "status"),
+    )
+
+
+class CreditPurchase(Base):
+    """A Stripe-backed credit purchase or sales-assisted institutional plan."""
+
+    __tablename__ = "credit_purchases"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    purchase_type = Column(String, nullable=False)
+    catalog_key = Column(String, nullable=False)
+    service_mode = Column(String, nullable=False)
+    pages_included = Column(Integer, nullable=False)
+    amount_cents = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="usd")
+    status = Column(String, nullable=False)
+    stripe_checkout_session_id = Column(String, unique=True, nullable=True)
+    stripe_payment_intent_id = Column(String, nullable=True)
+    stripe_customer_id = Column(String, nullable=True)
+    stripe_subscription_id = Column(String, unique=True, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now())
+    fulfilled_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="credit_purchases")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "stripe_checkout_session_id",
+            name="uq_credit_purchases_user_stripe_session",
+        ),
+        CheckConstraint(
+            "purchase_type IN ('credit_pack', 'institutional_plan', 'subscription_plan')",
+            name="ck_credit_purchases_type",
+        ),
+        CheckConstraint(
+            "service_mode IN ('remediation', 'audit')",
+            name="ck_credit_purchases_service_mode",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'active', 'fulfilled', 'invoice_requested', 'invoice_sent', 'paid', 'past_due', 'canceled', 'void')",
+            name="ck_credit_purchases_status",
+        ),
+        CheckConstraint("pages_included > 0", name="ck_credit_purchases_pages_positive"),
+        CheckConstraint("amount_cents >= 0", name="ck_credit_purchases_amount_nonnegative"),
+        Index("ix_credit_purchases_user_id", "user_id"),
+        Index("ix_credit_purchases_status", "status"),
+        Index("ix_credit_purchases_stripe_checkout_session_id", "stripe_checkout_session_id"),
+        Index("ix_credit_purchases_stripe_subscription_id", "stripe_subscription_id"),
+    )
+
+
+class InstitutionalInvoiceRequest(Base):
+    """Sales-assisted invoice/PO request for libraries, campuses, and agencies."""
+
+    __tablename__ = "institutional_invoice_requests"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    plan_key = Column(String, nullable=False)
+    service_mode = Column(String, nullable=False)
+    organization_name = Column(String, nullable=False)
+    contact_name = Column(String, nullable=False)
+    contact_email = Column(String, nullable=False)
+    normalized_domain = Column(String, nullable=False)
+    domain_verified = Column(Integer, nullable=False, default=0)
+    po_number = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    pages_included = Column(Integer, nullable=False)
+    annual_price_cents = Column(Integer, nullable=False)
+    overage_cents = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="requested")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now())
+
+    user = relationship("User", back_populates="institutional_invoice_requests")
+
+    __table_args__ = (
+        CheckConstraint(
+            "service_mode IN ('remediation', 'audit')",
+            name="ck_invoice_requests_service_mode",
+        ),
+        CheckConstraint(
+            "status IN ('requested', 'approved', 'invoice_sent', 'paid', 'declined')",
+            name="ck_invoice_requests_status",
+        ),
+        CheckConstraint(
+            "domain_verified IN (0, 1)", name="ck_invoice_requests_domain_verified"
+        ),
+        Index("ix_invoice_requests_user_id", "user_id"),
+        Index("ix_invoice_requests_status", "status"),
     )
 
 

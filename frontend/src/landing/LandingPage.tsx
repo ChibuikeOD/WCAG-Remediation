@@ -15,8 +15,10 @@ import { TrialSignupForm } from './TrialSignupForm'
 
 const navigationLinks = [
   { href: '#trial-signup', label: 'Start trial' },
+  { href: '#subscriptions', label: 'Subscriptions' },
   { href: '#allowances', label: 'Allowances' },
   { href: '#workflow', label: 'Workflow' },
+  { href: '#faq', label: 'FAQ' },
   { href: '#capabilities', label: 'Security' },
 ]
 
@@ -39,6 +41,45 @@ const workflowSteps = [
   {
     title: 'Download private outputs',
     body: 'Verified users receive the remediated PDF and a remediation report from private trial storage.',
+  },
+]
+
+const subscriptionPlans = [
+  { name: 'Community', price: '$399/yr', pages: '2,500 pages', fit: 'Small public library' },
+  { name: 'Library', price: '$899/yr', pages: '8,000 pages', fit: 'Mid-size system' },
+  { name: 'Campus', price: '$2,499/yr', pages: '30,000 pages', fit: 'University or large district' },
+]
+
+const faqItems = [
+  {
+    question: 'What happens during PDF remediation?',
+    answer:
+      'The trial checks document structure, tags, headings, reading order, tables, links, metadata, and common WCAG issues, then applies automated fixes where the system can do so safely.',
+  },
+  {
+    question: 'How does the alt text system work?',
+    answer:
+      'Detected images are reviewed with surrounding page context so generated descriptions fit the document. The system prioritizes meaningful figures and avoids adding unnecessary alt text to decorative content.',
+  },
+  {
+    question: 'Will I receive a report?',
+    answer:
+      'Yes. Each completed trial job includes the remediated PDF plus a remediation report that summarizes findings, automated fixes, remaining review items, and any accessibility disclosures.',
+  },
+  {
+    question: 'Are uploaded PDFs private?',
+    answer:
+      'Trial files are tied to verified users and stored in private trial storage. Output links are intended for the verified account that submitted the document.',
+  },
+  {
+    question: 'What if my PDF is scanned or unusually complex?',
+    answer:
+      'Complex layouts, image-only scans, custom forms, and dense tables may need manual review after automation. The report calls out issues that should be checked by an accessibility specialist.',
+  },
+  {
+    question: 'Can your team review tricky accessibility issues?',
+    answer:
+      'Yes. If a trial report flags questions about reading order, table structure, figure descriptions, or PDF/UA conformance, contact support@pdfaccess.org for next-step guidance.',
   },
 ]
 
@@ -177,11 +218,17 @@ export function LandingPage() {
             <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#trial-signup">
               Start free trial
             </a>
+            <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#subscriptions">
+              Subscriptions
+            </a>
             <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#allowances">
               Trial allowances
             </a>
             <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#workflow">
               Workflow
+            </a>
+            <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#faq">
+              FAQ
             </a>
             <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#capabilities">
               Security
@@ -206,8 +253,8 @@ export function LandingPage() {
               <a href="#trial-signup" className="pdfaccess-primary-button">
                 Start free trial
               </a>
-              <a href="#workflow" className="pdfaccess-secondary-button">
-                See how it works
+              <a href="#subscriptions" className="pdfaccess-secondary-button">
+                View subscriptions
               </a>
             </div>
           </div>
@@ -284,6 +331,31 @@ export function LandingPage() {
           </div>
         </section>
 
+        <section id="subscriptions" className="mx-auto max-w-[1440px] px-4 py-16 md:px-8 lg:px-12">
+          <div className="grid gap-8 md:grid-cols-[320px_1fr]">
+            <div>
+              <p className="pdfaccess-eyebrow">Paid access</p>
+              <h2 className="mt-3 text-3xl font-bold text-[#0d1b2a]">Annual subscriptions</h2>
+              <p className="mt-4 leading-7 text-[#44474c]">
+                Skip the free trial or upgrade after testing. Card checkout is available after sign-in.
+              </p>
+              <a href="#trial-signup" className="pdfaccess-primary-button mt-6">
+                Sign in to subscribe
+              </a>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              {subscriptionPlans.map((plan) => (
+                <article key={plan.name} className="pdfaccess-card">
+                  <h3 className="text-xl font-bold text-[#0d1b2a]">{plan.name}</h3>
+                  <p className="mt-4 text-3xl font-bold text-[#006a6a]">{plan.price}</p>
+                  <p className="mt-3 font-semibold text-[#0d1b2a]">{plan.pages}</p>
+                  <p className="mt-3 leading-7 text-[#44474c]">{plan.fit}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section id="workflow" className="bg-white py-16">
           <div className="mx-auto max-w-[1440px] px-4 md:px-8 lg:px-12">
             <p className="pdfaccess-eyebrow">Workflow</p>
@@ -300,6 +372,29 @@ export function LandingPage() {
                   <p className="mt-3 leading-7 text-[#44474c]">{step.body}</p>
                 </article>
               ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="faq" className="border-y bg-[#edeeea] py-16" style={{ borderColor: 'var(--pdfaccess-outline-variant)' }}>
+          <div className="mx-auto max-w-[1440px] px-4 md:px-8 lg:px-12">
+            <div className="grid gap-8 md:grid-cols-[360px_1fr]">
+              <div>
+                <p className="pdfaccess-eyebrow">FAQ</p>
+                <h2 className="mt-3 text-3xl font-bold text-[#0d1b2a]">Frequently asked questions</h2>
+                <p className="mt-4 leading-7 text-[#44474c]">
+                  A quick guide to what the public trial can automate, what still
+                  needs review, and how your remediation outputs are handled.
+                </p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {faqItems.map((item) => (
+                  <article key={item.question} className="pdfaccess-card">
+                    <h3 className="text-lg font-bold leading-7 text-[#0d1b2a]">{item.question}</h3>
+                    <p className="mt-3 leading-7 text-[#44474c]">{item.answer}</p>
+                  </article>
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -340,6 +435,7 @@ export function LandingPage() {
           <div>
             <h2 className="font-bold text-[#0d1b2a]">Resources</h2>
             <a className="pdfaccess-footer-link" href="#workflow">Workflow</a>
+            <a className="pdfaccess-footer-link" href="#faq">FAQ</a>
             <a className="pdfaccess-footer-link" href="#capabilities">Security</a>
           </div>
           <div>

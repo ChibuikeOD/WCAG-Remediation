@@ -69,6 +69,55 @@ export interface TrialPageLimitDetail {
   remaining_pages: number;
 }
 
+export type BillingServiceMode = 'remediation' | 'audit';
+
+export interface PayAsYouGoPack {
+  name: string;
+  pages: number;
+  amount_cents: number;
+  per_page_cents: number;
+  notes: string;
+}
+
+export interface InstitutionalPlan {
+  name: string;
+  annual_price_cents: number;
+  pages: number;
+  overage_cents: number;
+  best_for: string;
+}
+
+export interface BillingCatalog {
+  currency: 'usd';
+  credit_validity_months: number;
+  service_modes: Record<BillingServiceMode, {
+    label: string;
+    pay_as_you_go: Record<'starter' | 'standard' | 'pro', PayAsYouGoPack>;
+    institutional_annual: Record<'community' | 'library' | 'campus', InstitutionalPlan>;
+  }>;
+  institutional_terms: {
+    shared_org_account: boolean;
+    domain_verification: string[];
+    invoice_and_po: boolean;
+    annual_true_up_at_renewal: boolean;
+  };
+}
+
+export interface CheckoutSessionResponse {
+  purchase_id: string;
+  checkout_session_id: string;
+  url: string;
+}
+
+export interface InvoiceRequestResponse {
+  request_id: string;
+  purchase_id: string;
+  plan_key: string;
+  service_mode: BillingServiceMode;
+  domain_verified: boolean;
+  status: string;
+}
+
 function errorMessage(detail: unknown, fallback: string): string {
   return typeof detail === 'string' ? detail : fallback;
 }
@@ -107,6 +156,54 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 
 export async function getTrialBalance(): Promise<TrialBalance> {
   return fetchJSON<TrialBalance>(`${API_BASE}/trial/me`);
+}
+
+export async function getBillingCatalog(): Promise<BillingCatalog> {
+  return fetchJSON<BillingCatalog>(`${API_BASE}/billing/catalog`);
+}
+
+export async function createCheckoutSession(params: {
+  pack_key: 'starter' | 'standard' | 'pro';
+  service_mode?: BillingServiceMode;
+}): Promise<CheckoutSessionResponse> {
+  return fetchJSON<CheckoutSessionResponse>(`${API_BASE}/billing/checkout-session`, {
+    method: 'POST',
+    body: JSON.stringify({
+      service_mode: 'remediation',
+      ...params,
+    }),
+  });
+}
+
+export async function createSubscriptionCheckoutSession(params: {
+  plan_key: 'community' | 'library' | 'campus';
+  service_mode?: BillingServiceMode;
+}): Promise<CheckoutSessionResponse> {
+  return fetchJSON<CheckoutSessionResponse>(`${API_BASE}/billing/subscription-checkout-session`, {
+    method: 'POST',
+    body: JSON.stringify({
+      service_mode: 'remediation',
+      ...params,
+    }),
+  });
+}
+
+export async function requestInstitutionalInvoice(params: {
+  plan_key: 'community' | 'library' | 'campus';
+  service_mode?: BillingServiceMode;
+  organization_name: string;
+  contact_name: string;
+  contact_email: string;
+  po_number?: string;
+  notes?: string;
+}): Promise<InvoiceRequestResponse> {
+  return fetchJSON<InvoiceRequestResponse>(`${API_BASE}/billing/invoice-request`, {
+    method: 'POST',
+    body: JSON.stringify({
+      service_mode: 'remediation',
+      ...params,
+    }),
+  });
 }
 
 // Upload a file for analysis

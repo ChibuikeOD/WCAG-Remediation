@@ -50,6 +50,7 @@ from .database import (
 )
 from .retention_runner import clean_expired_documents
 from .auth import router as auth_router, require_trial_user, require_user, User
+from .payments import router as payments_router
 from .trial import InsufficientPages, TrialService, TrialStateError
 from .storage import (
     ArtifactAccessDenied,
@@ -411,6 +412,7 @@ app.add_middleware(
 
 # Register Authentication endpoints
 app.include_router(auth_router)
+app.include_router(payments_router)
 
 
 @app.get("/")

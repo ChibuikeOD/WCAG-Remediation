@@ -68,6 +68,36 @@ describe('LandingPage', () => {
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
   })
 
+  it('presents a direct subscription path before trial signup', async () => {
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    expect(screen.getByRole('heading', { name: /Annual subscriptions/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /View subscriptions/i })[0]).toHaveAttribute(
+      'href',
+      '#subscriptions',
+    )
+    expect(screen.getByRole('link', { name: /Sign in to subscribe/i })).toHaveAttribute(
+      'href',
+      '#trial-signup',
+    )
+  })
+
+  it('answers common remediation and alt-text trial questions in an FAQ section', async () => {
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    expect(screen.getByRole('heading', { name: /Frequently asked questions/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /FAQ/i })[0]).toHaveAttribute('href', '#faq')
+    expect(screen.getByText(/What happens during PDF remediation/i)).toBeInTheDocument()
+    expect(screen.getByText(/How does the alt text system work/i)).toBeInTheDocument()
+    expect(screen.getByText(/Will I receive a report/i)).toBeInTheDocument()
+    expect(screen.getByText(/Are uploaded PDFs private/i)).toBeInTheDocument()
+    expect(screen.getByText(/Can your team review tricky accessibility issues/i)).toBeInTheDocument()
+  })
+
   it('submits a normalized email address through the magic-link provider', async () => {
     const { LandingPage } = await import('./LandingPage')
 

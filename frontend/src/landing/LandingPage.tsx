@@ -85,6 +85,7 @@ const faqItems = [
 
 export function LandingPage() {
   const auth = useAuth()
+  const isSignedIn = auth.status === 'signed-in'
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
   const desktopTrialLinkRef = useRef<HTMLAnchorElement>(null)
@@ -171,13 +172,28 @@ export function LandingPage() {
           </nav>
 
           <div className="flex items-center gap-3">
-            <a
-              ref={desktopTrialLinkRef}
-              href="#trial-signup"
-              className="pdfaccess-primary-button hidden md:inline-flex"
-            >
-              Start free trial
-            </a>
+            {isSignedIn ? (
+              <a
+                ref={desktopTrialLinkRef}
+                href="/remediate"
+                className="pdfaccess-primary-button hidden md:inline-flex"
+              >
+                Start Remediating
+              </a>
+            ) : (
+              <div className="hidden items-center gap-3 md:flex">
+                <a href="#trial-signup" className="pdfaccess-secondary-button">
+                  Log in
+                </a>
+                <a
+                  ref={desktopTrialLinkRef}
+                  href="#trial-signup"
+                  className="pdfaccess-primary-button"
+                >
+                  Sign up
+                </a>
+              </div>
+            )}
             <button
               ref={menuTriggerRef}
               type="button"
@@ -215,9 +231,20 @@ export function LandingPage() {
             </button>
           </div>
           <nav className="mt-6 flex flex-col gap-3" aria-label="Mobile menu links">
-            <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#trial-signup">
-              Start free trial
-            </a>
+            {isSignedIn ? (
+              <a onClick={closeMenu} className="pdfaccess-mobile-link" href="/remediate">
+                Start Remediating
+              </a>
+            ) : (
+              <>
+                <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#trial-signup">
+                  Sign up
+                </a>
+                <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#trial-signup">
+                  Log in
+                </a>
+              </>
+            )}
             <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#subscriptions">
               Subscriptions
             </a>
@@ -250,9 +277,20 @@ export function LandingPage() {
               that powers the current testing workspace.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <a href="#trial-signup" className="pdfaccess-primary-button">
-                Start free trial
-              </a>
+              {isSignedIn ? (
+                <a href="/remediate" className="pdfaccess-primary-button">
+                  Start Remediating
+                </a>
+              ) : (
+                <>
+                  <a href="#trial-signup" className="pdfaccess-primary-button">
+                    Sign up
+                  </a>
+                  <a href="#trial-signup" className="pdfaccess-secondary-button">
+                    Log in
+                  </a>
+                </>
+              )}
               <a href="#subscriptions" className="pdfaccess-secondary-button">
                 View subscriptions
               </a>

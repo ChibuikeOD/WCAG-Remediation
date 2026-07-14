@@ -7,8 +7,8 @@ let mediaChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
 const authState = vi.hoisted(() => ({
   value: {
     status: 'signed-out',
-    user: null,
-    accessToken: null,
+    user: null as { id: string; email?: string } | null,
+    accessToken: null as string | null,
     error: null as string | null,
     sendMagicLink,
     signOut: vi.fn(),
@@ -66,6 +66,26 @@ describe('LandingPage', () => {
       '#main-content',
     )
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+    expect(screen.getAllByRole('link', { name: 'Sign up' })[0]).toHaveAttribute('href', '#trial-signup')
+    expect(screen.getAllByRole('link', { name: 'Log in' })[0]).toHaveAttribute('href', '#trial-signup')
+  })
+
+  it('takes a verified user from the home page to the remediation zone', async () => {
+    authState.value = {
+      ...authState.value,
+      status: 'signed-in',
+      user: { id: 'user-1', email: 'tester@example.org' },
+      accessToken: 'trial-token',
+    }
+    const { LandingPage } = await import('./LandingPage')
+
+    render(<LandingPage />)
+
+    const remediationLinks = screen.getAllByRole('link', { name: 'Start Remediating' })
+    expect(remediationLinks.length).toBeGreaterThan(0)
+    remediationLinks.forEach((link) => expect(link).toHaveAttribute('href', '/remediate'))
+    expect(screen.queryByRole('link', { name: 'Sign up' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Log in' })).not.toBeInTheDocument()
   })
 
   it('presents a direct subscription path before trial signup', async () => {
@@ -106,7 +126,7 @@ describe('LandingPage', () => {
     fireEvent.change(screen.getByLabelText(/Email address/i), {
       target: { value: ' Applicant@University.EDU ' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /Start free trial/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Continue with email/i }))
 
     await waitFor(() => {
       expect(sendMagicLink).toHaveBeenCalledWith('applicant@university.edu')
@@ -131,7 +151,7 @@ describe('LandingPage', () => {
     render(<LandingPage />)
 
     const emailInput = screen.getByLabelText(/Email address/i)
-    fireEvent.click(screen.getByRole('button', { name: /Start free trial/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Continue with email/i }))
 
     const error = screen.getByRole('alert')
     expect(emailInput).toHaveAttribute('aria-invalid', 'true')

@@ -49,7 +49,7 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
       <div className="mb-6">
         <p className="pdfaccess-eyebrow">Verified email trial</p>
         <h2 id="trial-signup-heading" className="mt-2 text-2xl font-bold text-[#0d1b2a]">
-          Start with 200 free pages
+          Sign up or log in
         </h2>
         <p className="mt-3 leading-7 text-[#44474c]">
           Use a personal email for 200 pages. Register with a .edu, .org, company,
@@ -116,7 +116,7 @@ export function TrialSignupForm({ status, error, onSendMagicLink }: TrialSignupF
           ) : (
             <Mail className="h-5 w-5" aria-hidden="true" />
           )}
-          Start free trial
+          Continue with email
         </button>
       </form>
 

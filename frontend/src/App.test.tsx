@@ -32,6 +32,7 @@ const balance: api.TrialBalance = {
 
 describe('App deployment routing', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/')
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockReturnValue({
@@ -71,6 +72,7 @@ describe('App deployment routing', () => {
 
   it('renders the workspace and trial balance for a signed-in trial user', async () => {
     vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    window.history.replaceState({}, '', '/remediate')
     authState.value = {
       ...authState.value,
       status: 'signed-in',
@@ -107,6 +109,7 @@ describe('App deployment routing', () => {
 
   it('renders the structured trial page-limit message from an upload 409', async () => {
     vi.stubEnv('VITE_DEPLOYMENT_MODE', 'trial')
+    window.history.replaceState({}, '', '/remediate')
     authState.value = {
       ...authState.value,
       status: 'signed-in',

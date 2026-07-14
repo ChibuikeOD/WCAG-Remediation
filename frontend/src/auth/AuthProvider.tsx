@@ -10,6 +10,7 @@ import {
 import type { Session, User } from '@supabase/supabase-js'
 
 import { registerTrialAccessTokenGetter } from '../api'
+import { remediationAppUrl } from '../config'
 import { getSupabaseClient } from './supabase'
 
 type AuthStatus = 'loading' | 'signed-out' | 'check-email' | 'signed-in' | 'error'
@@ -122,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { error: signInError } = await client.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${remediationAppUrl()}/auth/callback`,
       },
     })
 

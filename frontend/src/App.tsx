@@ -43,6 +43,9 @@ function trialPageLimitMessage(error: unknown): string | null {
 function App() {
   const mode = deploymentMode();
   const isTrialDeployment = mode === 'trial';
+  const isRemediationRoute =
+    window.location.pathname === '/remediate' ||
+    window.location.pathname.startsWith('/remediate/');
   const auth = useAuth();
   const [view, setView] = useState<View>('upload');
   const [report, setReport] = useState<AccessibilityReport | null>(null);
@@ -67,7 +70,7 @@ function App() {
   const isAuthChecking = isTrialDeployment && auth.status === 'loading';
 
   const refreshTrialBalance = useCallback(async () => {
-    if (!isTrialDeployment || auth.status !== 'signed-in') {
+    if (!isTrialDeployment || !isRemediationRoute || auth.status !== 'signed-in') {
       setTrialBalance(null);
       return;
     }
@@ -81,7 +84,7 @@ function App() {
           : 'Unable to load your trial balance.',
       );
     }
-  }, [auth.status, isTrialDeployment]);
+  }, [auth.status, isRemediationRoute, isTrialDeployment]);
 
   useEffect(() => {
     void refreshTrialBalance();
@@ -127,6 +130,10 @@ function App() {
   const handleRemediationComplete = useCallback((updatedReport: AccessibilityReport) => {
     setReport(updatedReport);
   }, []);
+
+  if (isTrialDeployment && !isRemediationRoute) {
+    return <LandingPage />;
+  }
 
   /* ── Loading screen ─────────────────────────────────────────── */
   if (isAuthChecking) {

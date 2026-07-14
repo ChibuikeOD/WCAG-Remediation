@@ -130,7 +130,7 @@ describe('AuthProvider', () => {
     expect(supabaseMock.client.auth.signInWithOtp).toHaveBeenCalledWith({
       email: 'reader@example.com',
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: 'https://pdfaccess.org/remediate/auth/callback',
       },
     })
     expect(await screen.findByText('Status: check-email')).toBeInTheDocument()

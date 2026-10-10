@@ -120,6 +120,11 @@ test_overlays/
 test_overlays.zip
 VirtualEnvironment/
 
+# Local dependency/tool caches and runtime artifacts
+backend/_uv/
+.cache/
+.artifacts/
+
 .vercel
 
 # Isolated Codex feature worktrees

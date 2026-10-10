@@ -123,6 +123,13 @@ The application will be available at:
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
 
+### Codex Cloud
+
+To work on this repository while your development computer is offline, follow the
+[Codex Cloud setup guide](docs/operations/codex-cloud.md). It provides the hosted
+environment settings, repeatable setup command, credential guidance, and verification
+steps for this project.
+
 ## PDF Auto-Tagging
 
 PDF auto-tagging now uses OpenDataLoader to extract layout structure as JSON,

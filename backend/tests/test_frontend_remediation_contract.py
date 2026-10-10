@@ -25,7 +25,7 @@ def test_frontend_offers_remediation_report_download_after_remediation():
 
     assert "getRemediationReportURL" in api_source
     assert "`${API_BASE}/remediate/report/${reportId}`" in api_source
-    assert "getRemediationReportURL(report.id)" in panel_source
+    assert "downloadRemediationReport(report.id)" in panel_source
     assert "Download Remediation Report" in panel_source
     assert "flex-wrap" in panel_source
     assert "const [remediationReportAvailable, setRemediationReportAvailable]" in panel_source

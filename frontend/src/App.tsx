@@ -19,6 +19,10 @@ import {
 import { deploymentMode } from './config';
 import { useAuth } from './auth/AuthProvider';
 import { LandingPage } from './landing/LandingPage';
+import { getSupabaseClient } from './auth/supabase';
+import { RegistrationPage } from './onboarding/RegistrationPage';
+import { WelcomePage } from './onboarding/WelcomePage';
+import { LoginPage } from './auth/LoginPage';
 
 const DEMO_USER: UserSession = { authenticated: true, name: 'Demo User', email: 'demo@pdfaccess.org' };
 import { FileCheck, Cpu, Zap, BarChart3, Loader2 } from 'lucide-react';
@@ -43,6 +47,7 @@ function trialPageLimitMessage(error: unknown): string | null {
 function App() {
   const mode = deploymentMode();
   const isTrialDeployment = mode === 'trial';
+  const isLoginRoute = window.location.pathname === '/login';
   const isRemediationRoute =
     window.location.pathname === '/remediate' ||
     window.location.pathname.startsWith('/remediate/');
@@ -56,6 +61,7 @@ function App() {
   const [showRemediation, setShowRemediation] = useState(false);
   const [showAltText, setShowAltText] = useState(false);
   const [trialBalance, setTrialBalance] = useState<TrialBalance | null>(null);
+  const [onboarding, setOnboarding] = useState<'loading' | 'registration' | 'welcome' | 'complete'>('loading');
 
   const user: UserSession | null = isTrialDeployment
     ? auth.status === 'signed-in'
@@ -67,7 +73,7 @@ function App() {
         }
       : null
     : DEMO_USER;
-  const isAuthChecking = isTrialDeployment && auth.status === 'loading';
+  const isAuthChecking = isTrialDeployment && (auth.status === 'loading' || (auth.status === 'signed-in' && onboarding === 'loading'));
 
   const refreshTrialBalance = useCallback(async () => {
     if (!isTrialDeployment || !isRemediationRoute || auth.status !== 'signed-in') {
@@ -89,6 +95,41 @@ function App() {
   useEffect(() => {
     void refreshTrialBalance();
   }, [refreshTrialBalance]);
+
+  const refreshOnboarding = useCallback(async () => {
+    if (!isTrialDeployment || !isRemediationRoute || auth.status !== 'signed-in' || !auth.user) {
+      setOnboarding(isTrialDeployment ? 'loading' : 'complete');
+      return;
+    }
+    let client;
+    try {
+      client = getSupabaseClient();
+    } catch (clientError) {
+      setError(clientError instanceof Error ? clientError.message : 'Unable to load registration.');
+      setOnboarding('complete');
+      return;
+    }
+    if (!client) return setOnboarding('registration');
+    const { data, error: profileError } = await client.from('user_registration_profiles')
+      .select('welcome_completed_at').eq('user_id', auth.user.id).maybeSingle();
+    if (profileError) {
+      setError(profileError.message);
+      return setOnboarding('registration');
+    }
+    setOnboarding(!data ? 'registration' : data.welcome_completed_at ? 'complete' : 'welcome');
+  }, [auth.status, auth.user, isRemediationRoute, isTrialDeployment]);
+
+  useEffect(() => { void refreshOnboarding(); }, [refreshOnboarding]);
+
+  const finishWelcome = useCallback(async () => {
+    if (!auth.user) return;
+    const client = getSupabaseClient();
+    if (!client) return;
+    const { error: updateError } = await client.from('user_registration_profiles')
+      .update({ welcome_completed_at: new Date().toISOString() }).eq('user_id', auth.user.id);
+    if (updateError) { setError(updateError.message); return; }
+    setOnboarding('complete');
+  }, [auth.user]);
 
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -131,6 +172,10 @@ function App() {
     setReport(updatedReport);
   }, []);
 
+  if (isLoginRoute) {
+    return <LoginPage />;
+  }
+
   if (isTrialDeployment && !isRemediationRoute) {
     return <LandingPage />;
   }
@@ -160,6 +205,14 @@ function App() {
   /* ── Login screen ───────────────────────────────────────────── */
   if (isTrialDeployment && auth.status !== 'signed-in') {
     return <LandingPage />;
+  }
+
+  if (isTrialDeployment && auth.user && onboarding === 'registration') {
+    return <RegistrationPage user={auth.user} onComplete={refreshOnboarding} onBack={auth.signOut} />;
+  }
+
+  if (isTrialDeployment && onboarding === 'welcome') {
+    return <WelcomePage grantedPages={trialBalance?.granted_pages} onStart={finishWelcome} />;
   }
 
   /* ── Authenticated app ──────────────────────────────────────── */

@@ -19,8 +19,14 @@ export function deploymentMode(): DeploymentMode {
 export function publicAppOrigin(): string {
   const configuredOrigin = import.meta.env.VITE_PUBLIC_APP_ORIGIN as string | undefined
 
-  if (configuredOrigin) return new URL(configuredOrigin).origin
-  if (deploymentMode() === 'trial') return 'https://pdfaccess.org'
+  if (configuredOrigin) {
+    return new URL(configuredOrigin).origin
+  }
+
+  if (deploymentMode() === 'trial') {
+    return 'https://pdfaccess.org'
+  }
+
   return window.location.origin
 }
 

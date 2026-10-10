@@ -85,7 +85,11 @@ class Settings(BaseSettings):
     
     # File paths
     BASE_DIR: Path = Path(__file__).parent.parent
-    RULES_DIR: Path = BASE_DIR / "rules"
+    RULES_DIR: Path = (
+        BASE_DIR / "rules"
+        if (BASE_DIR / "rules").is_dir()
+        else Path(__file__).parent / "rules"
+    )
     UPLOAD_DIR: Path = BASE_DIR / "uploads"
     OUTPUT_DIR: Path = BASE_DIR / "output"
     ARTIFACT_STORAGE_ROOT: Path = BASE_DIR / ".artifacts"
@@ -94,6 +98,7 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "sqlite:///./wcag_platform.db"
+    DATABASE_POOLER_HOST: Optional[str] = None
     
     # Data Retention (in hours, clamped between 2 and 24 to support session resumption)
     RETENTION_PERIOD_HOURS: int = Field(default=12, ge=2, le=24)

@@ -12,7 +12,8 @@
     },
     "backend": {
       "root": "backend",
-      "entrypoint": "main:app"
+      "entrypoint": "vercel_app:app",
+      "buildCommand": "python build_assets.py"
     }
   },
   "rewrites": [

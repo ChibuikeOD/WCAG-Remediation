@@ -25,8 +25,15 @@ from .database_url import normalize_database_url
 
 
 # Create engine. Connect args only needed for SQLite.
-database_url = normalize_database_url(settings.DATABASE_URL)
+database_url = normalize_database_url(
+    settings.DATABASE_URL,
+    pooler_host=settings.DATABASE_POOLER_HOST,
+    project_ref=settings.SUPABASE_PROJECT_REF,
+)
 connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+if settings.DATABASE_POOLER_HOST:
+    # Supabase's transaction pooler does not support server-side prepared statements.
+    connect_args["prepare_threshold"] = None
 engine = create_engine(database_url, connect_args=connect_args)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

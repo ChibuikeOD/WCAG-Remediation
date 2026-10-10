@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deploymentMode, publicAppOrigin, remediationAppUrl } from './config'
+import { deploymentMode, desktopDownloadUrl, publicAppOrigin, remediationAppUrl } from './config'
 
 describe('deploymentMode', () => {
   afterEach(() => {
@@ -63,5 +63,17 @@ describe('remediationAppUrl', () => {
     vi.stubEnv('VITE_PUBLIC_APP_ORIGIN', 'https://pdfaccess.org')
 
     expect(remediationAppUrl()).toBe('https://pdfaccess.org/remediate')
+  })
+})
+
+describe('desktopDownloadUrl', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+  it('uses an explicitly published HTTPS download', () => {
+    vi.stubEnv('VITE_DESKTOP_DOWNLOAD_URL', 'https://downloads.pdfaccess.org/app.zip')
+    expect(desktopDownloadUrl()).toBe('https://downloads.pdfaccess.org/app.zip')
+  })
+  it.each(['', 'javascript:alert(1)', 'http://example.org/app.zip', 'https://user:pass@example.org/app.zip'])('does not expose an unavailable or unsafe link: %s', (url) => {
+    vi.stubEnv('VITE_DESKTOP_DOWNLOAD_URL', url)
+    expect(desktopDownloadUrl()).toBeNull()
   })
 })

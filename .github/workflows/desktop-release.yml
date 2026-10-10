@@ -1,0 +1,91 @@
+name: Windows desktop release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version for an evaluation build
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+  security:
+    uses: ./.github/workflows/security.yml
+  build:
+    needs: quality
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install uv==0.11.18
+      - name: Build and test portable Windows app
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          $releaseVersion = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { $env:REQUESTED_VERSION }
+          uv run --frozen --project backend --with pyinstaller==6.22.3 --with cmake==3.31.6 python scripts/build_desktop.py --version $releaseVersion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate the complete backend on Windows
+        id: windows-tests
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DEPLOYMENT_MODE: testing
+          DISABLE_AUTH: 'true'
+          DATABASE_URL: 'sqlite://'
+        run: |
+          New-Item -ItemType Directory -Force pdfua_remediator_cpp/build/Release | Out-Null
+          Copy-Item dist/PDFAccess/_internal/pdfua_remediator_cpp/build/Release/* pdfua_remediator_cpp/build/Release/
+          uv run --frozen --project backend pytest backend/tests -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: windows-desktop
+          path: |
+            dist/PDFAccess-*-windows-x64.zip
+            dist/SHA256SUMS.txt
+            dist/desktop-release.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Require clean Windows test exit for release
+        if: steps.windows-tests.outcome != 'success'
+        run: exit 1
+  draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, security]
+    runs-on: ubuntu-latest
+    environment: desktop-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-desktop
+          path: release
+      - name: Create draft for distribution review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" PDFAccess-*-windows-x64.zip SHA256SUMS.txt desktop-release.json --verify-tag --draft --generate-notes --title "PDFAccess Desktop $RELEASE_TAG"

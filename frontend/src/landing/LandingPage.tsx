@@ -12,6 +12,7 @@ import {
 
 import { useAuth } from '../auth/AuthProvider'
 import { TrialSignupForm } from './TrialSignupForm'
+import { desktopDownloadUrl } from '../config'
 
 const navigationLinks = [
   { href: '#trial-signup', label: 'Start trial' },
@@ -20,6 +21,7 @@ const navigationLinks = [
   { href: '#workflow', label: 'Workflow' },
   { href: '#faq', label: 'FAQ' },
   { href: '#capabilities', label: 'Security' },
+  { href: '#desktop', label: 'Windows app' },
 ]
 
 const proofItems = [
@@ -84,6 +86,7 @@ const faqItems = [
 ]
 
 export function LandingPage() {
+  const windowsDownloadUrl = desktopDownloadUrl()
   const auth = useAuth()
   const isSignedIn = auth.status === 'signed-in'
   const [isMenuOpen, setIsMenuOpen] = useState(false)
@@ -454,6 +457,37 @@ export function LandingPage() {
             error={auth.error}
             onSendMagicLink={auth.sendMagicLink}
           />
+        </section>
+        <section id="desktop" className="border-t bg-white px-4 py-16 md:px-8 lg:px-12">
+          <div className="mx-auto max-w-[1440px]">
+            <p className="pdfaccess-eyebrow">Process PDFs on your device</p>
+            <h2 className="mt-3 text-3xl font-bold text-[#0d1b2a]">PDFAccess for Windows</h2>
+            <p className="mt-4 max-w-3xl leading-7 text-[#44474c]">
+              Keep sensitive documents on your computer. The Windows app runs PDF analysis,
+              OCR, tagging, and structural remediation locally, then saves the repaired PDF
+              and review reports to a folder you choose. No account or internet connection
+              is required after download.
+            </p>
+            <p className="mt-3 max-w-3xl leading-7 text-[#44474c]">
+              Cloud AI is disabled. Figure descriptions and uncertain text still need human
+              review. Automated remediation does not certify accessibility compliance.
+            </p>
+            {windowsDownloadUrl ? (
+              <a href={windowsDownloadUrl} className="pdfaccess-primary-button mt-6 inline-flex">
+                Download for Windows (64-bit)
+              </a>
+            ) : (
+              <p className="mt-6 text-[#44474c]">
+                The public Windows download is being prepared.{' '}
+                <a className="underline" href="mailto:support@pdfaccess.org?subject=PDFAccess%20Desktop">
+                  Contact us about desktop availability
+                </a>.
+              </p>
+            )}
+            <p className="mt-3 text-sm text-[#44474c]">
+              Updates are explicit downloads; the app does not contact an update server.
+            </p>
+          </div>
         </section>
       </main>
 

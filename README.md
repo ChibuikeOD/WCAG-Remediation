@@ -9,6 +9,11 @@ PDFAccess is an automated accessibility audit and remediation engine for web pag
 
 ## Overview
 
+For the Windows app with private on-device PDF remediation, see
+[PDFAccess Desktop](desktop/README.md). Build and release instructions, deployment
+requirements, and remaining public-release blockers are in the
+[deployment readiness guide](docs/operations/deployment-readiness.md).
+
 PDFAccess provides:
 
 - **Automated Accessibility Audits** - Run documents against 80+ WCAG 2.2 success criteria

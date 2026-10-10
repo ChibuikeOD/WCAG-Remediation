@@ -33,3 +33,15 @@ export function publicAppOrigin(): string {
 export function remediationAppUrl(): string {
   return `${publicAppOrigin()}/remediate`
 }
+
+export function desktopDownloadUrl(): string | null {
+  const configured = import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined
+  if (!configured?.trim()) return null
+  try {
+    const url = new URL(configured)
+    if (url.protocol !== 'https:' || url.username || url.password) return null
+    return url.href
+  } catch {
+    return null
+  }
+}

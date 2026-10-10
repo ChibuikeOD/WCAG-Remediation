@@ -49,6 +49,24 @@ describe('LandingPage', () => {
     vi.unstubAllEnvs()
   })
 
+  it('explains local processing and only offers a published Windows download', async () => {
+    vi.stubEnv('VITE_DESKTOP_DOWNLOAD_URL', 'https://downloads.pdfaccess.org/PDFAccess.zip')
+    const { LandingPage } = await import('./LandingPage')
+    render(<LandingPage />)
+    expect(screen.getByRole('link', { name: 'Download for Windows (64-bit)' })).toHaveAttribute(
+      'href', 'https://downloads.pdfaccess.org/PDFAccess.zip',
+    )
+    expect(screen.getByText(/Cloud AI is disabled/)).toBeInTheDocument()
+  })
+
+  it('shows availability information before a public binary is published', async () => {
+    vi.stubEnv('VITE_DESKTOP_DOWNLOAD_URL', '')
+    const { LandingPage } = await import('./LandingPage')
+    render(<LandingPage />)
+    expect(screen.queryByRole('link', { name: 'Download for Windows (64-bit)' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Contact us about desktop availability' })).toBeInTheDocument()
+  })
+
   it('presents the PDFAccess free-trial offer and support link', async () => {
     const { LandingPage } = await import('./LandingPage')
 

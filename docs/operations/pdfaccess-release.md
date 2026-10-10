@@ -2,6 +2,11 @@
 
 This runbook keeps the public free-trial deployment and the direct testing deployment separate while both continue to use the same remediation source tree.
 
+For the native-runtime deployment audit, Windows app, and CI release gates, see
+[deployment readiness and desktop releases](deployment-readiness.md). Full PDF
+remediation needs the container's Java, QPDF, OCR, and native tagging tools; the
+frontend can be deployed independently on Vercel.
+
 ## Deployment split
 
 - Trial project: create a dedicated Vercel project for `pdfaccess.org`.

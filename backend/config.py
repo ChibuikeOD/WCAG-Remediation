@@ -146,7 +146,7 @@ class Settings(BaseSettings):
     PLAYWRIGHT_HEADLESS: bool = True
     PLAYWRIGHT_TIMEOUT: int = 30000  # milliseconds
     
-    # AI Alt-text generation
+    # Legacy AI alt-text generation
     DEEPSEEK_API_KEY: Optional[str] = None
 
     # Stripe billing
@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     )
     BILLING_CANCEL_URL: str = "http://localhost:5173/billing/cancel"
 
-    # Ambiguous PDF Unicode verification
+    # Gemini AI features: alt-text generation and ambiguous PDF Unicode verification
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.1-flash-lite"
     GEMINI_API_ENDPOINT: str = (

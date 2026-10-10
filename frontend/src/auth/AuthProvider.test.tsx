@@ -13,6 +13,7 @@ const supabaseMock = vi.hoisted(() => {
   let authStateCallback:
     | AuthStateCallback
     | null = null
+  let clientFactory = () => client
 
   const client = {
     auth: {
@@ -29,12 +30,21 @@ const supabaseMock = vi.hoisted(() => {
         }
       }),
       signInWithOtp: vi.fn(),
+      signInWithPassword: vi.fn(),
       signOut: vi.fn(),
     },
   }
 
   return {
     client,
+    getClient() {
+      return clientFactory()
+    },
+    rejectClientConfiguration(message: string) {
+      clientFactory = () => {
+        throw new Error(message)
+      }
+    },
     emitAuthState(
       event: string,
       session: TestSession | null
@@ -43,16 +53,18 @@ const supabaseMock = vi.hoisted(() => {
     },
     reset() {
       authStateCallback = null
+      clientFactory = () => client
       client.auth.getSession.mockReset()
       client.auth.onAuthStateChange.mockClear()
       client.auth.signInWithOtp.mockReset()
+      client.auth.signInWithPassword.mockReset()
       client.auth.signOut.mockReset()
     },
   }
 })
 
 vi.mock('./supabase', () => ({
-  getSupabaseClient: () => supabaseMock.client,
+  getSupabaseClient: () => supabaseMock.getClient(),
 }))
 
 function AuthProbe({ children }: { children?: ReactNode }) {
@@ -69,6 +81,9 @@ function AuthProbe({ children }: { children?: ReactNode }) {
       </button>
       <button type="button" onClick={() => auth.signOut()}>
         Sign out
+      </button>
+      <button type="button" onClick={() => auth.signInWithPassword('reader@example.com', 'test-password')}>
+        Password sign in
       </button>
       {children}
     </div>
@@ -136,6 +151,25 @@ describe('AuthProvider', () => {
     expect(await screen.findByText('Status: check-email')).toBeInTheDocument()
   })
 
+  it('uses the configured public app origin for magic-link redirects', async () => {
+    vi.stubEnv('VITE_PUBLIC_APP_ORIGIN', 'https://preview.pdfaccess.org/path')
+    supabaseMock.client.auth.getSession.mockResolvedValue({
+      data: { session: null },
+      error: null,
+    })
+
+    renderAuthProvider()
+    await screen.findByText('Status: signed-out')
+    fireEvent.click(screen.getByRole('button', { name: 'Send magic link' }))
+
+    expect(supabaseMock.client.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: 'reader@example.com',
+      options: {
+        emailRedirectTo: 'https://preview.pdfaccess.org/remediate/auth/callback',
+      },
+    })
+  })
+
   it('exposes the signed-in user and access token from the restored session', async () => {
     supabaseMock.client.auth.getSession.mockResolvedValue({
       data: {
@@ -195,6 +229,34 @@ describe('AuthProvider', () => {
     expect(screen.getByText('Token: none')).toBeInTheDocument()
   })
 
+  it('signs in with a password and registers the resulting session', async () => {
+    supabaseMock.client.auth.getSession.mockResolvedValue({ data: { session: null }, error: null })
+    supabaseMock.client.auth.signInWithPassword.mockResolvedValue({
+      data: { session: { access_token: 'password-token', user: { email: 'reader@example.com' } } },
+      error: null,
+    })
+    renderAuthProvider()
+    await screen.findByText('Status: signed-out')
+    fireEvent.click(screen.getByRole('button', { name: 'Password sign in' }))
+
+    expect(await screen.findByText('Status: signed-in')).toBeInTheDocument()
+    expect(screen.getByText('Token: password-token')).toBeInTheDocument()
+    expect(supabaseMock.client.auth.signInWithPassword).toHaveBeenCalledWith({
+      email: 'reader@example.com', password: 'test-password',
+    })
+  })
+
+  it('shows a password sign-in error without creating a session', async () => {
+    supabaseMock.client.auth.getSession.mockResolvedValue({ data: { session: null }, error: null })
+    supabaseMock.client.auth.signInWithPassword.mockResolvedValue({ data: { session: null }, error: { message: 'Invalid credentials' } })
+    renderAuthProvider()
+    await screen.findByText('Status: signed-out')
+    fireEvent.click(screen.getByRole('button', { name: 'Password sign in' }))
+
+    expect(await screen.findByText('Error: Invalid credentials')).toBeInTheDocument()
+    expect(screen.getByText('Token: none')).toBeInTheDocument()
+  })
+
   it('surfaces an expired magic-link callback error', async () => {
     window.history.replaceState(
       {},
@@ -210,5 +272,15 @@ describe('AuthProvider', () => {
 
     expect(await screen.findByText('Status: error')).toBeInTheDocument()
     expect(screen.getByText('Error: Email link is invalid or has expired')).toBeInTheDocument()
+  })
+
+  it('surfaces Supabase configuration errors instead of crashing', async () => {
+    supabaseMock.rejectClientConfiguration('Missing Supabase publishable config')
+
+    renderAuthProvider()
+
+    expect(await screen.findByText('Status: error')).toBeInTheDocument()
+    expect(screen.getByText('Error: Missing Supabase publishable config')).toBeInTheDocument()
+    expect(supabaseMock.client.auth.onAuthStateChange).not.toHaveBeenCalled()
   })
 })

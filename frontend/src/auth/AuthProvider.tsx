@@ -21,6 +21,7 @@ interface AuthContextValue {
   accessToken: string | null
   error: string | null
   sendMagicLink: (email: string) => Promise<void>
+  signInWithPassword: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -31,6 +32,10 @@ function magicLinkCallbackError(): string | null {
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
 
   return query.get('error_description') ?? hash.get('error_description')
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Authentication is unavailable'
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -65,7 +70,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isActive = true
-    const client = getSupabaseClient()
+    let client
+
+    try {
+      client = getSupabaseClient()
+    } catch (clientError) {
+      applyError(errorMessage(clientError))
+      return undefined
+    }
+
     const callbackError = magicLinkCallbackError()
 
     if (!client) {
@@ -113,7 +126,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyError, applySession])
 
   const sendMagicLink = useCallback(async (email: string) => {
-    const client = getSupabaseClient()
+    let client
+
+    try {
+      client = getSupabaseClient()
+    } catch (clientError) {
+      applyError(errorMessage(clientError))
+      return
+    }
 
     if (!client) {
       applyError('Authentication is unavailable')
@@ -136,8 +156,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus('check-email')
   }, [applyError])
 
+  const signInWithPassword = useCallback(async (email: string, password: string) => {
+    let client
+
+    try {
+      client = getSupabaseClient()
+    } catch (clientError) {
+      applyError(errorMessage(clientError))
+      return
+    }
+
+    if (!client) {
+      applyError('Authentication is unavailable')
+      return
+    }
+
+    const { data, error: signInError } = await client.auth.signInWithPassword({ email, password })
+
+    if (signInError) {
+      applyError(signInError.message)
+      return
+    }
+
+    applySession(data.session)
+  }, [applyError, applySession])
+
   const signOut = useCallback(async () => {
-    const client = getSupabaseClient()
+    let client
+
+    try {
+      client = getSupabaseClient()
+    } catch (clientError) {
+      applyError(errorMessage(clientError))
+      return
+    }
 
     if (!client) {
       applySession(null)
@@ -161,9 +213,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accessToken,
       error,
       sendMagicLink,
+      signInWithPassword,
       signOut,
     }),
-    [accessToken, error, sendMagicLink, signOut, status, user]
+    [accessToken, error, sendMagicLink, signInWithPassword, signOut, status, user]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

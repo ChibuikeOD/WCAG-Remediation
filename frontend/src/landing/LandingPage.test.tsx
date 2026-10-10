@@ -46,6 +46,7 @@ describe('LandingPage', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('presents the PDFAccess free-trial offer and support link', async () => {
@@ -67,7 +68,7 @@ describe('LandingPage', () => {
     )
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
     expect(screen.getAllByRole('link', { name: 'Sign up' })[0]).toHaveAttribute('href', '#trial-signup')
-    expect(screen.getAllByRole('link', { name: 'Log in' })[0]).toHaveAttribute('href', '#trial-signup')
+    expect(screen.getAllByRole('link', { name: 'Log in' })[0]).toHaveAttribute('href', '/login')
   })
 
   it('takes a verified user from the home page to the remediation zone', async () => {
@@ -100,7 +101,7 @@ describe('LandingPage', () => {
     )
     expect(screen.getByRole('link', { name: /Sign in to subscribe/i })).toHaveAttribute(
       'href',
-      '#trial-signup',
+      '/login',
     )
   })
 
@@ -126,7 +127,7 @@ describe('LandingPage', () => {
     fireEvent.change(screen.getByLabelText(/Email address/i), {
       target: { value: ' Applicant@University.EDU ' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /Continue with email/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Start free trial with email/i }))
 
     await waitFor(() => {
       expect(sendMagicLink).toHaveBeenCalledWith('applicant@university.edu')
@@ -151,7 +152,7 @@ describe('LandingPage', () => {
     render(<LandingPage />)
 
     const emailInput = screen.getByLabelText(/Email address/i)
-    fireEvent.click(screen.getByRole('button', { name: /Continue with email/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Start free trial with email/i }))
 
     const error = screen.getByRole('alert')
     expect(emailInput).toHaveAttribute('aria-invalid', 'true')

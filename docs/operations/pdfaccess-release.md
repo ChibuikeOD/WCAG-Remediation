@@ -17,10 +17,13 @@ This runbook keeps the public free-trial deployment and the direct testing deplo
 - Domain assignment: `pdfaccess.org` only.
 - Use a dedicated Supabase project, dedicated database URL, dedicated private originals/results buckets, and backend-only service credentials.
 - Configure Supabase Auth magic links and email confirmation before inviting testers. Only verified users receive trial quota or promotional/question emails.
+- In Supabase Auth URL Configuration, set the Site URL to `https://pdfaccess.org` and add `https://pdfaccess.org/remediate/auth/callback` to the redirect allow list. Remove the old `www` callback and localhost redirects from the production project unless they are needed for a deliberate local test project.
+- Serve the public website at `https://pdfaccess.org/` and the authenticated remediation workspace at `https://pdfaccess.org/remediate`. Configure `www.pdfaccess.org` as a permanent redirect to `https://pdfaccess.org` if the `www` hostname is attached.
 - Configure Resend as the Supabase SMTP provider:
   - verified sending domain: `pdfaccess.org`;
   - DNS records: add the Resend-provided SPF/TXT, DKIM, and return-path/bounce records at the DNS host for `pdfaccess.org`, then wait for Resend verification before enabling production email;
-  - sender/reply-to mailbox: `support@pdfaccess.org`;
+  - Supabase Auth SMTP sender/from address: `support@pdfaccess.org`;
+  - sender/reply-to mailbox for application email: `support@pdfaccess.org`;
   - webhook endpoint: the trial deployment only;
   - required physical postal address: enter the business mailing address in Resend/compliance settings, never in tracked files.
 

@@ -182,7 +182,7 @@ export function LandingPage() {
               </a>
             ) : (
               <div className="hidden items-center gap-3 md:flex">
-                <a href="#trial-signup" className="pdfaccess-secondary-button">
+                <a href="/login" className="pdfaccess-secondary-button">
                   Log in
                 </a>
                 <a
@@ -237,10 +237,10 @@ export function LandingPage() {
               </a>
             ) : (
               <>
-                <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#trial-signup">
+                <a onClick={closeMenu} className="pdfaccess-mobile-link" href="/login">
                   Sign up
                 </a>
-                <a onClick={closeMenu} className="pdfaccess-mobile-link" href="#trial-signup">
+                <a onClick={closeMenu} className="pdfaccess-mobile-link" href="/login">
                   Log in
                 </a>
               </>
@@ -286,7 +286,7 @@ export function LandingPage() {
                   <a href="#trial-signup" className="pdfaccess-primary-button">
                     Sign up
                   </a>
-                  <a href="#trial-signup" className="pdfaccess-secondary-button">
+                  <a href="/login" className="pdfaccess-secondary-button">
                     Log in
                   </a>
                 </>
@@ -377,7 +377,7 @@ export function LandingPage() {
               <p className="mt-4 leading-7 text-[#44474c]">
                 Skip the free trial or upgrade after testing. Card checkout is available after sign-in.
               </p>
-              <a href="#trial-signup" className="pdfaccess-primary-button mt-6">
+              <a href="/login" className="pdfaccess-primary-button mt-6">
                 Sign in to subscribe
               </a>
             </div>

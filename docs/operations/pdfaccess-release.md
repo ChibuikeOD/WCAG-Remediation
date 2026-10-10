@@ -16,6 +16,7 @@ This runbook keeps the public free-trial deployment and the direct testing deplo
 - `DISABLE_AUTH=false`.
 - Domain assignment: `pdfaccess.org` only.
 - Use a dedicated Supabase project, dedicated database URL, dedicated private originals/results buckets, and backend-only service credentials.
+- For Vercel, set `DATABASE_POOLER_HOST` to the exact transaction-pooler host shown in that Supabase project's Connect dialog. Keep `DATABASE_URL` in Vercel secret storage with the current database password; changing the password requires updating this secret and redeploying.
 - Configure Supabase Auth magic links and email confirmation before inviting testers. Only verified users receive trial quota or promotional/question emails.
 - In Supabase Auth URL Configuration, set the Site URL to `https://pdfaccess.org` and add `https://pdfaccess.org/remediate/auth/callback` to the redirect allow list. Remove the old `www` callback and localhost redirects from the production project unless they are needed for a deliberate local test project.
 - Serve the public website at `https://pdfaccess.org/` and the authenticated remediation workspace at `https://pdfaccess.org/remediate`. Configure `www.pdfaccess.org` as a permanent redirect to `https://pdfaccess.org` if the `www` hostname is attached.

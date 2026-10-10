@@ -443,6 +443,17 @@ async def health_check():
     }
 
 
+@app.get("/health/ready")
+async def readiness_check():
+    """Return 503 when the database or required remediation tools are unavailable."""
+    from .readiness import deployment_readiness
+    from fastapi.responses import JSONResponse
+    checks = await run_in_threadpool(deployment_readiness)
+    ready = all(checks.values())
+    return JSONResponse(status_code=200 if ready else 503,
+                        content={"status": "ready" if ready else "unavailable", "checks": checks})
+
+
 # =============================================================================
 # Upload Endpoint
 # =============================================================================

@@ -5,17 +5,40 @@ services:
     region: ohio          # pick the region closest to your users
     # Standard = 2GB RAM / 1 CPU. Starter and free are only 512MB, which OOMs
     # under the Java (OpenDataLoader) + Tesseract OCR + Python PDF workload.
-    plan: standard
+    plan: 1c-2g
     rootDir: .
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 300
     envVars:
       - key: DISABLE_AUTH
-        value: "true"              # remove when you add real SSO
+        value: "false"
+      - key: DEPLOYMENT_MODE
+        value: "trial"
+      - key: DEBUG
+        value: "false"
       - key: SECRET_KEY
         generateValue: true        # Render auto-generates a secure random value
       - key: CORS_ALLOW_ALL
-        value: "true"              # allows your Vercel frontend to call this API
+        value: "false"
+      - key: CORS_ORIGINS_LIST
+        value: "https://pdfaccess.org"
       - key: DATABASE_URL
-        value: sqlite:////tmp/accesspdf.db   # ephemeral — swap for Postgres in production
+        sync: false
+      - key: DATABASE_POOLER_HOST
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_PROJECT_REF
+        sync: false
+      - key: SUPABASE_ORIGINALS_BUCKET
+        sync: false
+      - key: SUPABASE_RESULTS_BUCKET
+        sync: false
       - key: UPLOAD_DIR
         value: /tmp/uploads
       - key: OUTPUT_DIR
@@ -25,7 +48,7 @@ services:
       # inaccessible. 1g is safe on the Standard plan's 2GB envelope alongside
       # Python + OCR. If you stay on Starter/free (512MB), drop this to -Xmx256m.
       - key: _JAVA_OPTIONS
-        value: "-Xmx1g"
+        value: "-Xmx512m"
       # Uncomment and fill in when you have real SSO credentials:
       # - key: OIDC_CLIENT_ID
       #   sync: false

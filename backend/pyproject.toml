@@ -1,0 +1,5 @@
+[project]
+name = "app"
+version = "0.1.0"
+dependencies = [ "fastapi==0.109.0", "uvicorn[standard]==0.27.0", "python-multipart==0.0.6", "beautifulsoup4==4.12.3", "lxml==5.1.0", "html5lib==1.1", "cssselect==1.2.0", "pymupdf==1.23.8", "pikepdf==8.11.2", "pdfplumber==0.10.3", "reportlab==4.2.5", "fonttools==4.47.2", "playwright==1.41.0", "colormath==3.0.0", "pillow==10.2.0", "aiofiles==23.2.1", "httpx==0.26.0", "json5==0.9.14", "commentjson==0.9.0", "opendataloader-pdf==2.2.1", "pytest==8.0.0", "pytest-asyncio==0.23.5", "pyjwt[crypto]==2.10.1", "sqlalchemy==2.0.25", "psycopg[binary]==3.2.9", "idna==3.10", "python-dotenv==1.0.0", "pydantic==2.6.0", "pydantic-settings==2.1.0", "stripe>=12.0.0" ]
+requires-python = "~=3.12.0"

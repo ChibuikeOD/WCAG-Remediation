@@ -18,7 +18,7 @@ from backend.layout_model import (
     ensure_hf_model_layout,
     resolve_layoutlm_model_dir,
 )
-from backend.pdf_auto_tagging import auto_tag_pdf
+from backend.pdf_auto_tagging import _ai_gateway_token, auto_tag_pdf
 from backend.pdf_overlay_debug import build_block_label
 from backend.pdf_structure_builder import TaggingResult
 
@@ -437,6 +437,95 @@ def test_auto_tag_pdf_normalizes_language_metadata_after_tagging(monkeypatch, tm
         assert str(pdf.Root.Lang) == "en-US"
         with pdf.open_metadata() as meta:
             assert meta["dc:language"] == ["en-US"]
+
+
+def test_auto_tag_pdf_runs_enabled_jev_refinement_before_cpp(monkeypatch, tmp_path):
+    from backend import config
+    from backend.jev_structure_refiner import JevStructureRefinement
+
+    mock_layouts = [
+        PageLayout(
+            page_number=0,
+            width=612,
+            height=792,
+            blocks=[
+                StructureBlock(
+                    tag="P",
+                    bbox=(100, 100, 800, 180),
+                    page_number=0,
+                    content="Results",
+                    metadata={"raw_bbox": [60.0, 700.0, 500.0, 740.0]},
+                )
+            ],
+        )
+    ]
+    captured_blocks = []
+    captured_options = {}
+
+    monkeypatch.setattr(
+        "backend.opendataloader_layout.OpenDataLoaderLayoutAnalyzer.analyze_document",
+        lambda _self, _path: mock_layouts,
+    )
+
+    def fake_refine(layouts, **kwargs):
+        captured_options.update(kwargs)
+        layouts[0].blocks[0].tag = "H2"
+        return JevStructureRefinement(
+            enabled=True,
+            attempted_blocks=1,
+            applied_blocks=1,
+            model_requested=kwargs["model"],
+            models_used=["typesafe-ai/jev"],
+        )
+
+    monkeypatch.setattr(
+        "backend.jev_structure_refiner.refine_structure_tags_with_jev", fake_refine
+    )
+
+    def fake_run(cmd, **_kwargs):
+        captured_blocks.extend(json.loads(Path(cmd[2]).read_text(encoding="utf-8")))
+        shutil.copy2(cmd[1], cmd[-1])
+        import subprocess
+
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("backend.pdf_auto_tagging.HAS_PIKEPDF", True)
+    monkeypatch.setattr("backend.pdf_auto_tagging._has_structure_tree", lambda _: False)
+    monkeypatch.setattr(config.settings, "JEV_STRUCTURE_REFINEMENT_ENABLED", True)
+    monkeypatch.setattr(config.settings, "AI_GATEWAY_API_KEY", "gateway-secret")
+    monkeypatch.setattr(config.settings, "VERCEL_OIDC_TOKEN", "oidc-secret")
+    monkeypatch.setattr(config.settings, "JEV_MODEL", "typesafe-ai/jev")
+
+    source_path = tmp_path / "source.pdf"
+    output_path = tmp_path / "output.pdf"
+    make_minimal_pdf(source_path)
+
+    result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
+
+    assert result["success"] is True
+    assert captured_blocks[0]["tag"] == "H2"
+    assert captured_options["gateway_token"] == "gateway-secret"
+    assert captured_options["model"] == "typesafe-ai/jev"
+    assert result["jev_refinement"]["applied_blocks"] == 1
+    assert result["jev_refinement"]["models_used"] == ["typesafe-ai/jev"]
+
+
+def test_ai_gateway_auth_prefers_api_key_then_falls_back_to_oidc() -> None:
+    from types import SimpleNamespace
+    from pydantic import SecretStr
+
+    both = SimpleNamespace(
+        AI_GATEWAY_API_KEY=SecretStr("static-key"),
+        VERCEL_OIDC_TOKEN=SecretStr("oidc-token"),
+    )
+    oidc_only = SimpleNamespace(
+        AI_GATEWAY_API_KEY=None,
+        VERCEL_OIDC_TOKEN=SecretStr("oidc-token"),
+    )
+
+    assert _ai_gateway_token(both) == "static-key"
+    assert _ai_gateway_token(oidc_only) == "oidc-token"
 
 
 def test_overlay_labels_use_tag_and_text_only():

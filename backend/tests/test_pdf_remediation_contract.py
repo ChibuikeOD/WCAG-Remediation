@@ -51,6 +51,19 @@ def test_unicode_verifier_defaults_to_gemini_flash_lite() -> None:
     assert settings.PDF_UNICODE_LLM_MIN_CONFIDENCE == 0.98
 
 
+def test_jev_heading_refinement_is_conservative_and_opt_in() -> None:
+    settings = Settings()
+
+    assert settings.JEV_STRUCTURE_REFINEMENT_ENABLED is False
+    assert settings.JEV_MODEL == "typesafe-ai/jev"
+    assert settings.JEV_STRUCTURE_MIN_CONFIDENCE == 0.90
+    assert settings.JEV_GLYPH_CONSENSUS_ENABLED is False
+    assert settings.JEV_GLYPH_MIN_CONFIDENCE == 0.98
+    assert settings.JEV_GATEWAY_ENDPOINT == (
+        "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+    )
+
+
 def test_settings_load_gemini_key_from_backend_env(tmp_path: Path, monkeypatch) -> None:
     backend_dir = tmp_path / "backend"
     backend_dir.mkdir()
@@ -58,6 +71,7 @@ def test_settings_load_gemini_key_from_backend_env(tmp_path: Path, monkeypatch) 
         "GEMINI_API_KEY=backend-env-key\n", encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     settings = Settings()
 
@@ -95,6 +109,7 @@ def test_unicode_repair_uses_configured_gemini_vision_verifier(
         }
 
     monkeypatch.setattr(config.settings, "PDF_UNICODE_LLM_ENABLED", True)
+    monkeypatch.setattr(config.settings, "JEV_GLYPH_CONSENSUS_ENABLED", False)
     monkeypatch.setattr(config.settings, "GEMINI_API_KEY", "gemini-secret")
     monkeypatch.setattr(
         config.settings, "GEMINI_MODEL", "gemini-3.1-flash-lite"
@@ -114,6 +129,82 @@ def test_unicode_repair_uses_configured_gemini_vision_verifier(
     assert captured["model"] == "gemini-3.1-flash-lite"
     assert captured["endpoint"] == "https://example.test/chat/completions"
     assert captured["images"]
+
+
+def test_unicode_repair_requires_jev_consensus_when_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from backend import config
+    from backend import gemini_unicode_verifier
+    from backend import jev_unicode_consensus
+    from backend import pdf_remediator_fixes as fixes
+    from backend import pdf_unicode_mapping
+    from backend.deepseek_unicode_verifier import DeepSeekDecision
+    from backend.jev_unicode_consensus import JevGlyphConsensus
+
+    captured = {}
+
+    def fake_visual(context, **_kwargs):
+        return DeepSeekDecision(
+            True,
+            "2",
+            0.995,
+            None,
+            response={"unicode_sequence": ["U+0032"]},
+            model_used="gemini-3.1-flash-lite",
+            evidence_mode="vision",
+        )
+
+    def fake_consensus(context, visual_decision, **kwargs):
+        captured.update(kwargs)
+        assert context["occurrences"]
+        assert visual_decision.accepted is True
+        return JevGlyphConsensus(
+            accepted=True,
+            confidence=0.99,
+            rejection_reason=None,
+            model_requested="typesafe-ai/jev",
+            model_used="jev-1.13.0",
+            selected_candidate="candidate_0",
+            expected_candidate="candidate_0",
+        )
+
+    def fake_repair(
+        path, *, verifier, max_occurrences, provider_name, provider_label, model_name
+    ):
+        assert "Jev consensus" in provider_label
+        decision = verifier(
+            {
+                "candidates": ["U+0032", "U+00B2"],
+                "occurrences": [{"masked_line": "x[UNKNOWN]"}],
+                "images": ["data:image/png;base64,AAAA"],
+            }
+        )
+        assert decision.accepted is True
+        assert decision.evidence_mode == "vision+jev-consensus"
+        assert decision.consensus["accepted"] is True
+        return {
+            "issue_id": "pdf-unicode-mapping",
+            "success": True,
+            "details": {"decisions": [{"jev_consensus": decision.consensus}]},
+        }
+
+    monkeypatch.setattr(config.settings, "PDF_UNICODE_LLM_ENABLED", True)
+    monkeypatch.setattr(config.settings, "GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setattr(config.settings, "JEV_GLYPH_CONSENSUS_ENABLED", True)
+    monkeypatch.setattr(config.settings, "AI_GATEWAY_API_KEY", "gateway-secret")
+    monkeypatch.setattr(gemini_unicode_verifier, "verify_ambiguous_unicode", fake_visual)
+    monkeypatch.setattr(jev_unicode_consensus, "verify_glyph_consensus", fake_consensus)
+    monkeypatch.setattr(pdf_unicode_mapping, "repair_missing_unicode", fake_repair)
+
+    result = fixes.fix_pdf_unicode_mappings(tmp_path / "document.pdf")
+
+    assert result["details"]["jev_consensus_enabled"] is True
+    assert result["details"]["jev_consensus_invoked"] is True
+    assert result["details"]["jev_consensus_accepted"] == 1
+    assert captured["gateway_token"] == "gateway-secret"
+    assert captured["model"] == "typesafe-ai/jev"
+    assert captured["min_confidence"] == 0.98
 
 
 def test_full_pdf_remediation_always_requests_structure_overwrite(

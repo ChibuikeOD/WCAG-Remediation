@@ -46,19 +46,19 @@ def test_generate_alt_text_endpoint_returns_context_used(monkeypatch, tmp_path: 
         """,
         encoding="utf-8",
     )
-    async def fake_legacy_call(*args):
-        return "legacy path"
+    monkeypatch.setattr(main.settings, "DEEPSEEK_API_KEY", None)
+    monkeypatch.setattr(main.settings, "GEMINI_API_KEY", "env-key")
+    monkeypatch.setattr(main.settings, "GEMINI_MODEL", "gemini-3.1-flash-lite")
+    monkeypatch.setattr(main.settings, "GEMINI_API_ENDPOINT", "https://gemini.test/v1/chat/completions")
 
-    monkeypatch.setattr(main, "call_deepseek_vision_or_ocr_fallback", fake_legacy_call)
-
-    monkeypatch.setattr(main.settings, "DEEPSEEK_API_KEY", "env-key")
-
-    async def fake_contextual_call(image_url, api_key, context, tessdata):
+    async def fake_contextual_call(image_url, api_key, context, tessdata, *, model, endpoint):
         assert api_key == "env-key"
+        assert model == "gemini-3.1-flash-lite"
+        assert endpoint == "https://gemini.test/v1/chat/completions"
         assert context.caption == "Figure 2. Priority adaptation investments by region."
         return "Map of regional adaptation investment priorities"
 
-    monkeypatch.setattr(main, "call_deepseek_contextual_alt_text", fake_contextual_call, raising=False)
+    monkeypatch.setattr(main, "call_gemini_contextual_alt_text", fake_contextual_call, raising=False)
 
     response = asyncio.run(
         main._generate_alt_text_impl(

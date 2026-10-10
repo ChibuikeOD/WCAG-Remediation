@@ -38,7 +38,7 @@ from .models import (
     AltTextGenerateResponse, TrialBalanceResponse, TrialPageLimitDetail,
 )
 from . import alt_text_context as alt_text_context_service
-from .deepseek_alt_text import call_deepseek_contextual_alt_text
+from .gemini_alt_text import call_gemini_contextual_alt_text
 from .rules_engine import get_rules_engine
 from .parsers import HTMLParser, PDFParser
 from .remediator import HTMLRemediator, PDFRemediator
@@ -2126,126 +2126,6 @@ def extract_pdf_images(pdf_path: Path) -> List[DocumentImageItem]:
     return figures
 
 
-async def call_deepseek_vision_or_ocr_fallback(
-    image_url_or_bytes: str,
-    api_key: str,
-    tessdata_path: Optional[str] = None
-) -> str:
-    import base64
-    import httpx
-    
-    base64_str = ""
-    image_bytes = b""
-    if image_url_or_bytes.startswith("data:image/"):
-        header, base64_str = image_url_or_bytes.split(",", 1)
-        image_bytes = base64.b64decode(base64_str)
-    
-    # Try vision first
-    try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Describe this image for use as WCAG alt text. Provide a concise description (maximum 150 characters) focusing on the visual content and context. Do not include introductory text like 'This image shows' or 'An image of'."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": image_url_or_bytes
-                            }
-                        }
-                    ]
-                }
-            ],
-            "max_tokens": 100
-        }
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://api.deepseek.com/v1/chat/completions",
-                json=payload,
-                headers=headers
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                alt_text = data["choices"][0]["message"]["content"].strip()
-                alt_text = alt_text.strip('"' + "'")
-                return alt_text
-            else:
-                logger.info(f"DeepSeek vision call returned status {response.status_code}: {response.text}. Trying OCR fallback.")
-    except Exception as e:
-        logger.info(f"DeepSeek vision call failed: {e}. Trying OCR fallback.")
-        
-    # Fallback: OCR + Text completion
-    ocr_text = ""
-    if image_bytes and tessdata_path:
-        try:
-            import fitz
-            pix = fitz.Pixmap(image_bytes)
-            if pix.alpha:
-                pix = fitz.Pixmap(pix, 0)
-            ocr_bytes = pix.pdfocr_tobytes(language="eng", tessdata=tessdata_path)
-            with fitz.open("pdf", ocr_bytes) as ocr_doc:
-                ocr_text = ocr_doc[0].get_text().strip()
-            logger.info(f"OCR extracted text for alt-text: '{ocr_text}'")
-        except Exception as ocr_err:
-            logger.warning(f"OCR fallback extraction failed: {ocr_err}")
-            
-    prompt = (
-        "Based on the following context, describe this image for use as WCAG alt text. "
-        "Provide a concise description (maximum 150 characters) focusing on the visual content and context. "
-        "Do not include introductory text like 'This image shows' or 'An image of'."
-    )
-    if ocr_text:
-        prompt += f"\nThe image contains the following text: '{ocr_text}'."
-    else:
-        prompt += "\nThe image has no extractable text. Describe a generic chart/diagram/photo."
-        
-    try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "max_tokens": 100
-        }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://api.deepseek.com/v1/chat/completions",
-                json=payload,
-                headers=headers
-            )
-            if response.status_code == 200:
-                data = response.json()
-                alt_text = data["choices"][0]["message"]["content"].strip()
-                alt_text = alt_text.strip('"' + "'")
-                return alt_text
-            else:
-                raise Exception(f"DeepSeek API error: {response.text}")
-    except Exception as e:
-        logger.error(f"DeepSeek text completion fallback failed: {e}")
-        if ocr_text:
-            return f"Image containing text: {ocr_text[:50]}..."
-        return "Image description unavailable"
-
-
 @app.get("/report/{report_id}/images", response_model=List[DocumentImageItem])
 async def get_document_images(
     report_id: str, request: Request, user: User = Depends(require_user)
@@ -2286,7 +2166,7 @@ async def _generate_alt_text_impl(
     file_type: str,
 ):
     """
-    Generate context-aware alt-text for an image using DeepSeek API with OCR fallback.
+    Generate context-aware alt-text for an image using Gemini API with OCR fallback.
     """
     if file_type == "html":
         images = await run_in_threadpool(alt_text_context_service.extract_html_images, file_path)
@@ -2304,11 +2184,11 @@ async def _generate_alt_text_impl(
     if not target_image or not target_image.image_url:
         raise HTTPException(status_code=404, detail="Image not found or has no content to describe")
         
-    api_key = settings.DEEPSEEK_API_KEY
+    api_key = settings.GEMINI_API_KEY
     if not api_key:
         raise HTTPException(
             status_code=400,
-            detail="DeepSeek API key is required. Please set DEEPSEEK_API_KEY in the server environment."
+            detail="Gemini API key is required. Please set GEMINI_API_KEY in the server environment."
         )
         
     from .pdf_remediator_fixes import _resolve_tessdata
@@ -2323,11 +2203,13 @@ async def _generate_alt_text_impl(
         request.context_mode
     )
     
-    alt_text = await call_deepseek_contextual_alt_text(
+    alt_text = await call_gemini_contextual_alt_text(
         target_image.image_url,
         api_key,
         context,
-        tessdata
+        tessdata,
+        model=settings.GEMINI_MODEL,
+        endpoint=settings.GEMINI_API_ENDPOINT,
     )
     
     return {"alt_text": alt_text, "context_used": context.context_used()}

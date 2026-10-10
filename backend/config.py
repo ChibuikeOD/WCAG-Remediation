@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEPLOYMENT_MODE: Literal["trial", "testing"] = "testing"
     DEBUG: bool = True
+    LOCAL_ONLY: bool = False
     SECRET_KEY: str = "development_secret_key_change_me_to_something_secure"
     
     # Server
@@ -204,6 +205,24 @@ class Settings(BaseSettings):
         "https://wcag-remediation.vercel.app"
     ]
     CORS_ALLOW_ALL: bool = False
+
+    @model_validator(mode="after")
+    def enforce_local_processing(self) -> "Settings":
+        """Desktop processing must never inherit cloud credentials from .env."""
+        if self.LOCAL_ONLY:
+            if self.DEPLOYMENT_MODE != "testing":
+                raise ValueError("LOCAL_ONLY requires testing mode")
+            for name in (
+                "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "AI_GATEWAY_API_KEY",
+                "VERCEL_OIDC_TOKEN", "SUPABASE_SECRET_KEY", "STRIPE_SECRET_KEY",
+                "STRIPE_WEBHOOK_SECRET", "OIDC_CLIENT_SECRET",
+            ):
+                setattr(self, name, None)
+            self.PDF_UNICODE_LLM_ENABLED = False
+            self.JEV_STRUCTURE_REFINEMENT_ENABLED = False
+            self.JEV_GLYPH_CONSENSUS_ENABLED = False
+            self.DISABLE_LAYOUTLM = True
+        return self
 
     @model_validator(mode="after")
     def validate_trial_deployment(self) -> "Settings":

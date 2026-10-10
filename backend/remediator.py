@@ -637,7 +637,8 @@ class PDFRemediator:
             ))
 
         # 2a. Repair used font codes missing from ToUnicode. Deterministic
-        # evidence is preferred; DeepSeek V4 Pro is called only for ambiguity.
+        # evidence is preferred; Gemini vision handles ambiguity and optional
+        # Jev text consensus can reject otherwise accepted visual decisions.
         try:
             r = fixes.fix_pdf_unicode_mappings(target)
             results.append(RemediationResult(
@@ -704,6 +705,7 @@ class PDFRemediator:
                         f"structure tags across {tag_result['pages_processed']} pages"
                     ),
                     new_value=str(tag_result.get("tag_counts", {})),
+                    details={"jev_refinement": tag_result.get("jev_refinement")},
                 ))
             else:
                 results.append(RemediationResult(

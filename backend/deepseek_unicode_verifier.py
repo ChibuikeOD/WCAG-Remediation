@@ -74,6 +74,7 @@ class DeepSeekDecision:
     response: Optional[dict[str, Any]] = None
     model_used: Optional[str] = None
     evidence_mode: Optional[str] = None
+    consensus: Optional[dict[str, Any]] = None
 
 
 def _chat_completion_options(*, max_tokens: int = 800) -> dict[str, Any]:
@@ -402,6 +403,7 @@ def _attach_invocation_metadata(
         response=decision.response,
         model_used=decision.model_used or model_used,
         evidence_mode=decision.evidence_mode or evidence_mode,
+        consensus=decision.consensus,
     )
 
 

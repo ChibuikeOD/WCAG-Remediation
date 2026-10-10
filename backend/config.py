@@ -169,6 +169,23 @@ class Settings(BaseSettings):
     GEMINI_API_ENDPOINT: str = (
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     )
+
+    # Optional Jev refinement through Vercel AI Gateway. Jev is text-only;
+    # tables, figures, lists, and geometry remain deterministic.
+    AI_GATEWAY_API_KEY: Optional[SecretStr] = None
+    VERCEL_OIDC_TOKEN: Optional[SecretStr] = None
+    JEV_STRUCTURE_REFINEMENT_ENABLED: bool = False
+    JEV_MODEL: str = "typesafe-ai/jev"
+    JEV_GATEWAY_ENDPOINT: str = (
+        "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+    )
+    JEV_STRUCTURE_MIN_CONFIDENCE: float = Field(default=0.90, ge=0.0, le=1.0)
+    JEV_STRUCTURE_BATCH_SIZE: int = Field(default=40, ge=1, le=100)
+    JEV_GLYPH_CONSENSUS_ENABLED: bool = False
+    JEV_GLYPH_MIN_CONFIDENCE: float = Field(default=0.98, ge=0.0, le=1.0)
+    JEV_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=5)
+    JEV_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0)
+
     PDF_UNICODE_LLM_ENABLED: bool = True
     PDF_UNICODE_LLM_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=5)
     PDF_UNICODE_LLM_MIN_CONFIDENCE: float = Field(default=0.98, ge=0.0, le=1.0)

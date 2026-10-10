@@ -22,6 +22,21 @@ except ImportError:
     HAS_PIKEPDF = False
 
 
+def _ai_gateway_token(config: Any) -> str:
+    """Resolve Gateway auth in Vercel's documented priority order."""
+    for name in ("AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN"):
+        credential = getattr(config, name, None)
+        if credential:
+            value = (
+                credential.get_secret_value()
+                if hasattr(credential, "get_secret_value")
+                else str(credential)
+            )
+            if value.strip():
+                return value.strip()
+    return ""
+
+
 def _normalize_language_tag(language: Optional[str]) -> str:
     """Return a PAC-friendly BCP 47 language tag for PDF /Lang metadata."""
     if not language:
@@ -127,6 +142,48 @@ def auto_tag_pdf(
         analyzer = OpenDataLoaderLayoutAnalyzer()
         layouts = analyzer.analyze_document(source_path)
 
+        # Jev is an optional, confidence-gated second opinion for the narrow
+        # semantic decision OpenDataLoader is most likely to get wrong:
+        # heading vs paragraph and heading level.  Failures and uncertainty
+        # retain the original OpenDataLoader tags.
+        from .config import settings
+
+        jev_refinement = {
+            "enabled": bool(settings.JEV_STRUCTURE_REFINEMENT_ENABLED),
+            "attempted_blocks": 0,
+            "applied_blocks": 0,
+            "retained_blocks": 0,
+            "batches": 0,
+            "model_requested": settings.JEV_MODEL,
+            "min_confidence": settings.JEV_STRUCTURE_MIN_CONFIDENCE,
+            "gateway": "vercel-ai-gateway",
+            "models_used": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "errors": [],
+        }
+        if settings.JEV_STRUCTURE_REFINEMENT_ENABLED:
+            gateway_token = _ai_gateway_token(settings)
+            if gateway_token:
+                from .jev_structure_refiner import refine_structure_tags_with_jev
+
+                jev_refinement = refine_structure_tags_with_jev(
+                    layouts,
+                    gateway_token=gateway_token,
+                    model=settings.JEV_MODEL,
+                    endpoint=settings.JEV_GATEWAY_ENDPOINT,
+                    min_confidence=settings.JEV_STRUCTURE_MIN_CONFIDENCE,
+                    batch_size=settings.JEV_STRUCTURE_BATCH_SIZE,
+                    max_attempts=settings.JEV_MAX_ATTEMPTS,
+                    timeout=settings.JEV_TIMEOUT_SECONDS,
+                ).to_dict()
+            else:
+                jev_refinement["errors"] = ["gateway-credential-unavailable"]
+                logger.warning(
+                    "Jev structure refinement is enabled but neither AI_GATEWAY_API_KEY "
+                    "nor VERCEL_OIDC_TOKEN is available; retaining OpenDataLoader tags"
+                )
+
         # Step 2: Normalize and extract layout blocks coordinates
         blocks_data = []
         tag_counts = {}
@@ -188,8 +245,6 @@ def auto_tag_pdf(
             ]
             
             # Execute the C++ CLI tool
-            from .config import settings
-
             try:
                 res = subprocess.run(
                     cmd,
@@ -241,8 +296,13 @@ def auto_tag_pdf(
             "output_path": str(target),
             "language": normalized_language,
             "errors": [],
-            "warnings": [],
+            "warnings": (
+                ["Jev refinement retained OpenDataLoader tags for one or more batches"]
+                if jev_refinement.get("errors")
+                else []
+            ),
             "message": f"Successfully auto-tagged {pages_processed} pages",
+            "jev_refinement": jev_refinement,
         }
 
     except Exception as exc:

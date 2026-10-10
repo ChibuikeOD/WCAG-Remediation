@@ -473,7 +473,14 @@ def generate_remediation_report_for_api(
         (r for r in remediation_results if r.get("issue_id") == "pdf-unicode-mapping"),
         None,
     )
+    auto_tag_result = next(
+        (r for r in remediation_results if r.get("issue_id") == "pdf-auto-tag"),
+        None,
+    )
     unicode_details = (unicode_result or {}).get("details") or {}
+    jev_details = ((auto_tag_result or {}).get("details") or {}).get(
+        "jev_refinement"
+    ) or {}
     llm_provider = unicode_details.get("provider") or "Gemini"
     llm_provider_label = unicode_details.get("provider_label") or llm_provider
     if unicode_details.get("llm_unavailable"):
@@ -492,6 +499,23 @@ def generate_remediation_report_for_api(
         llm_disclosure = (
             f"{llm_provider_label} was not used; all Unicode decisions were deterministic."
         )
+    if jev_details.get("enabled"):
+        attempted = int(jev_details.get("attempted_blocks", 0))
+        applied = int(jev_details.get("applied_blocks", 0))
+        retained = int(jev_details.get("retained_blocks", 0))
+        if jev_details.get("errors") and attempted == 0:
+            llm_disclosure += (
+                " TypeSafe Jev heading refinement through Vercel AI Gateway was "
+                "requested but unavailable; "
+                "OpenDataLoader tags were retained."
+            )
+        else:
+            llm_disclosure += (
+                f" TypeSafe Jev through Vercel AI Gateway evaluated {attempted} "
+                "heading/paragraph block(s), "
+                f"applied {applied} high-confidence refinement(s), and retained "
+                f"{retained} original OpenDataLoader tag(s)."
+            )
 
     manual_remaining = [
         {
@@ -653,6 +677,31 @@ def generate_remediation_report_for_api(
         )
         _add_key_value_rows(
             summary_rows, "Mappings added", details.get("mappings_added")
+        )
+        _add_key_value_rows(
+            summary_rows,
+            "Jev glyph consensus enabled",
+            details.get("jev_consensus_enabled"),
+        )
+        _add_key_value_rows(
+            summary_rows,
+            "Jev consensus model",
+            details.get("jev_consensus_model"),
+        )
+        _add_key_value_rows(
+            summary_rows,
+            "Jev consensus confidence threshold",
+            details.get("jev_consensus_min_confidence"),
+        )
+        _add_key_value_rows(
+            summary_rows,
+            "Jev consensus decisions accepted",
+            details.get("jev_consensus_accepted"),
+        )
+        _add_key_value_rows(
+            summary_rows,
+            "Jev consensus gateway",
+            details.get("jev_consensus_gateway"),
         )
         _add_key_value_rows(
             summary_rows, "Rollback reason", details.get("rollback_reason")
@@ -893,7 +942,89 @@ def generate_remediation_report_for_api(
                     )
                 )
 
+            jev_consensus = decision.get("jev_consensus") or {}
+            if jev_consensus:
+                story.append(Spacer(1, 4))
+                story.append(
+                    Paragraph(
+                        "Jev glyph consensus via Vercel AI Gateway",
+                        subsection_style,
+                    )
+                )
+                consensus_rows: List[List[Any]] = []
+                _add_key_value_rows(
+                    consensus_rows, "Accepted", jev_consensus.get("accepted")
+                )
+                _add_key_value_rows(
+                    consensus_rows, "Confidence", jev_consensus.get("confidence")
+                )
+                _add_key_value_rows(
+                    consensus_rows,
+                    "Rejection reason",
+                    jev_consensus.get("rejection_reason"),
+                )
+                _add_key_value_rows(
+                    consensus_rows,
+                    "Model requested",
+                    jev_consensus.get("model_requested"),
+                )
+                _add_key_value_rows(
+                    consensus_rows, "Model used", jev_consensus.get("model_used")
+                )
+                _add_key_value_rows(
+                    consensus_rows,
+                    "Selected candidate",
+                    jev_consensus.get("selected_candidate"),
+                )
+                _add_key_value_rows(
+                    consensus_rows,
+                    "Expected visual candidate",
+                    jev_consensus.get("expected_candidate"),
+                )
+                _add_key_value_rows(
+                    consensus_rows, "Input tokens", jev_consensus.get("input_tokens")
+                )
+                _add_key_value_rows(
+                    consensus_rows,
+                    "Output tokens",
+                    jev_consensus.get("output_tokens"),
+                )
+                _append_decision_table(story, consensus_rows)
+                consensus_response = jev_consensus.get("response")
+                if consensus_response:
+                    story.append(Spacer(1, 2))
+                    story.append(dynamic_paragraph("Raw Jev response:", mono_style))
+                    story.append(
+                        dynamic_paragraph(
+                            json.dumps(
+                                consensus_response, ensure_ascii=False, indent=2
+                            ),
+                            mono_style,
+                        )
+                    )
+
             story.append(Spacer(1, 10))
+
+    def add_jev_details(story: List[Any], details: Dict[str, Any]) -> None:
+        if not details.get("enabled"):
+            return
+        story.append(
+            Paragraph("Jev Structure Review via Vercel AI Gateway", section_style)
+        )
+        rows: List[List[Any]] = []
+        _add_key_value_rows(rows, "Gateway", details.get("gateway"))
+        _add_key_value_rows(rows, "Model requested", details.get("model_requested"))
+        _add_key_value_rows(rows, "Model version(s) used", details.get("models_used"))
+        _add_key_value_rows(
+            rows, "Minimum confidence threshold", details.get("min_confidence")
+        )
+        _add_key_value_rows(rows, "Blocks evaluated", details.get("attempted_blocks"))
+        _add_key_value_rows(rows, "Tag refinements applied", details.get("applied_blocks"))
+        _add_key_value_rows(rows, "Original tags retained", details.get("retained_blocks"))
+        _add_key_value_rows(rows, "Input tokens", details.get("input_tokens"))
+        _add_key_value_rows(rows, "Output tokens", details.get("output_tokens"))
+        _add_key_value_rows(rows, "Errors", details.get("errors"), mono=True)
+        _append_decision_table(story, rows)
 
     def add_result_details(story: List[Any], results: List[Dict[str, Any]]) -> None:
         if not results:
@@ -975,6 +1106,7 @@ def generate_remediation_report_for_api(
         ]
     )
     add_unicode_llm_details(story, unicode_details)
+    add_jev_details(story, jev_details)
     story.extend(
         [
             Paragraph("Successful Fixes", section_style),

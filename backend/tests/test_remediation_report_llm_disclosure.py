@@ -73,7 +73,7 @@ def test_api_report_is_readable_pdf_with_remediation_sections(tmp_path: Path) ->
     assert path.read_bytes().startswith(b"%PDF")
 
     text = extract_pdf_text(path)
-    assert "PDF Accessibility Remediation Report" in text
+    assert "PDFAccess Remediation Report" in text
     assert "accessible-source.pdf" in text
     assert "Successful Fixes" in text
     assert "Document language was set successfully" in text
@@ -292,6 +292,63 @@ def test_report_includes_gemini_api_error_details(tmp_path: Path) -> None:
     assert "HTTP status" in text
 
 
+def test_report_includes_jev_glyph_consensus_details(tmp_path: Path) -> None:
+    details = {
+        "provider": "Gemini",
+        "provider_label": "Gemini 3.1 Flash-Lite with Jev consensus",
+        "llm_invoked": True,
+        "llm_recommendation_applied": True,
+        "evaluated": 1,
+        "applied": 1,
+        "model": "gemini-3.1-flash-lite",
+        "jev_consensus_enabled": True,
+        "jev_consensus_model": "typesafe-ai/jev",
+        "jev_consensus_min_confidence": 0.98,
+        "jev_consensus_accepted": 1,
+        "jev_consensus_gateway": "vercel-ai-gateway",
+        "decisions": [
+            {
+                "font": "/CIDFont+F6",
+                "cid": 2870,
+                "llm_invoked": True,
+                "llm_recommendation_applied": True,
+                "unicode_text": "2",
+                "jev_consensus": {
+                    "accepted": True,
+                    "confidence": 0.99,
+                    "rejection_reason": None,
+                    "model_requested": "typesafe-ai/jev",
+                    "model_used": "jev-1.13.0",
+                    "selected_candidate": "Unicode U+0032, rendered as 2",
+                    "expected_candidate": "Unicode U+0032, rendered as 2",
+                    "input_tokens": 211,
+                    "output_tokens": 8,
+                    "gateway": "vercel-ai-gateway",
+                    "response": {
+                        "model": "jev-1.13.0",
+                        "answers": {
+                            "unicode_consensus": {
+                                "type": "choice",
+                                "choice": "candidate_0",
+                                "confidence": 0.99,
+                            }
+                        },
+                    },
+                },
+            }
+        ],
+    }
+
+    path = generate_report_with_unicode_details(tmp_path, details)
+    text = extract_pdf_text(path)
+
+    assert "Jev glyph consensus enabled" in text
+    assert "Jev glyph consensus via Vercel AI Gateway" in text
+    assert "jev-1.13.0" in text
+    assert "Expected visual candidate" in text
+    assert "Raw Jev response" in text
+
+
 def test_report_skips_empty_gemini_response_table(tmp_path: Path) -> None:
     details = {
         "provider": "Gemini",
@@ -314,3 +371,45 @@ def test_report_skips_empty_gemini_response_table(tmp_path: Path) -> None:
     }
     path = generate_report_with_unicode_details(tmp_path, details)
     assert path.read_bytes().startswith(b"%PDF")
+
+
+def test_report_discloses_jev_structure_refinement(tmp_path: Path) -> None:
+    path = generate_remediation_report_for_api(
+        original_filename="source.pdf",
+        file_id="file-1",
+        report_id="report-jev",
+        file_type="pdf",
+        analysis_report={"all_issues": []},
+        remediation_results=[
+            {
+                "issue_id": "pdf-auto-tag",
+                "success": True,
+                "message": "Document structure rebuilt",
+                "details": {
+                    "jev_refinement": {
+                        "enabled": True,
+                        "attempted_blocks": 18,
+                        "applied_blocks": 3,
+                        "retained_blocks": 15,
+                        "model_requested": "typesafe-ai/jev",
+                        "models_used": ["typesafe-ai/jev"],
+                        "gateway": "vercel-ai-gateway",
+                        "min_confidence": 0.90,
+                        "input_tokens": 1200,
+                        "output_tokens": 220,
+                        "errors": [],
+                    }
+                },
+            }
+        ],
+        remediated_file_path="output.pdf",
+        output_dir=tmp_path,
+    )
+
+    text = extract_pdf_text(path)
+    assert "TypeSafe Jev through Vercel AI Gateway evaluated 18" in text
+    assert "Jev Structure Review via Vercel AI Gateway" in text
+    assert "typesafe-ai/jev" in text
+    assert "vercel-ai-gateway" in text
+    assert "Tag refinements applied" in text
+    assert "3" in text

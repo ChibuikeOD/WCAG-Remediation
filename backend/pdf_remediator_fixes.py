@@ -1300,15 +1300,28 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
-    """Repair incomplete ToUnicode maps, using Gemini vision only for ambiguity."""
+    """Repair ToUnicode maps with Gemini vision and optional Jev consensus."""
     from .config import settings
+    from .deepseek_unicode_verifier import DeepSeekDecision
     from .gemini_unicode_verifier import verify_ambiguous_unicode
+    from .jev_unicode_consensus import verify_glyph_consensus
     from .pdf_unicode_mapping import repair_missing_unicode
 
+    def secret_value(value: Any) -> str:
+        if value is None:
+            return ""
+        get_secret_value = getattr(value, "get_secret_value", None)
+        raw = get_secret_value() if callable(get_secret_value) else value
+        return str(raw).strip()
+
+    gateway_token = secret_value(settings.AI_GATEWAY_API_KEY) or secret_value(
+        settings.VERCEL_OIDC_TOKEN
+    )
+    use_jev_consensus = bool(settings.JEV_GLYPH_CONSENSUS_ENABLED)
     verifier = None
     if settings.PDF_UNICODE_LLM_ENABLED and settings.GEMINI_API_KEY:
         def verifier(context: Dict[str, Any]):
-            return verify_ambiguous_unicode(
+            visual_decision = verify_ambiguous_unicode(
                 context,
                 api_key=settings.GEMINI_API_KEY or "",
                 min_confidence=settings.PDF_UNICODE_LLM_MIN_CONFIDENCE,
@@ -1317,13 +1330,51 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
                 max_attempts=settings.PDF_UNICODE_LLM_MAX_ATTEMPTS,
                 timeout=settings.PDF_UNICODE_LLM_TIMEOUT_SECONDS,
             )
+            if not use_jev_consensus or not visual_decision.accepted:
+                return visual_decision
 
+            consensus = verify_glyph_consensus(
+                context,
+                visual_decision,
+                gateway_token=gateway_token,
+                min_confidence=settings.JEV_GLYPH_MIN_CONFIDENCE,
+                model=settings.JEV_MODEL,
+                endpoint=settings.JEV_GATEWAY_ENDPOINT,
+                max_attempts=settings.JEV_MAX_ATTEMPTS,
+                timeout=settings.JEV_TIMEOUT_SECONDS,
+            )
+            consensus_record = consensus.to_dict()
+            if consensus.accepted:
+                return DeepSeekDecision(
+                    accepted=True,
+                    text=visual_decision.text,
+                    confidence=visual_decision.confidence,
+                    rejection_reason=None,
+                    response=visual_decision.response,
+                    model_used=visual_decision.model_used,
+                    evidence_mode="vision+jev-consensus",
+                    consensus=consensus_record,
+                )
+            return DeepSeekDecision(
+                accepted=False,
+                text=None,
+                confidence=visual_decision.confidence,
+                rejection_reason=consensus.rejection_reason or "jev-consensus-rejected",
+                response=visual_decision.response,
+                model_used=visual_decision.model_used,
+                evidence_mode="vision+jev-consensus",
+                consensus=consensus_record,
+            )
+
+    provider_label = "Gemini 3.1 Flash-Lite"
+    if use_jev_consensus:
+        provider_label += " with Jev consensus"
     result = repair_missing_unicode(
         Path(pdf_path),
         verifier=verifier,
         max_occurrences=settings.PDF_UNICODE_LLM_MAX_OCCURRENCES,
         provider_name="Gemini",
-        provider_label="Gemini 3.1 Flash-Lite",
+        provider_label=provider_label,
         model_name=settings.GEMINI_MODEL,
     )
     details = result.get("details")
@@ -1334,6 +1385,20 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
         details["use_vision"] = True
         details["max_attempts"] = settings.PDF_UNICODE_LLM_MAX_ATTEMPTS
         details["endpoint"] = settings.GEMINI_API_ENDPOINT
+        details["jev_consensus_enabled"] = use_jev_consensus
+        details["jev_consensus_model"] = settings.JEV_MODEL
+        details["jev_consensus_min_confidence"] = settings.JEV_GLYPH_MIN_CONFIDENCE
+        details["jev_consensus_gateway"] = "vercel-ai-gateway"
+        details["jev_consensus_endpoint"] = settings.JEV_GATEWAY_ENDPOINT
+        consensus_records = [
+            decision.get("jev_consensus")
+            for decision in details.get("decisions", [])
+            if isinstance(decision, dict) and decision.get("jev_consensus")
+        ]
+        details["jev_consensus_invoked"] = bool(consensus_records)
+        details["jev_consensus_accepted"] = sum(
+            bool(record.get("accepted")) for record in consensus_records
+        )
         if settings.GEMINI_MODEL:
             details["model"] = settings.GEMINI_MODEL
     return result

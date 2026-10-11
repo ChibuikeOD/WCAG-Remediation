@@ -267,7 +267,8 @@ def test_failed_post_write_verification_rolls_back(tmp_path: Path, monkeypatch) 
     assert result["details"]["rollback_reason"] == "visual-diff"
     assert result["details"]["accepted_before_rollback"] == 1
     assert result["details"]["llm_recommendation_applied"] is False
-    assert "1 recommendation(s) were accepted before rollback" in result["message"]
+    assert "1 mapping(s) accepted from the recorded local/external evidence were discarded" in result["message"]
+    assert "evaluated 1 ambiguous Unicode mapping(s); 0 recommendation(s) were applied" in result["message"]
 
 
 def test_qpdf_check_skips_windows_bundle_when_not_on_windows(

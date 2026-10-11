@@ -541,6 +541,7 @@ def _write_unicode_mappings(
     destination: Path,
     mappings: list[tuple[tuple[int, int], int, str]],
     *, reviewed_type3_fonts: Optional[set[tuple[int, int]]] = None,
+    reviewed_math_fonts: Optional[set[tuple[int, int]]] = None,
 ) -> None:
     by_font: dict[tuple[int, int], dict[int, str]] = {}
     for objgen, cid, text in mappings:
@@ -550,10 +551,12 @@ def _write_unicode_mappings(
             font = pdf.get_object(objgen)
             cmap = font.get("/ToUnicode")
             if not isinstance(cmap, pikepdf.Stream):
-                if objgen not in (reviewed_type3_fonts or set()) or str(font.get("/Subtype")) != "/Type3" or any(not 0 <= code <= 255 for code in additions):
+                allowed_type3=objgen in (reviewed_type3_fonts or set()) and str(font.get("/Subtype"))=="/Type3"
+                allowed_math=objgen in (reviewed_math_fonts or set()) and str(font.get("/Subtype"))=="/Type1"
+                if not (allowed_type3 or allowed_math) or any(not 0 <= code <= 255 for code in additions):
                     raise ValueError(f"font {objgen} has no writable ToUnicode stream")
-                # Accepted Type3 additions come only from byte-bound reviewed
-                # proposals. Keep Encoding, CharProcs and rendering untouched.
+                # These allowlists contain only verified byte-bound proposals.
+                # Keep Encoding, glyph programs and rendering untouched.
                 cmap = pdf.make_stream(b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /ReviewedType3 def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n")
                 font["/ToUnicode"] = cmap
             cmap.write(add_cmap_mappings(cmap.read_bytes(), additions))
@@ -567,13 +570,62 @@ def verify_repair(
     affected_pages: set[int],
 ) -> tuple[bool, str]:
     """Verify mappings are complete and page pixels are unchanged."""
-    remaining = {
-        (finding.font_objgen, finding.cid)
-        for finding in inventory_missing_unicode(candidate)
-    }
-    for objgen, cid, _text in expected:
-        if (objgen, cid) in remaining:
-            return False, "mapping-still-missing"
+    # Object numbers belong to one serialization, not to font identity. Resolve
+    # the same page/Form resource namespaces after saving and require both the
+    # unchanged painting font and the exact promised Unicode value.
+    from backend.pdf_paint_ownership import _paint_value
+    by_font = {}
+    for objgen, cid, text in expected:
+        by_font.setdefault(objgen, {})[cid] = text
+    found = set()
+    checked_fonts = set()
+    checked_scopes = set()
+    try:
+        with pikepdf.open(original) as source, pikepdf.open(candidate) as saved:
+            if len(source.pages) != len(saved.pages):
+                return False, "mapping-page-count-changed"
+            def visit(left, right, ancestors):
+                key = tuple(left.objgen)
+                if key != (0, 0) and key in ancestors:
+                    raise ValueError("cyclic Form resource namespace")
+                scope_pair = (key, tuple(right.objgen))
+                if key != (0, 0) and scope_pair in checked_scopes:
+                    return
+                ancestors = ancestors | {key} if key != (0, 0) else ancestors
+                a = left.get('/Resources', pikepdf.Dictionary())
+                b = right.get('/Resources', pikepdf.Dictionary())
+                for name, font in a.get('/Font', {}).items():
+                    identity = tuple(font.objgen)
+                    if identity not in by_font:
+                        continue
+                    target = b.get('/Font', {}).get(name)
+                    font_pair = (identity, tuple(target.objgen)) if target is not None else None
+                    if font_pair in checked_fonts:
+                        continue
+                    if target is None or _paint_value(font) != _paint_value(target):
+                        raise ValueError("mapping-font-painting-changed")
+                    cmap = target.get('/ToUnicode')
+                    if not isinstance(cmap, pikepdf.Stream):
+                        raise ValueError("mapping-still-missing")
+                    actual = parse_to_unicode_cmap(cmap.read_bytes()).mappings
+                    if any(actual.get(code) != text for code, text in by_font[identity].items()):
+                        raise ValueError("mapping-value-mismatch")
+                    found.add(identity)
+                    checked_fonts.add(font_pair)
+                for name, form in a.get('/XObject', {}).items():
+                    if str(form.get('/Subtype')) == '/Form':
+                        other = b.get('/XObject', {}).get(name)
+                        if other is None or str(other.get('/Subtype')) != '/Form':
+                            raise ValueError("mapping-Form-namespace-changed")
+                        visit(form, other, ancestors)
+                if key != (0, 0):
+                    checked_scopes.add(scope_pair)
+            for before_page, after_page in zip(source.pages, saved.pages):
+                visit(before_page.obj, after_page.obj, set())
+            if found != set(by_font):
+                return False, "mapping-font-namespace-unresolved"
+    except Exception as exc:
+        return False, f"mapping-verification-error: {exc}"
     try:
         before = fitz.open(original)
         after = fitz.open(candidate)
@@ -663,6 +715,8 @@ def repair_missing_unicode(
     model_name: str = "gemini-3.1-flash-lite",
     reviewed_glyph_sidecar: Optional[Path] = None,
     reviewed_glyph_original: Optional[Path] = None,
+    reviewed_math_sidecar: Optional[Path] = None,
+    reviewed_math_original: Optional[Path] = None,
 ) -> dict:
     """Resolve missing mappings and atomically install only verified changes."""
     reviewed = {}
@@ -671,6 +725,19 @@ def repair_missing_unicode(
             raise ValueError("reviewed glyph sidecar requires original-source path")
         from .pdf_reviewed_glyphs import load_reviewed_glyphs
         reviewed = load_reviewed_glyphs(Path(reviewed_glyph_sidecar), Path(reviewed_glyph_original), pdf_path)
+    reviewed_math = {}
+    if reviewed_math_sidecar is not None:
+        if reviewed_math_original is None:
+            raise ValueError("reviewed math sidecar requires original-source path")
+        from .pdf_reviewed_math_glyphs import load_reviewed_math_glyphs
+        from .pdf_reviewed_glyphs import ReviewedGlyphMappings
+        reviewed_math=load_reviewed_math_glyphs(Path(reviewed_math_sidecar),Path(reviewed_math_original),pdf_path)
+        if not isinstance(reviewed,ReviewedGlyphMappings):reviewed=ReviewedGlyphMappings()
+        for key,value in reviewed_math.items():
+            if key in reviewed and reviewed[key]["text"]!=value["text"]:
+                raise ValueError("conflicting Type3 and complete-symbol review mappings")
+            reviewed[key]=value
+        for key,value in reviewed_math.binding_counts.items():reviewed.binding_counts[key]+=value
     findings = inventory_missing_unicode(pdf_path)
     accepted: list[tuple[tuple[int, int], int, str]] = []
     decisions: list[dict] = []
@@ -806,6 +873,9 @@ def repair_missing_unicode(
         "reviewed_sidecar_bound": len(reviewed),
         "reviewed_sidecar_binding_counts": getattr(reviewed, "binding_counts", None),
         "reviewed_sidecar_unused": len(set(reviewed) - {(f.font_objgen, f.cid) for f in findings}),
+        "reviewed_math_bound": len(reviewed_math),
+        "reviewed_math_binding_counts": getattr(reviewed_math,"binding_counts",None),
+        "reviewed_math_applied": sum(d.get("reviewed_glyph_evidence",{}).get("mapping_kind")=="complete-symbol" for d in decisions),
         "font_metadata_applied": sum(d.get("resolution_source") == "font-metadata" for d in decisions),
         "verified_local_font_applied": sum(d.get("resolution_source") == "verified-local-font-ssty" for d in decisions),
         "total_mappings_applied": len(accepted),
@@ -838,7 +908,8 @@ def repair_missing_unicode(
     try:
         if reviewed:
             _write_unicode_mappings(pdf_path, candidate, accepted,
-                                    reviewed_type3_fonts={key[0] for key in reviewed})
+                                    reviewed_type3_fonts={key[0] for key,value in reviewed.items() if value.get("mapping_kind")!="complete-symbol"},
+                                    reviewed_math_fonts={key[0] for key in reviewed_math})
         else:
             _write_unicode_mappings(pdf_path, candidate, accepted)
         verified, reason = verify_repair(pdf_path, candidate, accepted, affected_pages)
@@ -847,6 +918,7 @@ def repair_missing_unicode(
             details["llm_recommendation_applied"] = False
             details["applied"] = 0
             details["reviewed_sidecar_applied"] = 0
+            details["reviewed_math_applied"] = 0
             details["font_metadata_applied"] = 0
             details["verified_local_font_applied"] = 0
             details["total_mappings_applied"] = 0

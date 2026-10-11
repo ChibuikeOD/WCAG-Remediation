@@ -9,7 +9,8 @@ from backend.remediator import PDFRemediator
 @pytest.mark.parametrize("count", [3, None])
 @pytest.mark.parametrize("success", [True, False])
 @pytest.mark.parametrize("glyph_opt_in", [True, False])
-def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, success, glyph_opt_in):
+@pytest.mark.parametrize("math_opt_in", [True, False])
+def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, success, glyph_opt_in, math_opt_in):
     path = tmp_path / "document.pdf"
     with fitz.open() as document:
         document.new_page().insert_text((30, 40), "Scientific text")
@@ -17,7 +18,9 @@ def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, s
     glyph_sidecar = tmp_path / "review.json"
     glyph_original = tmp_path / "readonly-original.pdf"
     engine = PDFRemediator(path, reviewed_glyph_sidecar=glyph_sidecar if glyph_opt_in else None,
-                          reviewed_glyph_original=glyph_original if glyph_opt_in else None)
+                          reviewed_glyph_original=glyph_original if glyph_opt_in else None,
+                          reviewed_math_sidecar=glyph_sidecar if math_opt_in else None,
+                          reviewed_math_original=glyph_original if math_opt_in else None)
     monkeypatch.setattr(config.settings, "DISABLE_OPENDATALOADER", False)
     monkeypatch.setattr(engine, "fix_metadata", lambda **kwargs: [])
     tag_result = {"success": success, "tags_created": 1, "pages_processed": 1,
@@ -40,8 +43,9 @@ def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, s
     monkeypatch.setattr(pdf_link_descriptions, "repair_link_descriptions",
                         lambda path: {"issue_id": "test", "success": True, "message": "ok"})
     results = engine.fix_all()
-    assert glyph_calls == ([{"reviewed_glyph_sidecar": glyph_sidecar,
-                             "reviewed_glyph_original": glyph_original}] if glyph_opt_in else [{}])
+    expected={"reviewed_glyph_sidecar":glyph_sidecar,"reviewed_glyph_original":glyph_original} if glyph_opt_in else {}
+    if math_opt_in:expected.update(reviewed_math_sidecar=glyph_sidecar,reviewed_math_original=glyph_original)
+    assert glyph_calls == [expected]
     target = next(item for item in results if item.issue_id == "pdf-validation-target")
     assert target.details == {
         "validation_target": "PDF/UA-1", "validation_profile": "ua1",

@@ -306,7 +306,9 @@ public:
 
         if (in_text_object) {
             if (type == QPDFTokenizer::tt_word && (value == "Tj" || value == "TJ" || value == "'" || value == "\"")) {
-                AffineMat trm = affine_mul(tm, ctm);
+                AffineMat rise;
+                rise.f = text_rise;
+                AffineMat trm = affine_mul(affine_mul(rise, tm), ctm);
 
                 int current_link_idx = -1;
                 for (int j = 0; j < static_cast<int>(page_link_rects.size()); ++j) {
@@ -457,8 +459,10 @@ private:
         const size_t n = geo_numbers.size();
         if (value == "q") {
             ctm_stack.push_back(ctm);
+            rise_stack.push_back(text_rise);
         } else if (value == "Q") {
             if (!ctm_stack.empty()) { ctm = ctm_stack.back(); ctm_stack.pop_back(); }
+            if (!rise_stack.empty()) { text_rise = rise_stack.back(); rise_stack.pop_back(); }
         } else if (value == "cm" && n >= 6) {
             AffineMat m;
             m.a = geo_numbers[n-6]; m.b = geo_numbers[n-5]; m.c = geo_numbers[n-4];
@@ -489,6 +493,8 @@ private:
             tm = tlm;
         } else if (value == "TL" && n >= 1) {
             text_leading = geo_numbers[n-1];
+        } else if (value == "Ts" && n >= 1) {
+            text_rise = geo_numbers[n-1];
         } else if (value == "T*" || value == "'" || value == "\"") {
             // Move to the start of the next line by the current leading. For the
             // ' and " show operators this line move happens before the glyphs are
@@ -549,6 +555,8 @@ private:
     AffineMat tm;                     // text matrix
     AffineMat tlm;                    // text line matrix
     double text_leading;              // current leading (TL), used by T*/'/"
+    double text_rise = 0.0;
+    std::vector<double> rise_stack;
     std::vector<double> geo_numbers;  // numeric operands pending an operator
     int geo_array_depth;              // depth inside [...] arrays (e.g. TJ)
     int geo_dict_depth;               // depth inside <<...>> dictionaries

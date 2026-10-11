@@ -640,9 +640,15 @@ def repair_missing_unicode(
     llm_applied = 0
     unavailable = False
     affected_pages: set[int] = set()
+    # Evidence belongs to an embedded font, not an individual character code.
+    # Reopening/parsing it for every missing CID is prohibitive on dissertations.
+    # Keep this cache local to the run so another file/revision cannot reuse it.
+    font_evidence: dict[tuple[int, int], FontEvidence] = {}
 
     for finding in findings:
-        evidence = collect_font_evidence(pdf_path, finding)
+        if finding.font_objgen not in font_evidence:
+            font_evidence[finding.font_objgen] = collect_font_evidence(pdf_path, finding)
+        evidence = font_evidence[finding.font_objgen]
         deterministic = resolve_deterministically(finding, evidence)
         if deterministic is not None:
             accepted.append((finding.font_objgen, finding.cid, deterministic.text))
@@ -726,6 +732,8 @@ def repair_missing_unicode(
         "evaluated": evaluated,
         "applied": llm_applied,
         "decisions": decisions,
+        "findings_total": len(findings),
+        "unresolved": len(findings) - len(accepted),
     }
     disclosure = _disclosure(evaluated, llm_applied, unavailable, provider_label)
     if not accepted:

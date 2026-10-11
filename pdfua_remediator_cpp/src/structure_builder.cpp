@@ -8,8 +8,7 @@
 #include <cctype>
 
 // Normalize a layout-block tag to a PDF structure type that is valid for a
-// flat leaf element (one StructElem per content MCID). Headings are preserved,
-// everything textual collapses to /P, and structurally-nested roles
+// leaf element. Explicit inline/math/note roles are preserved; nested roles
 // (List/Table/etc.) are avoided here because they require child elements the
 // flat tree does not have. /Figure is intentionally excluded: it is applied
 // separately and only to genuine image MCIDs.
@@ -23,6 +22,7 @@ static std::string normalize_text_role(const std::string& raw) {
         t == "Heading" || t == "Subtitle") return "H2";
     if (t.size() == 2 && t[0] == 'H' && t[1] >= '1' && t[1] <= '6') return t;
     if (t == "Caption") return "Caption";
+    if (t == "Formula" || t == "Note" || t == "Reference" || t == "Span") return t;
     // Text, Paragraph, List, List-item, Table, Picture, Figure-on-text,
     // and anything non-standard collapse to a paragraph so we never emit an
     // invalid role or a Figure over real text.
@@ -153,7 +153,9 @@ static int assign_block_for_point(double x, double y,
         const LayoutBlock& b = blocks_on_page[i];
         if (!block_has_bbox(b)) continue;
 
-        if (point_in_bbox(x, y, b.bbox, 2.0)) {
+        // Raised Reference boxes can sit immediately beside punctuation on
+        // the base line. A broad containment margin steals that punctuation.
+        if (point_in_bbox(x, y, b.bbox, b.tag == "Reference" ? 0.0 : 2.0)) {
             double area = std::max(0.0, (b.bbox[2] - b.bbox[0])) *
                           std::max(0.0, (b.bbox[3] - b.bbox[1]));
             if (area < best_contain_area) {
@@ -227,6 +229,7 @@ void build_struct_tree(QPDF& pdf,
     // a single StructElem (a real paragraph, heading, etc.) whose /K references
     // all of that block's MCIDs.
     std::map<int, QPDFObjectHandle> parent_tree_entries;
+    std::map<std::string, QPDFObjectHandle> note_ids;
     int next_parent_tree_key = static_cast<int>(page_mcid_counts.size());
 
     for (auto const& pair : page_mcid_counts) {
@@ -505,11 +508,15 @@ void build_struct_tree(QPDF& pdf,
 
             attach_bbox_attr(se, blocks_on_page[b].bbox);
 
-            if (tag == "Figure") {
-                se.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString("[Image requires alt text]"));
+            if (tag == "Formula" && !blocks_on_page[b].alt_text.empty()) {
+                se.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString(blocks_on_page[b].alt_text));
             }
-
+            if (tag == "Note") {
+                const std::string id = "note-p" + std::to_string(page_idx) + "-b" + std::to_string(b);
+                se.replaceKey("/ID", QPDFObjectHandle::newString(id));
+            }
             QPDFObjectHandle se_indirect = pdf.makeIndirectObject(se);
+            if (tag == "Note") note_ids[se.getKey("/ID").getStringValue()] = se_indirect;
             block_struct_elems[b] = se_indirect;
             block_kids_arrays[b] = kids;
             doc_kids.appendItem(se_indirect);
@@ -545,7 +552,14 @@ void build_struct_tree(QPDF& pdf,
                 se.replaceKey("/P",    doc_elem_indirect);
                 se.replaceKey("/Pg",   page.getObjectHandle());
                 se.replaceKey("/K",    make_mcr(mcid));
-                se.replaceKey("/Alt",  QPDFObjectHandle::newUnicodeString("[Image requires alt text]"));
+                // Missing scientific descriptions remain unresolved. A generic
+                // placeholder must never masquerade as an accessible alternative.
+                const int figure_block = mcid_block[mcid];
+                if (figure_block >= 0 && figure_block < num_blocks &&
+                    blocks_on_page[figure_block].tag == "Figure" &&
+                    !blocks_on_page[figure_block].alt_text.empty()) {
+                    se.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString(blocks_on_page[figure_block].alt_text));
+                }
 
                 // Attach /BBox attribute to Figure structure element
                 if (info_map) {
@@ -606,6 +620,67 @@ void build_struct_tree(QPDF& pdf,
             } else {
                 parent_kids.appendItem(make_mcr(mcid));
                 mcid_parent[mcid] = parent_se;
+            }
+        }
+
+        // An explicitly classified Reference remains a distinct inline element
+        // inside its associated paragraph, never a fabricated Link annotation.
+        std::map<std::string, int> inline_group_counts;
+        for (const auto& block : blocks_on_page) if (!block.inline_group_id.empty()) ++inline_group_counts[block.inline_group_id];
+        for (int b = 0; b < num_blocks; ++b) {
+            if (blocks_on_page[b].tag != "Reference" || blocks_on_page[b].inline_parent_id.empty() ||
+                !block_struct_elems[b].isInitialized()) continue;
+            for (int parent = 0; parent < num_blocks; ++parent) {
+                const auto& owner = blocks_on_page[parent];
+                if (parent == b || !owner.inline_parent_id.empty() ||
+                    (owner.tag != "P" && owner.tag != "Caption" && owner.tag != "Formula") ||
+                    inline_group_counts[blocks_on_page[b].inline_parent_id] != 1 ||
+                    owner.inline_group_id != blocks_on_page[b].inline_parent_id ||
+                    !block_struct_elems[parent].isInitialized()) continue;
+                auto child = block_struct_elems[b];
+                child.replaceKey("/P", block_struct_elems[parent]);
+                block_kids_arrays[parent].appendItem(child);
+                for (int k = doc_kids.getArrayNItems() - 1; k >= 0; --k) {
+                    if (doc_kids.getArrayItem(k).isSameObjectAs(child)) doc_kids.eraseItem(k);
+                }
+                break;
+            }
+        }
+
+        // Drawing order may emit a script before its base or after the suffix.
+        // Reorder only MCRs on an explicitly detected inline baseline, leaving
+        // other lines and nested semantic/Link elements in their original slots.
+        if (info_map) {
+            for (int b = 0; b < num_blocks; ++b) {
+                auto& kids = block_kids_arrays[b];
+                if (!kids.isInitialized()) continue;
+                for (const auto& run : blocks_on_page[b].inline_runs) {
+                    std::vector<int> slots;
+                    std::vector<std::pair<double, QPDFObjectHandle>> items;
+                    for (int k = 0; k < kids.getArrayNItems(); ++k) {
+                        auto item = kids.getArrayItem(k);
+                        if (!item.isDictionary()) continue;
+                        auto anchor = item;
+                        if (!anchor.hasKey("/MCID") && anchor.hasKey("/S") &&
+                            anchor.getKey("/S").getName() == "/Reference") {
+                            auto child_kids = anchor.getKey("/K");
+                            if (child_kids.isArray() && child_kids.getArrayNItems() > 0) anchor = child_kids.getArrayItem(0);
+                        }
+                        if (!anchor.isDictionary() || !anchor.hasKey("/MCID")) continue;
+                        int id = anchor.getKey("/MCID").getIntValue();
+                        auto found = info_map->find(id);
+                        if (found == info_map->end()) continue;
+                        const auto& pos = found->second;
+                        const bool script = pos.x >= run[0] - 1 && pos.x <= run[2] + 1 &&
+                                            pos.y >= run[1] - 1 && pos.y <= run[3] + 1;
+                        if (script || std::abs(pos.y - run[5]) <= 1.0) {
+                            slots.push_back(k);
+                            items.emplace_back(pos.x, item);
+                        }
+                    }
+                    std::stable_sort(items.begin(), items.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+                    for (size_t k = 0; k < slots.size(); ++k) kids.setArrayItem(slots[k], items[k].second);
+                }
             }
         }
 
@@ -685,6 +760,16 @@ void build_struct_tree(QPDF& pdf,
                                     pdf.makeIndirectObject(parent_tree));
     struct_root_indirect.replaceKey("/ParentTreeNextKey",
                                     QPDFObjectHandle::newInteger(next_parent_tree_key));
+    if (!note_ids.empty()) {
+        QPDFObjectHandle names = QPDFObjectHandle::newArray();
+        for (auto const& entry : note_ids) {
+            names.appendItem(QPDFObjectHandle::newString(entry.first));
+            names.appendItem(entry.second);
+        }
+        QPDFObjectHandle id_tree = QPDFObjectHandle::newDictionary();
+        id_tree.replaceKey("/Names", names);
+        struct_root_indirect.replaceKey("/IDTree", pdf.makeIndirectObject(id_tree));
+    }
 
     root.replaceKey("/StructTreeRoot", struct_root_indirect);
 

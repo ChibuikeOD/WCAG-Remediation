@@ -143,11 +143,22 @@ def auto_tag_pdf(
                     "tag": block.tag,
                     "bbox": bbox_coords
                 }
-                for key in ("table_id", "table_row", "table_col", "table_header"):
+                for key in ("table_id", "table_row", "table_col", "table_header", "inline_group_id", "inline_parent_id"):
                     if key in block.metadata:
                         block_data[key] = block.metadata[key]
 
                 blocks_data.append(block_data)
+                from .pdf_inline_scripts import inline_order_hints
+                hints, review_count = inline_order_hints(block.metadata.get("inline_scripts", []), layout.height)
+                if hints:
+                    block_data["inline_order"] = hints
+                if review_count:
+                    block_data["inline_script_review_count"] = review_count
+                alt_text = str(block.metadata.get("alt_text", "") or "").strip()
+                if alt_text and alt_text.casefold() not in {
+                    "[image requires alt text]", "image", "figure", "formula",
+                }:
+                    block_data["alt_hex"] = alt_text.encode("utf-8").hex()
                 tag_counts[block.tag] = tag_counts.get(block.tag, 0) + 1
 
         # Step 3: Write layout JSON data to a temporary file
@@ -237,6 +248,7 @@ def auto_tag_pdf(
             "skipped": False,
             "tags_created": total_tags,
             "tag_counts": tag_counts,
+            "inline_script_review_count": sum(b.get("inline_script_review_count", 0) for b in blocks_data),
             "pages_processed": pages_processed,
             "output_path": str(target),
             "language": normalized_language,

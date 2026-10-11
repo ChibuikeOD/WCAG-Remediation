@@ -12,6 +12,10 @@ struct LayoutBlock {
     int page;
     std::string tag;
     std::string text;
+    std::string alt_text;
+    std::vector<std::vector<double>> inline_runs;
+    std::string inline_group_id;
+    std::string inline_parent_id;
     std::vector<double> bbox;
     std::string table_id;
     int table_row = -1;

@@ -1,0 +1,50 @@
+name: Native inline script regression
+
+on:
+  pull_request:
+    paths:
+      - 'backend/pdf_inline_scripts.py'
+      - 'backend/pdf_auto_tagging.py'
+      - 'backend/opendataloader_layout.py'
+      - 'backend/pdf_unicode_mapping.py'
+      - 'backend/tests/test_pdf_inline_scripts.py'
+      - 'backend/tests/test_pdf_unicode_font_cache.py'
+      - 'backend/tests/test_native_inline_scripts.py'
+      - 'pdfua_remediator_cpp/**'
+      - '.github/workflows/pdf-inline-scripts.yml'
+
+jobs:
+  native-script-regression:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install focused test dependencies
+        run: python -m pip install pytest==9.1.1 PyMuPDF==1.23.8 pikepdf==8.11.2 fonttools==4.66.1 Pillow==12.3.0
+      - name: Obtain checksummed QPDF native dependency
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'qpdf.zip'
+          Invoke-WebRequest 'https://github.com/qpdf/qpdf/releases/download/v12.3.2/qpdf-12.3.2-msvc64.zip' -OutFile $archive
+          $expected = '8941870a604e7c87ed24566b038d46c24ce76616254d2383c578f60c0677f202'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'QPDF checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'qpdf')
+      - name: Build current native sources
+        shell: pwsh
+        run: |
+          $qpdf = Join-Path $env:RUNNER_TEMP 'qpdf/qpdf-12.3.2-msvc64'
+          cmake -S pdfua_remediator_cpp -B native-build -A x64 "-DQPDF_DIR=$qpdf"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build native-build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath 'native-build/Release/pdfua-remediator-cli.exe')) { throw 'Fresh native binary missing' }
+      - name: Test exact pull request head and native logical order
+        shell: pwsh
+        run: |
+          $env:PDFACCESS_TEST_NATIVE_CLI = Join-Path $env:GITHUB_WORKSPACE 'native-build/Release/pdfua-remediator-cli.exe'
+          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py -q

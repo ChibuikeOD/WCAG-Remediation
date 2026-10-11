@@ -19,7 +19,15 @@ class Page:
         self.spans = spans
 
     def get_texttrace(self):
-        return self.spans
+        raise AssertionError("unsafe text trace API must not be used")
+
+    def get_text(self, format, flags=None):
+        assert format == "rawdict"
+        return {"blocks": [{"type": 0, "lines": [
+            {"dir": span["dir"], "spans": [{"size": span["size"], "chars": [
+                {"c": chr(code), "origin": origin, "bbox": bbox}
+                for code, _gid, origin, bbox in span["chars"]]}]}
+            for span in self.spans]}]}
 
 
 @pytest.mark.parametrize("script,y,size,kind", [
@@ -104,3 +112,26 @@ def test_stacked_sub_superscript_order_remains_for_human_review():
         {"kind": "superscript", "bbox": [16.2, 89, 20.2, 98], "base_origin": [10, 100]},
     ]
     assert inline_order_hints(runs, 200) == ("", 1)
+
+def test_raw_glyph_origins_preserve_inline_scripts_across_many_pages(tmp_path, monkeypatch):
+    import fitz
+    path = tmp_path / 'multipage.pdf'
+    with fitz.open() as document:
+        for _ in range(209):
+            page = document.new_page()
+            page.insert_text((30, 100), 'x', fontsize=12)
+            page.insert_text((36, 96), '-12', fontsize=8)
+            page.insert_text((30, 140), 'H', fontsize=12)
+            page.insert_text((38, 143), '2', fontsize=8)
+            page.insert_text((43, 140), 'O', fontsize=12)
+        document.save(path)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('native trace device is unsafe for the corpus lifecycle')
+    monkeypatch.setattr(fitz.Page, 'get_texttrace', forbidden)
+    with fitz.open(path) as document:
+        for page in document:
+            before_text = page.get_text()
+            runs = detect_script_runs(page)
+            assert [(r.base_text, r.text, r.kind) for r in runs] == [
+                ('x', '-12', 'superscript'), ('H', '2', 'subscript')]
+            assert page.get_text() == before_text

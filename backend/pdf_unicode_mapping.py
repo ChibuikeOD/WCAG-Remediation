@@ -771,7 +771,7 @@ def repair_missing_unicode(
         }
         if decision.response is not None:
             record["llm_response"] = decision.response
-        if decision.consensus is not None:
+        if getattr(decision, "consensus", None) is not None:
             record["jev_consensus"] = decision.consensus
         if decision.rejection_reason:
             record["rejection_reason"] = decision.rejection_reason

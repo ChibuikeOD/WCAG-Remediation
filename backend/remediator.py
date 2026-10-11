@@ -480,7 +480,8 @@ class PDFRemediator:
     def __init__(self, file_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None,
                  reviewed_figure_sidecars=None, reviewed_figure_original: Optional[Path] = None,
                  reviewed_table_sidecars=None, reviewed_table_original: Optional[Path] = None,
-                 reviewed_math_sidecar: Optional[Path] = None, reviewed_math_original: Optional[Path] = None):
+                 reviewed_math_sidecar: Optional[Path] = None, reviewed_math_original: Optional[Path] = None,
+                 reviewed_table_projection_sidecars=None, reviewed_table_projection_original: Optional[Path] = None):
         """Initialize with PDF file path and optional byte-bound review input."""
         self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
         self.reviewed_glyph_original = reviewed_glyph_original
@@ -490,6 +491,8 @@ class PDFRemediator:
         self.reviewed_table_original = reviewed_table_original
         self.reviewed_math_sidecar = reviewed_math_sidecar
         self.reviewed_math_original = reviewed_math_original
+        self.reviewed_table_projection_sidecars = reviewed_table_projection_sidecars
+        self.reviewed_table_projection_original = reviewed_table_projection_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -812,6 +815,21 @@ class PDFRemediator:
             except Exception as e:
                 logger.error('Reviewed Figure application failed: %s',e,exc_info=True)
                 results.append(RemediationResult(issue_id='pdf-reviewed-figure-alternatives',success=False,message=str(e)))
+
+        if self.reviewed_table_projection_sidecars is not None:
+            try:
+                from .pdf_reviewed_table_projections import apply_reviewed_table_projections
+                if self.reviewed_table_projection_original is None:
+                    raise ValueError('reviewed table projections require the original source path')
+                evidence = apply_reviewed_table_projections(target, self.reviewed_table_projection_original,
+                                                           self.reviewed_table_projection_sidecars)
+                results.append(RemediationResult(issue_id='pdf-reviewed-table-projections',
+                    success=evidence['unmatched']==0,
+                    message=f"{evidence['applied']} source-reviewed empty duplicate Table projection(s) removed; {evidence['unmatched']} unresolved",
+                    new_value=str(evidence['applied']), details=evidence))
+            except Exception as e:
+                logger.error('Reviewed table projection application failed: %s', e, exc_info=True)
+                results.append(RemediationResult(issue_id='pdf-reviewed-table-projections', success=False, message=str(e)))
 
         # 12. Finalize metadata LAST ---------------------------------------
         # The OCR rebuild (PyMuPDF) and the C++ tagging pass (QPDF) both drop

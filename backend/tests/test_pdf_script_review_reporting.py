@@ -1,5 +1,6 @@
 import fitz
 import pytest
+import pikepdf
 
 from backend import config, pdf_remediator_fixes as fixes, pdf_link_descriptions
 from backend.remediator import PDFRemediator
@@ -28,7 +29,15 @@ def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, s
         monkeypatch.setattr(fixes, name, lambda path: {"issue_id": "test", "success": True, "message": "ok"})
     monkeypatch.setattr(pdf_link_descriptions, "repair_link_descriptions",
                         lambda path: {"issue_id": "test", "success": True, "message": "ok"})
-    result = next(item for item in engine.fix_all() if item.issue_id == "pdf-auto-tag")
+    results = engine.fix_all()
+    target = next(item for item in results if item.issue_id == "pdf-validation-target")
+    assert target.details == {
+        "validation_target": "PDF/UA-1", "validation_profile": "ua1",
+        "conformance_state": "not-verified", "conformance_identifier_written": False}
+    with pikepdf.open(path) as pdf:
+        with pdf.open_metadata() as metadata:
+            assert "pdfuaid:part" not in metadata
+    result = next(item for item in results if item.issue_id == "pdf-auto-tag")
     assert result.success is success
     # Missing evidence remains unknown, rather than silently becoming zero.
     assert result.model_dump()["details"]["inline_script_review_count"] == count

@@ -465,7 +465,15 @@ def _rewrite_table_page(pdf,page,bindings):
         labels[table['id']]=table_node
     # Prune only old page MCR references, never Form MCRs or other pages.
     _prune_removed(root,page.obj.objgen,removed)
-    for table,binding,parent,index,prefixes in sorted(insertions,key=lambda value:value[3],reverse=True):
+    # Several reviewed grids can consume the same original structural slot.
+    # Insert later source-owned captions/shows first so earlier grids retain
+    # their order at that slot. This orders only these verified replacements;
+    # unrelated siblings and distinct parent containers retain their slots.
+    def insertion_order(value):
+        table,binding,parent,index,prefixes=value
+        caption=binding['cell_show_order'].get('caption',[])
+        return index,min(caption or binding['assignments'])
+    for table,binding,parent,index,prefixes in sorted(insertions,key=insertion_order,reverse=True):
         kids=parent.get('/K',[]);kids=list(kids) if isinstance(kids,pikepdf.Array) else [kids]
         position=sum(isinstance(v,pikepdf.Dictionary) and v.objgen in prefixes for v in kids)
         kids.insert(position,labels[table['id']]);parent.K=pikepdf.Array(kids)

@@ -33,6 +33,35 @@ def fixture():
     return pdf, page, other, doc, empty, other_owner, table, binding
 
 
+def test_three_reviewed_caption_grids_sharing_slot_preserve_exact_logical_order():
+    pdf,page,other,doc,empty,other_owner,table,binding=fixture()
+    with pdf:
+        page.Contents=pdf.make_stream(b'BT /F1 12 Tf 20 250 Td /P <</MCID 0>> BDC '
+            b'(Table5.6) Tj (Body6) Tj (Table5.7) Tj (Body7) Tj (Table5.8) Tj (Body8) Tj EMC ET')
+        shows=[i for i,inst in enumerate(pikepdf.parse_content_stream(page)) if str(inst[1])=='Tj']
+        entries=[]
+        for number in range(3):
+            identifier=f'grid{number}';cell=dict(id=identifier+'-cell',row=0,col=0,rowspan=1,colspan=1,role='TH',scope='Column',headers=[])
+            entries.append((dict(id=identifier,sha='a'*64,cells=[cell]),dict(assignments={shows[number*2]:'caption',shows[number*2+1]:cell['id']},cell_show_order={'caption':[shows[number*2]],cell['id']:[shows[number*2+1]]})))
+        # Review input order must not reverse the shared source slot.
+        _rewrite_table_page(pdf,page,[entries[1],entries[0],entries[2]])
+        marked={};active=None
+        for operands,op in pikepdf.parse_content_stream(page):
+            if str(op)=='BDC':active=int(operands[1].MCID)
+            elif str(op)=='EMC':active=None
+            elif str(op)=='Tj':marked[active]=str(operands[0])
+        sequence=[]
+        def visit(node):
+            children=node.get('/K',[]);children=list(children) if isinstance(children,pikepdf.Array) else [children]
+            for child in children:
+                if isinstance(child,pikepdf.Dictionary) and '/MCID' in child:sequence.append(marked[int(child.MCID)])
+                elif isinstance(child,pikepdf.Dictionary) and '/S' in child:visit(child)
+        for node in list(doc.K)[:3]:visit(node)
+        assert sequence==['Table5.6','Body6','Table5.7','Body7','Table5.8','Body8']
+        assert [str(node.S) for node in list(doc.K)[:3]]==['/Table']*3
+        assert doc.K[3].objgen==empty.objgen and doc.K[4].objgen==other_owner.objgen
+
+
 def test_rebuild_preserves_unrelated_empty_structure_and_explicit_header_order():
     pdf, page, other, doc, empty, other_owner, table, binding = fixture()
     with pdf:

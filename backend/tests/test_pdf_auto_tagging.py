@@ -36,6 +36,46 @@ def make_minimal_pdf(path: Path, language: str = "en") -> None:
         pdf.save(path)
 
 
+
+def make_painted_pdf(path, language="en"):
+    make_minimal_pdf(path, language)
+    with pikepdf.open(path, allow_overwriting_input=True) as pdf:
+        pdf.pages[0].Contents = pdf.make_stream(b"q 0 0 1 rg 10 10 20 20 re f Q")
+        pdf.save(path)
+
+
+def mock_native_availability(monkeypatch):
+    # legacy-auto-tag-fixture: only the exact expected executable is mocked.
+    import backend.pdf_auto_tagging as module
+    base = Path(module.__file__).resolve().parent.parent / "pdfua_remediator_cpp" / "build"
+    expected = base / "Release" / "pdfua-remediator-cli.exe" if sys.platform.startswith("win") else base / "pdfua-remediator-cli"
+    original = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: path == expected or original(path))
+
+
+def write_meaningful_tagged_output(source, target):
+    # Real nonempty painting, MCR and one-to-one ParentTree, not metadata-only.
+    from backend.pdf_tagging_gate import require_pdf_tagging
+    with pikepdf.open(source) as pdf:
+        page = pdf.pages[0].obj
+        original = page.Contents.read_bytes() if "/Contents" in page else b""
+        page.Contents = pdf.make_stream(b"/P <</MCID 0>> BDC\n" + original + b"\nEMC")
+        page.StructParents = 0
+        tree = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.StructTreeRoot))
+        document = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.StructElem, S=pikepdf.Name.Document, P=tree))
+        owner = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.StructElem, S=pikepdf.Name.P, P=document, Pg=page, K=0))
+        document.K = pikepdf.Array([owner]); tree.K = pikepdf.Array([document])
+        tree.ParentTree = pdf.make_indirect(pikepdf.Dictionary(Nums=pikepdf.Array([0,pikepdf.Array([owner])])))
+        pdf.Root.StructTreeRoot = tree
+        pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
+        pdf.save(target)
+    require_pdf_tagging(target, tagging_required=True, tagging_result={"success": True})
+    import fitz
+    with fitz.open(source) as before, fitz.open(target) as after:
+        assert before[0].get_pixmap().samples == after[0].get_pixmap().samples
+        assert before[0].get_text() == after[0].get_text()
+
+
 def test_label_to_tag_mapping():
     assert LABEL_TO_TAG["Title"] == "H1"
     assert LABEL_TO_TAG["Section-header"] == "H2"
@@ -192,6 +232,7 @@ def test_parse_opendataloader_json_infers_likert_table_cells_from_paragraphs():
 
 
 def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
+    mock_native_availability(monkeypatch)
     mock_layouts = [
         PageLayout(
             page_number=0,
@@ -222,7 +263,7 @@ def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         captured_blocks.extend(json.loads(Path(cmd[2]).read_text(encoding="utf-8")))
-        shutil.copy2(cmd[1], cmd[-1])
+        write_meaningful_tagged_output(cmd[1], cmd[-1])
         import subprocess
 
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -237,7 +278,7 @@ def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
-    make_minimal_pdf(source_path)
+    make_painted_pdf(source_path)
 
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 
@@ -256,6 +297,7 @@ def test_auto_tag_pdf_passes_table_cell_metadata_to_cpp(monkeypatch, tmp_path):
 
 
 def test_auto_tag_pdf_passes_artifact_blocks_to_cpp(monkeypatch, tmp_path):
+    mock_native_availability(monkeypatch)
     mock_layouts = [
         PageLayout(
             page_number=0,
@@ -280,7 +322,7 @@ def test_auto_tag_pdf_passes_artifact_blocks_to_cpp(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         captured_blocks.extend(json.loads(Path(cmd[2]).read_text(encoding="utf-8")))
-        shutil.copy2(cmd[1], cmd[-1])
+        write_meaningful_tagged_output(cmd[1], cmd[-1])
         import subprocess
 
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -295,7 +337,7 @@ def test_auto_tag_pdf_passes_artifact_blocks_to_cpp(monkeypatch, tmp_path):
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
-    make_minimal_pdf(source_path)
+    make_painted_pdf(source_path)
 
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 
@@ -351,6 +393,7 @@ def test_auto_tag_pdf_skips_existing_tags_without_overwrite(monkeypatch, tmp_pat
 def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
     from backend.layout_model import PageLayout, StructureBlock
     
+    mock_native_availability(monkeypatch)
     mock_layouts = [
         PageLayout(
             page_number=0,
@@ -374,7 +417,7 @@ def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
     called_subprocess = []
     def fake_run(cmd, **kwargs):
         called_subprocess.append(cmd)
-        shutil.copy2(cmd[1], cmd[-1])
+        write_meaningful_tagged_output(cmd[1], cmd[-1])
         import subprocess
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -388,7 +431,7 @@ def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
-    make_minimal_pdf(source_path)
+    make_painted_pdf(source_path)
 
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 
@@ -400,6 +443,7 @@ def test_auto_tag_pdf_runs_builder_with_overwrite(monkeypatch, tmp_path):
 
 
 def test_auto_tag_pdf_normalizes_language_metadata_after_tagging(monkeypatch, tmp_path):
+    mock_native_availability(monkeypatch)
     mock_layouts = [
         PageLayout(
             page_number=0,
@@ -413,7 +457,7 @@ def test_auto_tag_pdf_normalizes_language_metadata_after_tagging(monkeypatch, tm
         return mock_layouts
 
     def fake_run(cmd, **kwargs):
-        shutil.copy2(cmd[1], cmd[-1])
+        write_meaningful_tagged_output(cmd[1], cmd[-1])
         import subprocess
 
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -428,7 +472,7 @@ def test_auto_tag_pdf_normalizes_language_metadata_after_tagging(monkeypatch, tm
 
     source_path = tmp_path / "source.pdf"
     output_path = tmp_path / "output.pdf"
-    make_minimal_pdf(source_path, language="English")
+    make_painted_pdf(source_path, language="English")
 
     result = auto_tag_pdf(source_path, output_path=output_path, overwrite_tags=True)
 

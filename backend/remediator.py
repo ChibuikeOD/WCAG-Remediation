@@ -477,10 +477,13 @@ class PDFRemediator:
     manual intervention or specialized tools.
     """
     
-    def __init__(self, file_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None):
+    def __init__(self, file_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None,
+                 reviewed_figure_sidecars=None, reviewed_figure_original: Optional[Path] = None):
         """Initialize with PDF file path and optional byte-bound review input."""
         self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
         self.reviewed_glyph_original = reviewed_glyph_original
+        self.reviewed_figure_sidecars = reviewed_figure_sidecars
+        self.reviewed_figure_original = reviewed_figure_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -770,6 +773,21 @@ class PDFRemediator:
                     success=False,
                     message=str(e),
                 ))
+
+        if self.reviewed_figure_sidecars is not None:
+            try:
+                from .pdf_reviewed_figures import apply_reviewed_figure_alternatives
+                if self.reviewed_figure_original is None:
+                    raise ValueError('reviewed Figures require the original source path')
+                evidence=apply_reviewed_figure_alternatives(target,self.reviewed_figure_original,
+                                                         self.reviewed_figure_sidecars)
+                results.append(RemediationResult(issue_id='pdf-reviewed-figure-alternatives',
+                    success=evidence['unmatched']==0,
+                    message=f"{evidence['applied']} source-bound reviewed Figure alternative(s) applied; {evidence['unmatched']} unresolved",
+                    new_value=str(evidence['applied']),details=evidence))
+            except Exception as e:
+                logger.error('Reviewed Figure application failed: %s',e,exc_info=True)
+                results.append(RemediationResult(issue_id='pdf-reviewed-figure-alternatives',success=False,message=str(e)))
 
         # 12. Finalize metadata LAST ---------------------------------------
         # The OCR rebuild (PyMuPDF) and the C++ tagging pass (QPDF) both drop

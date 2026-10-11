@@ -635,6 +635,7 @@ class PDFRemediator:
                 success=r["success"],
                 message=r["message"],
                 new_value=r.get("new_value", ""),
+                details=r.get("details"),
             ))
         except Exception as e:
             logger.error(f"fix_scanned_pages raised: {e}", exc_info=True)

@@ -836,7 +836,7 @@ def repair_missing_unicode(
             _write_unicode_mappings(pdf_path, candidate, accepted)
         verified, reason = verify_repair(pdf_path, candidate, accepted, affected_pages)
         if not verified:
-            accepted_before_rollback = llm_applied
+            accepted_before_rollback = len(accepted)
             details["llm_recommendation_applied"] = False
             details["applied"] = 0
             details["reviewed_sidecar_applied"] = 0
@@ -853,8 +853,8 @@ def repair_missing_unicode(
             details["accepted_before_rollback"] = accepted_before_rollback
             rollback_message = (
                 f"Unicode repair rolled back: {reason}. "
-                f"{provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
-                f"{accepted_before_rollback} recommendation(s) were accepted before rollback."
+                f"{accepted_before_rollback} mapping(s) accepted from the recorded local/external evidence were discarded. "
+                + _disclosure(evaluated, 0, unavailable, provider_label)
             )
             details["provenance_message"] = rollback_message
             return {

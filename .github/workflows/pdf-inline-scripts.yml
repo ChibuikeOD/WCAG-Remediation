@@ -15,6 +15,7 @@ on:
       - 'backend/tests/test_native_inline_scripts.py'
       - 'backend/tests/test_pdf_bookmark_failure_recovery.py'
       - 'backend/tests/test_pdf_link_descriptions.py'
+      - 'backend/tests/test_pdf_script_review_reporting.py'
       - 'pdfua_remediator_cpp/**'
       - '.github/workflows/pdf-inline-scripts.yml'
 
@@ -30,7 +31,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install focused test dependencies
-        run: python -m pip install pytest==9.1.1 PyMuPDF==1.23.8 pikepdf==8.11.2 fonttools==4.66.1 Pillow==12.3.0
+        run: python -m pip install pytest==9.1.1 PyMuPDF==1.23.8 pikepdf==8.11.2 fonttools==4.66.1 Pillow==12.3.0 beautifulsoup4==4.12.3 pydantic==2.14.0 pydantic-settings==2.1.0 python-dotenv==1.2.4
       - name: Obtain checksummed QPDF native dependency
         shell: pwsh
         run: |
@@ -52,4 +53,4 @@ jobs:
         shell: pwsh
         run: |
           $env:PDFACCESS_TEST_NATIVE_CLI = Join-Path $env:GITHUB_WORKSPACE 'native-build/Release/pdfua-remediator-cli.exe'
-          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py backend/tests/test_pdf_bookmark_failure_recovery.py backend/tests/test_pdf_link_descriptions.py -q
+          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py backend/tests/test_pdf_bookmark_failure_recovery.py backend/tests/test_pdf_link_descriptions.py backend/tests/test_pdf_script_review_reporting.py -q

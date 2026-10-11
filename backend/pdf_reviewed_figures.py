@@ -131,6 +131,35 @@ def _owners(root, page):
     return owners
 
 
+def _single_do_owner(owner, page, mcid):
+    kids=owner.get('/K',[])
+    kids=list(kids) if isinstance(kids,pikepdf.Array) else [kids]
+    if len(kids)!=1: return False
+    child=kids[0]
+    if isinstance(child,int):
+        pg=owner.get('/Pg')
+        valid=int(child)==mcid and pg is not None and pg.objgen==page.obj.objgen
+    elif isinstance(child,pikepdf.Dictionary):
+        pg=child.get('/Pg',owner.get('/Pg'))
+        valid=('/MCID' in child and '/Stm' not in child and '/K' not in child
+               and int(child.MCID)==mcid and pg is not None and pg.objgen==page.obj.objgen)
+    else:valid=False
+    if not valid:return False
+    marked=[];paints=[]
+    for operands,operator in pikepdf.parse_content_stream(page):
+        op=str(operator)
+        if op in ('BMC','BDC'):
+            props=operands[1] if op=='BDC' else None
+            if isinstance(props,pikepdf.Name):props=page.get('/Resources',{}).get('/Properties',{}).get(str(props))
+            marked.append(int(props.MCID) if isinstance(props,pikepdf.Dictionary) and '/MCID' in props else None)
+        elif op=='EMC':
+            if not marked:return False
+            marked.pop()
+        elif mcid in marked and op in {'Do','Tj','TJ',"'",'"','S','s','f','F','f*','B','B*','b','b*','sh','INLINE IMAGE'}:
+            paints.append(op)
+    return paints==['Do']
+
+
 def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) -> dict:
     original_sha=_sha(original); records=[]
     for path in sidecars:
@@ -167,6 +196,8 @@ def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) 
                 mcid=matches[0]['mcids'][0];owners=_owners(pdf.Root.StructTreeRoot,page).get(mcid,[])
                 if len(owners)!=1 or owners[0] is None: raise ValueError('unique Figure owner absent')
                 owner=owners[0];key=owner.objgen
+                if not _single_do_owner(owner,page,mcid):
+                    raise ValueError('Figure is not an exclusive single-Do page owner')
                 attributes=owner.get('/A',[])
                 attributes=list(attributes) if isinstance(attributes,pikepdf.Array) else [attributes]
                 bounds=[a['/BBox'] for a in attributes if isinstance(a,pikepdf.Dictionary) and '/BBox' in a]

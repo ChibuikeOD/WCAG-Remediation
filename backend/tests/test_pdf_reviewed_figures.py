@@ -86,3 +86,23 @@ def test_conflicting_reviews_reject_both_without_first_wins(tmp_path):
     result=apply_reviewed_figure_alternatives(working,original,[sidecar])
     assert result['applied']==0 and result['unmatched']==2
     assert before==working.read_bytes()
+
+
+@pytest.mark.parametrize('extra',['otherPage','text','vector'])
+def test_figure_cannot_own_additional_page_or_painting(tmp_path,extra):
+    original,working,sidecar=fixture(tmp_path)
+    with pikepdf.open(working,allow_overwriting_input=True) as pdf:
+        page=pdf.pages[0];owner=pdf.Root.StructTreeRoot.K[0]
+        if extra=='otherPage':
+            other=pdf.add_blank_page(page_size=(200,200))
+            owner.K=pikepdf.Array([pikepdf.Dictionary(Type=pikepdf.Name('/MCR'),Pg=page.obj,MCID=14),
+                                  pikepdf.Dictionary(Type=pikepdf.Name('/MCR'),Pg=other.obj,MCID=14)])
+        else:
+            paint=b'0 0 10 10 re f' if extra=='vector' else b'BT /F1 12 Tf 20 100 Td (extra) Tj ET'
+            if extra=='text':
+                page.Resources.Font=pikepdf.Dictionary(F1=pdf.make_indirect(pikepdf.Dictionary(
+                    Type=pikepdf.Name('/Font'),Subtype=pikepdf.Name('/Type1'),BaseFont=pikepdf.Name('/Helvetica'))))
+            page.Contents=pdf.make_stream(page.Contents.read_bytes()+b' /Figure <</MCID 14>> BDC '+paint+b' EMC')
+        pdf.save(working,compress_streams=False)
+    before=working.read_bytes();result=apply_reviewed_figure_alternatives(working,original,[sidecar])
+    assert result['applied']==0 and result['unmatched']==1 and before==working.read_bytes()

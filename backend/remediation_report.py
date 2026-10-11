@@ -476,7 +476,9 @@ def generate_remediation_report_for_api(
     unicode_details = (unicode_result or {}).get("details") or {}
     llm_provider = unicode_details.get("provider") or "Gemini"
     llm_provider_label = unicode_details.get("provider_label") or llm_provider
-    if unicode_details.get("llm_unavailable"):
+    if unicode_details.get("provenance_message"):
+        llm_disclosure = str(unicode_details["provenance_message"])
+    elif unicode_details.get("llm_unavailable"):
         llm_disclosure = (
             f"{llm_provider_label} was requested but unavailable; "
             "no ambiguous mappings were changed."
@@ -618,9 +620,17 @@ def generate_remediation_report_for_api(
             return
 
         provider = details.get("provider") or "Gemini"
-        story.append(Paragraph(f"{provider} Unicode Mapping Review", section_style))
+        heading = f"{provider} Unicode Mapping Review" if details.get("llm_invoked") else "Unicode Mapping Evidence"
+        story.append(Paragraph(heading, section_style))
 
         summary_rows: List[List[Any]] = []
+        for key, label in (("reviewed_sidecar_applied", "Model-reviewed sidecar mappings applied"),
+                           ("font_metadata_applied", "Font-metadata mappings applied"),
+                           ("verified_local_font_applied", "Verified-local-font mappings applied"),
+                           ("total_mappings_applied", "Total mappings applied"),
+                           ("reviewed_sidecar_binding_counts", "Reviewed source binding counts"),
+                           ("external_provider_status", "External verifier status")):
+            _add_key_value_rows(summary_rows, label, details.get(key))
         _add_key_value_rows(summary_rows, "Model", details.get("model"))
         _add_key_value_rows(
             summary_rows,

@@ -2,7 +2,33 @@ from pathlib import Path
 import pikepdf
 import pytest
 from backend import pdf_unicode_mapping as module
-from backend.tests.test_pdf_unicode_mapping import build_type0_pdf, SAMPLE_CMAP
+SAMPLE_CMAP = b"""begincmap
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+1 beginbfchar
+<0374> <0032>
+endbfchar
+endcmap
+"""
+
+
+def build_type0_pdf(path, shown_cid):
+    with pikepdf.Pdf.new() as pdf:
+        page = pdf.add_blank_page(page_size=(72, 72))
+        descendant = pdf.make_indirect(pikepdf.Dictionary(
+            Type=pikepdf.Name.Font, Subtype=pikepdf.Name.CIDFontType2,
+            CIDToGIDMap=pikepdf.Name.Identity))
+        font = pdf.make_indirect(pikepdf.Dictionary(
+            Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type0,
+            BaseFont=pikepdf.Name.TestFont, Encoding=pikepdf.Name('/Identity-H'),
+            DescendantFonts=pikepdf.Array([descendant]),
+            ToUnicode=pdf.make_stream(SAMPLE_CMAP)))
+        page.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font))
+        page.Contents = pdf.make_stream(
+            f'BT /F1 12 Tf <{shown_cid:04X}> Tj ET'.encode('ascii'))
+        pdf.save(path)
+    return path
 
 
 def test_malformed_font_is_reported_without_rewriting_or_provider(tmp_path):

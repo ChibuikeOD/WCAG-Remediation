@@ -6,6 +6,7 @@ import pikepdf
 import pytest
 
 from backend.pdf_reviewed_figures import apply_reviewed_figure_alternatives
+from backend import pdf_reviewed_figures as figures
 
 
 def fixture(tmp_path, *, form=False, duplicate=False, role='/Figure'):
@@ -86,6 +87,67 @@ def test_conflicting_reviews_reject_both_without_first_wins(tmp_path):
     result=apply_reviewed_figure_alternatives(working,original,[sidecar])
     assert result['applied']==0 and result['unmatched']==2
     assert before==working.read_bytes()
+
+
+def test_one_topology_walk_and_page_parse_for_multiple_figures(tmp_path,monkeypatch):
+    original,working,sidecar=fixture(tmp_path)
+    with pikepdf.open(original,allow_overwriting_input=True) as pdf:
+        page=pdf.pages[0]
+        page.Contents=pdf.make_stream(page.Contents.read_bytes()+b' q 40 0 0 30 100 50 cm /Im Do Q')
+        pdf.save(original,compress_streams=False)
+    with pikepdf.open(working,allow_overwriting_input=True) as pdf:
+        page=pdf.pages[0];root=pdf.Root.StructTreeRoot
+        page.Contents=pdf.make_stream(page.Contents.read_bytes()+b' /Figure <</MCID 15>> BDC q 40 0 0 30 100 50 cm /Im Do Q EMC')
+        owner=pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name('/StructElem'),S=pikepdf.Name('/Figure'),Pg=page.obj,K=15,P=root))
+        owner.A=pikepdf.Dictionary(O=pikepdf.Name('/Layout'),BBox=pikepdf.Array([100,50,140,80]))
+        root.K.append(owner);pdf.save(working,compress_streams=False)
+    data=json.loads(sidecar.read_text());first=data['bindings'][0]
+    first['stable_binding']['requires_original_sha256']=hashlib.sha256(original.read_bytes()).hexdigest()
+    other=json.loads(json.dumps(first));other['proposal_id']='second'
+    other['stable_binding']['verified_page_bbox_pdf_exact_decimal']=[100,50,140,80]
+    data['bindings'].append(other);sidecar.write_text(json.dumps(data))
+    calls={'owners':0,'placements':0,'paints':0}
+    for name,key in [('_owner_index','owners'),('_placements','placements'),('_paint_index','paints')]:
+        actual=getattr(figures,name)
+        def counted(*args,_actual=actual,_key=key,**kwargs):
+            calls[_key]+=1
+            return _actual(*args,**kwargs)
+        monkeypatch.setattr(figures,name,counted)
+    result=apply_reviewed_figure_alternatives(working,original,[sidecar])
+    assert result['applied']==2 and result['unmatched']==0
+    assert calls=={'owners':1,'placements':2,'paints':1}
+    with pikepdf.open(working) as pdf:
+        assert all(str(owner.Alt)==first['description_text'] for owner in pdf.Root.StructTreeRoot.K)
+
+
+def test_ownership_index_keeps_page_namespaces_and_nonfigure_owners(tmp_path):
+    path=tmp_path/'owners.pdf'
+    with pikepdf.new() as pdf:
+        pages=[pdf.add_blank_page(),pdf.add_blank_page()]
+        root=pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name('/StructTreeRoot')))
+        kids=[]
+        for page,role in zip(pages,('/Figure','/P')):
+            kids.append(pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name('/StructElem'),S=pikepdf.Name(role),Pg=page.obj,K=4,P=root)))
+        root.K=pikepdf.Array(kids);pdf.Root.StructTreeRoot=root;pdf.save(path)
+    with pikepdf.open(path) as pdf:
+        owners=figures._owner_index(pdf.Root.StructTreeRoot)
+        assert owners[pdf.pages[0].obj.objgen][4][0].objgen==pdf.Root.StructTreeRoot.K[0].objgen
+        assert owners[pdf.pages[1].obj.objgen][4]==[None]
+
+
+def test_paint_index_caps_large_content_but_rejects_extra_paint(tmp_path):
+    with pikepdf.new() as pdf:
+        page=pdf.add_blank_page()
+        page.Contents=pdf.make_stream(b'/Figure <</MCID 4>> BDC /I Do '+b'0 0 1 1 re f '*10000+b'EMC')
+        paints=figures._paint_index(page)
+        assert paints[4]==['Do','f']
+
+
+def test_paint_index_nested_same_mcid_preserves_membership(tmp_path):
+    with pikepdf.new() as pdf:
+        page=pdf.add_blank_page()
+        page.Contents=pdf.make_stream(b'/Figure <</MCID 4>> BDC /P <</MCID 4>> BDC /I Do EMC EMC')
+        assert figures._paint_index(page)=={4:['Do']}
 
 
 @pytest.mark.parametrize('extra',['otherPage','text','vector'])

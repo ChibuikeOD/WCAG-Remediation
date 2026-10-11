@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
+from functools import lru_cache
 
 import fitz
 import pikepdf
@@ -109,7 +110,13 @@ def _nested_payloads(obj, active=None):
     return identity
 
 
-def _owners(root, page):
+def _owner_index(root):
+    """Walk the immutable ownership topology once, indexed by page and MCID.
+
+    Alternative strings can change during the pass; /K, /Pg and /S cannot.
+    The index retains only the same Figure references the old per-page walk
+    returned, plus page/MCID keys, never decoded painting or raster buffers.
+    """
     owners={}; seen=set()
     def walk(node, inherited_page=None, owner=None):
         if isinstance(node,pikepdf.Array):
@@ -122,16 +129,41 @@ def _owners(root, page):
             pg=node.get('/Pg',inherited_page)
             if str(node.get('/S'))=='/Figure': owner=node
             if '/MCID' in node:
-                if '/Stm' not in node and pg is not None and pg.objgen==page.obj.objgen:
-                    owners.setdefault(int(node.MCID),[]).append(owner)
+                if '/Stm' not in node and pg is not None:
+                    owners.setdefault(pg.objgen,{}).setdefault(int(node.MCID),[]).append(owner)
             elif '/K' in node: walk(node.K,pg,owner)
-        elif isinstance(node,int) and inherited_page is not None and inherited_page.objgen==page.obj.objgen:
-            owners.setdefault(int(node),[]).append(owner)
+        elif isinstance(node,int) and inherited_page is not None:
+            owners.setdefault(inherited_page.objgen,{}).setdefault(int(node),[]).append(owner)
     walk(root)
     return owners
 
 
-def _single_do_owner(owner, page, mcid):
+def _owners(root, page):
+    return _owner_index(root).get(page.obj.objgen,{})
+
+
+def _paint_index(page):
+    """Record painting operators per MCID once for the current page."""
+    marked=[];paints={}
+    for operands,operator in pikepdf.parse_content_stream(page):
+        op=str(operator)
+        if op in ('BMC','BDC'):
+            props=operands[1] if op=='BDC' else None
+            if isinstance(props,pikepdf.Name):props=page.get('/Resources',{}).get('/Properties',{}).get(str(props))
+            marked.append(int(props.MCID) if isinstance(props,pikepdf.Dictionary) and '/MCID' in props else None)
+        elif op=='EMC':
+            if not marked:return None
+            marked.pop()
+        elif op in {'Do','Tj','TJ',"'",'"','S','s','f','F','f*','B','B*','b','b*','sh','INLINE IMAGE'}:
+            # Membership, rather than stack multiplicity, preserves the old
+            # single-MCID query when nested marked content repeats an MCID.
+            for mcid in set(marked)-{None}:
+                values=paints.setdefault(mcid,[])
+                if len(values)<2:values.append(op)
+    return paints
+
+
+def _single_do_owner(owner, page, mcid, paints=None):
     kids=owner.get('/K',[])
     kids=list(kids) if isinstance(kids,pikepdf.Array) else [kids]
     if len(kids)!=1: return False
@@ -145,19 +177,8 @@ def _single_do_owner(owner, page, mcid):
                and int(child.MCID)==mcid and pg is not None and pg.objgen==page.obj.objgen)
     else:valid=False
     if not valid:return False
-    marked=[];paints=[]
-    for operands,operator in pikepdf.parse_content_stream(page):
-        op=str(operator)
-        if op in ('BMC','BDC'):
-            props=operands[1] if op=='BDC' else None
-            if isinstance(props,pikepdf.Name):props=page.get('/Resources',{}).get('/Properties',{}).get(str(props))
-            marked.append(int(props.MCID) if isinstance(props,pikepdf.Dictionary) and '/MCID' in props else None)
-        elif op=='EMC':
-            if not marked:return False
-            marked.pop()
-        elif mcid in marked and op in {'Do','Tj','TJ',"'",'"','S','s','f','F','f*','B','B*','b','b*','sh','INLINE IMAGE'}:
-            paints.append(op)
-    return paints==['Do']
+    paints=_paint_index(page) if paints is None else paints
+    return paints is not None and paints.get(mcid,[])==['Do']
 
 
 def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) -> dict:
@@ -178,6 +199,13 @@ def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) 
     handle=tempfile.NamedTemporaryFile(prefix='.reviewed-figures-',suffix='.pdf',dir=working.parent,delete=False)
     candidate=Path(handle.name);handle.close();affected=set();assigned={}
     with pikepdf.open(original) as source,pikepdf.open(working) as pdf:
+        ownership=None;ownership_error=None
+        @lru_cache(maxsize=1)
+        def page_evidence(index):
+            # One page at a time: do not retain image/Form objects or decoded
+            # content from every reviewed page in a large document.
+            page=pdf.pages[index]
+            return (list(_placements(source.pages[index])),list(_placements(page)),_paint_index(page))
         for record_index,record in enumerate(selected):
             status={'id':record['id']};outcome['records'].append(status)
             try:
@@ -185,18 +213,24 @@ def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) 
                 alt=str(record['alt']).strip(); index=int(record['page'])-1
                 if not alt or alt.casefold() in {'image','figure','[image requires alt text]'}:
                     raise ValueError('missing meaningful reviewed alternative')
-                source_matches=[p for p in _placements(source.pages[index]) if _same(record,p)]
+                source_placements,working_placements,paints=page_evidence(index)
+                source_matches=[p for p in source_placements if _same(record,p)]
                 if len(source_matches)!=1: raise ValueError('original placement not unique/verified')
                 page=pdf.pages[index]
-                matches=[p for p in _placements(page) if _same(record,p)]
+                matches=[p for p in working_placements if _same(record,p)]
                 if len(matches)!=1 or matches[0]['artifact'] or len(matches[0]['mcids'])!=1:
                     raise ValueError('working semantic placement not unique')
                 if _nested_payloads(source_matches[0]['object'])!=_nested_payloads(matches[0]['object']):
                     raise ValueError('working nested painting differs from original')
-                mcid=matches[0]['mcids'][0];owners=_owners(pdf.Root.StructTreeRoot,page).get(mcid,[])
+                if ownership is None and ownership_error is None:
+                    try:ownership=_owner_index(pdf.Root.StructTreeRoot)
+                    except (ValueError,IndexError,KeyError,AttributeError) as error:ownership_error=error
+                if ownership_error is not None:raise ownership_error
+                page_owners=ownership.get(page.obj.objgen,{})
+                mcid=matches[0]['mcids'][0];owners=page_owners.get(mcid,[])
                 if len(owners)!=1 or owners[0] is None: raise ValueError('unique Figure owner absent')
                 owner=owners[0];key=owner.objgen
-                if not _single_do_owner(owner,page,mcid):
+                if not _single_do_owner(owner,page,mcid,paints):
                     raise ValueError('Figure is not an exclusive single-Do page owner')
                 attributes=owner.get('/A',[])
                 attributes=list(attributes) if isinstance(attributes,pikepdf.Array) else [attributes]
@@ -207,16 +241,17 @@ def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) 
                     raise ValueError('duplicate/conflicting Figure alternative')
                 # One reviewed whole-placement description must not silently
                 # cover other MCIDs or repeated painting owned by this Figure.
-                owner_mcids=[m for m,values in _owners(pdf.Root.StructTreeRoot,page).items()
+                owner_mcids=[m for m,values in page_owners.items()
                              if any(v is not None and v.objgen==key for v in values)]
                 if owner_mcids!=[mcid]: raise ValueError('Figure owns additional content')
-                if sum(mcid in p['mcids'] for p in _placements(page))!=1:
+                if sum(mcid in p['mcids'] for p in working_placements)!=1:
                     raise ValueError('MCID paints additional XObjects')
                 assigned[key]=alt;owner.Alt=pikepdf.String(alt);affected.add(index)
                 status.update(status='applied',page=index+1,mcid=mcid)
                 outcome['applied']+=1
             except (ValueError,IndexError,KeyError,AttributeError) as error:
                 status.update(status='unmatched',reason=str(error));outcome['unmatched']+=1
+        page_evidence.cache_clear()
         if not affected: return outcome
         pdf.save(candidate,compress_streams=False,stream_decode_level=pikepdf.StreamDecodeLevel.none)
     from .pdf_visual_fidelity import verify_isolated_fidelity

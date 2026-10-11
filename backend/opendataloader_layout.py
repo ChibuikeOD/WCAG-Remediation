@@ -140,13 +140,12 @@ class OpenDataLoaderLayoutAnalyzer:
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=settings.PDF_SUBPROCESS_TIMEOUT_SECONDS,
+                timeout=settings.OPENDATALOADER_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
                 "OpenDataLoader CLI timed out after "
-                f"{settings.PDF_SUBPROCESS_TIMEOUT_SECONDS}s (likely out of memory "
-                "or too large a document for the current Java heap)."
+                f"{settings.OPENDATALOADER_TIMEOUT_SECONDS}s; layout extraction did not complete."
             ) from exc
         except subprocess.CalledProcessError as exc:
             message = exc.stderr or exc.stdout or str(exc)
@@ -155,7 +154,7 @@ class OpenDataLoaderLayoutAnalyzer:
     def _run_installed_package(self, input_path: Path, output_dir: Path):
         from .config import settings
 
-        timeout = settings.PDF_SUBPROCESS_TIMEOUT_SECONDS
+        timeout = settings.OPENDATALOADER_TIMEOUT_SECONDS
 
         # Prefer invoking the bundled CLI JAR directly so we can enforce a hard
         # wall-clock timeout. The package's own runner.run_jar() has no timeout,
@@ -184,23 +183,15 @@ class OpenDataLoaderLayoutAnalyzer:
                 return
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
-                    f"OpenDataLoader CLI timed out after {timeout}s (likely out of "
-                    "memory or too large a document for the current Java heap)."
+                    f"OpenDataLoader CLI timed out after {timeout}s; layout extraction did not complete."
                 ) from exc
             except subprocess.CalledProcessError as exc:
                 message = exc.stderr or exc.stdout or str(exc)
                 raise RuntimeError(f"OpenDataLoader CLI failed: {message.strip()}") from exc
 
-        # Fallback: the bundled JAR could not be located, so defer to the
-        # package's own convert(). No timeout is possible on this path.
-        package = importlib.import_module("opendataloader_pdf")
-        package.convert(
-            input_path=str(input_path),
-            output_dir=str(output_dir),
-            format="json",
-            include_header_footer=True,
-            use_struct_tree=False,
-        )
+        # The package runner has no deadline. Do not silently replace the
+        # bounded CLI route with an unbounded in-process conversion.
+        raise RuntimeError('OpenDataLoader bundled CLI JAR missing; bounded layout extraction unavailable')
 
     @staticmethod
     def _locate_bundled_jar() -> Optional[Path]:

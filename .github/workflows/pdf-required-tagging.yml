@@ -1,0 +1,28 @@
+name: Required PDF tagging and bounded layout budget
+
+on:
+  pull_request:
+    paths:
+      - 'backend/config.py'
+      - 'backend/remediator.py'
+      - 'backend/opendataloader_layout.py'
+      - 'backend/pdf_tagging_gate.py'
+      - 'backend/tests/test_pdf_tagging_gate.py'
+      - 'backend/tests/test_opendataloader_bounded_timeout.py'
+      - '.github/workflows/pdf-required-tagging.yml'
+
+jobs:
+  required-tagging:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated gate test dependencies
+        run: python -m pip install pytest==9.1.1 pikepdf==8.11.2 pydantic==2.14.0 pydantic-settings==2.1.0 python-dotenv==1.2.4
+      - name: Test required tagging and hard subprocess deadlines
+        run: python -m pytest backend/tests/test_pdf_tagging_gate.py backend/tests/test_opendataloader_bounded_timeout.py -q

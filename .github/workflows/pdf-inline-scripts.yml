@@ -3,6 +3,15 @@ name: Native inline script regression
 on:
   pull_request:
     paths:
+      - 'backend/pdf_structure_builder.py'
+      - 'backend/pdf_table_header_eligibility.py'
+      - 'backend/tests/test_pdf_structure_figure_review.py'
+      - 'backend/tests/test_pdf_table_header_eligibility.py'
+      - 'backend/tests/test_pdf_auto_tagging.py'
+      - 'backend/layout_model.py'
+      - 'backend/requirements.txt'
+      - 'backend/pyproject.toml'
+      - 'backend/uv.lock'
       - 'backend/pdf_inline_scripts.py'
       - 'backend/pdf_auto_tagging.py'
       - 'backend/opendataloader_layout.py'
@@ -70,4 +79,4 @@ jobs:
         shell: pwsh
         run: |
           $env:PDFACCESS_TEST_NATIVE_CLI = Join-Path $env:GITHUB_WORKSPACE 'native-build/Release/pdfua-remediator-cli.exe'
-          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py backend/tests/test_pdf_bookmark_failure_recovery.py backend/tests/test_pdf_link_descriptions.py backend/tests/test_pdf_script_review_reporting.py backend/tests/test_pdf_cidset.py backend/tests/test_pdf_unicode_malformed.py backend/tests/test_pdf_verified_font_reference.py backend/tests/test_pdf_table_propagation.py backend/tests/test_native_table_propagation.py backend/tests/test_pdf_reviewed_glyphs.py backend/tests/test_native_form_geometry.py backend/tests/test_pdf_reviewed_glyph_rewrite.py backend/tests/test_unicode_local_provenance.py backend/tests/test_pdf_ocr_preservation.py backend/tests/test_pdf_reviewed_figures.py backend/tests/test_pdf_paint_ownership.py backend/tests/test_pdf_reviewed_tables.py backend/tests/test_pdf_reviewed_math_glyphs.py backend/tests/test_pdf_reviewed_table_projections.py backend/tests/test_pdf_visual_fidelity.py backend/tests/test_pdf_reviewed_image_tables.py backend/tests/test_pdf_reviewed_links.py -q
+          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py backend/tests/test_pdf_bookmark_failure_recovery.py backend/tests/test_pdf_link_descriptions.py backend/tests/test_pdf_script_review_reporting.py backend/tests/test_pdf_cidset.py backend/tests/test_pdf_unicode_malformed.py backend/tests/test_pdf_verified_font_reference.py backend/tests/test_pdf_table_propagation.py backend/tests/test_native_table_propagation.py backend/tests/test_pdf_reviewed_glyphs.py backend/tests/test_native_form_geometry.py backend/tests/test_pdf_reviewed_glyph_rewrite.py backend/tests/test_unicode_local_provenance.py backend/tests/test_pdf_ocr_preservation.py backend/tests/test_pdf_reviewed_figures.py backend/tests/test_pdf_paint_ownership.py backend/tests/test_pdf_reviewed_tables.py backend/tests/test_pdf_reviewed_math_glyphs.py backend/tests/test_pdf_reviewed_table_projections.py backend/tests/test_pdf_visual_fidelity.py backend/tests/test_pdf_reviewed_image_tables.py backend/tests/test_pdf_reviewed_links.py backend/tests/test_pdf_reviewed_accents.py backend/tests/test_pdf_reviewed_graphic_groups.py backend/tests/test_pdf_structure_figure_review.py backend/tests/test_pdf_table_header_eligibility.py backend/tests/test_pdf_auto_tagging.py -q

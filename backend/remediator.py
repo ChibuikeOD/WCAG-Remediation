@@ -482,7 +482,9 @@ class PDFRemediator:
                  reviewed_table_sidecars=None, reviewed_table_original: Optional[Path] = None,
                  reviewed_math_sidecar: Optional[Path] = None, reviewed_math_original: Optional[Path] = None,
                  reviewed_table_projection_sidecars=None, reviewed_table_projection_original: Optional[Path] = None,
-                 reviewed_link_sidecars=None, reviewed_link_original: Optional[Path] = None):
+                 reviewed_link_sidecars=None, reviewed_link_original: Optional[Path] = None,
+                 reviewed_accent_sidecar: Optional[Path] = None, reviewed_accent_original: Optional[Path] = None,
+                 reviewed_graphic_group_sidecar: Optional[Path] = None, reviewed_graphic_group_original: Optional[Path] = None):
         """Initialize with PDF file path and optional byte-bound review input."""
         self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
         self.reviewed_glyph_original = reviewed_glyph_original
@@ -496,6 +498,10 @@ class PDFRemediator:
         self.reviewed_table_projection_original = reviewed_table_projection_original
         self.reviewed_link_sidecars = reviewed_link_sidecars
         self.reviewed_link_original = reviewed_link_original
+        self.reviewed_accent_sidecar = reviewed_accent_sidecar
+        self.reviewed_accent_original = reviewed_accent_original
+        self.reviewed_graphic_group_sidecar = reviewed_graphic_group_sidecar
+        self.reviewed_graphic_group_original = reviewed_graphic_group_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -754,6 +760,12 @@ class PDFRemediator:
                 message="PDF auto-tagging skipped (OpenDataLoader layout analysis disabled)",
             ))
 
+        # A failed required rebuild or missing structure is an unsuccessful
+        # remediation, even if earlier metadata/Unicode repairs succeeded.
+        from .pdf_tagging_gate import require_pdf_tagging
+        require_pdf_tagging(target, tagging_required=not settings.DISABLE_OPENDATALOADER,
+                           tagging_result=tag_result if not settings.DISABLE_OPENDATALOADER else None)
+
         # 4-11. Structural / content fixes --------------------------------
         from .pdf_link_descriptions import repair_link_descriptions
         from .pdf_cidset import repair_cidsets
@@ -846,6 +858,32 @@ class PDFRemediator:
             except Exception as error:
                 logger.error('Reviewed Link application failed: %s',error,exc_info=True)
                 results.append(RemediationResult(issue_id='pdf-reviewed-link-purposes',success=False,message=str(error)))
+
+        if self.reviewed_graphic_group_sidecar is not None:
+            try:
+                from .pdf_reviewed_graphic_groups import apply_reviewed_graphic_groups
+                if self.reviewed_graphic_group_original is None:
+                    raise ValueError('reviewed graphic groups require the original source path')
+                evidence=apply_reviewed_graphic_groups(target,self.reviewed_graphic_group_original,self.reviewed_graphic_group_sidecar)
+                results.append(RemediationResult(issue_id='pdf-reviewed-graphic-groups',success=not evidence['held'],
+                    message=f"{evidence['applied']} source-bound complete graphic group(s) applied; {len(evidence['held'])} typed or incomplete group(s) held",
+                    new_value=str(evidence['applied']),details=evidence))
+            except Exception as error:
+                logger.error('Reviewed graphic group application failed: %s',error,exc_info=True)
+                results.append(RemediationResult(issue_id='pdf-reviewed-graphic-groups',success=False,message=str(error)))
+
+        if self.reviewed_accent_sidecar is not None:
+            try:
+                from .pdf_reviewed_accents import apply_reviewed_accent_groups
+                if self.reviewed_accent_original is None:
+                    raise ValueError('reviewed accent groups require the original source path')
+                evidence=apply_reviewed_accent_groups(target,self.reviewed_accent_original,self.reviewed_accent_sidecar)
+                results.append(RemediationResult(issue_id='pdf-reviewed-accent-groups',success=True,
+                    message=f"{evidence['applied_groups']} source-bound whole accent group(s) and {evidence['mapped_occurrences']} reviewed glyph mapping(s) applied",
+                    new_value=str(evidence['applied_groups']),details=evidence))
+            except Exception as error:
+                logger.error('Reviewed accent application failed: %s',error,exc_info=True)
+                results.append(RemediationResult(issue_id='pdf-reviewed-accent-groups',success=False,message=str(error)))
 
         # 12. Finalize metadata LAST ---------------------------------------
         # The OCR rebuild (PyMuPDF) and the C++ tagging pass (QPDF) both drop

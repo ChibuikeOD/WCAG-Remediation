@@ -306,47 +306,22 @@ def fix_heading_hierarchy(pdf_path: Path) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def fix_table_headers(pdf_path: Path) -> Dict[str, Any]:
-    """Promote first-row TD cells to TH in every table that lacks headers."""
+    """Repair only header roles explicitly established by the PDF itself."""
     if not HAS_PIKEPDF:
         return _result("pdf-table-headers", False, "pikepdf not available")
-
     try:
-        pdf = pikepdf.open(str(pdf_path), allow_overwriting_input=True)
-    except Exception as e:
-        return _result("pdf-table-headers", False, str(e))
-
-    try:
-        if "/StructTreeRoot" not in pdf.Root:
-            return _result("pdf-table-headers", True, "No structure tree; skipped")
-
-        tables = _collect_struct_elems(pdf.Root["/StructTreeRoot"], {"/Table"})
-        if not tables:
-            return _result("pdf-table-headers", True, "No tables found; skipped")
-
-        fixed_tables = 0
-        for table in tables:
-            if _table_has_th(table):
-                continue
-            first_row = _find_first_child(table, "/TR")
-            if first_row is None:
-                continue
-            promoted = _promote_td_to_th(first_row)
-            if promoted:
-                fixed_tables += 1
-
-        if fixed_tables:
-            pdf.save()
-            return _result(
-                "pdf-table-headers", True,
-                f"Added header cells to {fixed_tables} table(s)",
-                f"{fixed_tables} tables fixed",
-            )
-        return _result("pdf-table-headers", True, "All tables already have headers")
+        from .pdf_table_header_eligibility import repair_pdf_table_header_roles
+        evidence = repair_pdf_table_header_roles(Path(pdf_path))
+        count = evidence["promoted_headers"]
+        held = len(evidence["holds"])
+        result = _result("pdf-table-headers", not held,
+                         f"Repaired {count} PDF-established header role(s); {held} table(s) require header-role review.",
+                         f"{count} header roles repaired")
+        result["details"] = evidence
+        return result
     except Exception as e:
         logger.error(f"fix_table_headers: {e}", exc_info=True)
         return _result("pdf-table-headers", False, str(e))
-    finally:
-        pdf.close()
 
 
 def _table_has_th(table) -> bool:

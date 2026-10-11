@@ -29,6 +29,22 @@ def test_invalid_child_result_never_accepts_pdf(tmp_path,monkeypatch,fault):
     monkeypatch.setattr(fidelity.subprocess,'run',lambda *a,**k:SimpleNamespace(returncode=code,stdout=stdout))
     with pytest.raises(ValueError):fidelity.isolated_fingerprint(a,[0])
 
-def test_frozen_runtime_fails_closed_without_launching_application(tmp_path,monkeypatch):
+@pytest.mark.parametrize('fault',['none','nonzero','missing','truncated','wrong_hash','wrong_count'])
+def test_frozen_windowed_child_file_protocol_fails_closed(tmp_path,monkeypatch,fault):
     a=tmp_path/'a.pdf';pdf(a);monkeypatch.setattr(fidelity.sys,'frozen',True,raising=False)
-    with pytest.raises(ValueError,match='Python runtime'):fidelity.isolated_fingerprint(a,[0])
+    expected=fidelity._fingerprint(a,[0]);paths=[]
+    def child(command,**kwargs):
+        assert command[1]=='--render-fingerprint-input'
+        assert '--render-fingerprint-pages' in command
+        from pathlib import Path
+        destination=Path(command[command.index('--render-fingerprint-result')+1]);paths.append(destination)
+        result=dict(expected)
+        if fault=='wrong_hash':result['input_sha256']='a'*64
+        if fault=='wrong_count':result['page_count']=2
+        if fault!='missing':destination.write_text('{' if fault=='truncated' else json.dumps(result),encoding='utf-8')
+        return SimpleNamespace(returncode=3221225477 if fault=='nonzero' else 0,stdout=None)
+    monkeypatch.setattr(fidelity.subprocess,'run',child)
+    if fault=='none':assert fidelity.isolated_fingerprint(a,[0])==expected
+    else:
+        with pytest.raises(ValueError):fidelity.isolated_fingerprint(a,[0])
+    assert paths and all(not p.exists() for p in paths)

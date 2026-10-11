@@ -1,7 +1,7 @@
 """Detect and repair incomplete PDF ToUnicode character maps."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import base64
 from io import BytesIO
 from pathlib import Path
@@ -19,6 +19,8 @@ from fontTools import agl
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageDraw
 import pikepdf
+
+from backend.pdf_verified_font_reference import collect_verified_local_ssty
 
 
 _PAIR_RE = re.compile(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>")
@@ -64,6 +66,7 @@ class FontEvidence:
     unicode_by_gid: dict[int, tuple[str, ...]]
     glyph_name_by_gid: dict[int, str]
     unicode_by_glyph_name: dict[str, str]
+    verified_reference_by_gid: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,8 @@ def resolve_deterministically(
     cmap_values = evidence.unicode_by_gid.get(finding.gid, ())
     for value in cmap_values:
         candidates.setdefault(value, set()).add("font-cmap")
+    for value in evidence.verified_reference_by_gid.get(finding.gid, ()):
+        candidates.setdefault(value, set()).add("verified-local-font-ssty")
     glyph_name = evidence.glyph_name_by_gid.get(finding.gid)
     if glyph_name:
         value = evidence.unicode_by_glyph_name.get(glyph_name)
@@ -136,11 +141,13 @@ def collect_font_evidence(
             value = ""
         if value:
             unicode_by_glyph_name[glyph_name] = value
+    verified_reference = collect_verified_local_ssty(ttfont)
     ttfont.close()
     return FontEvidence(
         unicode_by_gid={gid: tuple(sorted(values)) for gid, values in unicode_by_gid.items()},
         glyph_name_by_gid=glyph_name_by_gid,
         unicode_by_glyph_name=unicode_by_glyph_name,
+        verified_reference_by_gid=verified_reference,
     )
 
 

@@ -644,6 +644,9 @@ def _disclosure(
 ) -> str:
     if evaluated == 0:
         return "No external Unicode verifier was invoked."
+    if unavailable:
+        return (f"{provider_label} verifier was attempted for {evaluated} ambiguous mapping(s), "
+                "but credentials were unavailable; no external request was made.")
     return (
         f"{provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
         f"{applied} recommendation(s) were applied."
@@ -759,7 +762,7 @@ def repair_missing_unicode(
             "pages": list(finding.pages),
             "occurrence_count": finding.occurrence_count,
             "resolution_source": decision.model_used or "deepseek-v4-pro",
-            "llm_invoked": True,
+            "llm_invoked": decision.rejection_reason != "api-key-unavailable",
             "llm_recommendation_applied": bool(decision.accepted),
             "confidence": decision.confidence,
             "llm_context": context_for_record,
@@ -781,15 +784,19 @@ def repair_missing_unicode(
             record["unresolved_reason"] = decision.rejection_reason or "rejected"
         decisions.append(record)
 
+    credential_unavailable = bool(evaluated) and all(
+        d.get("rejection_reason") == "api-key-unavailable"
+        for d in decisions if "rejection_reason" in d or d.get("llm_invoked"))
+    external_invoked = any(d.get("llm_invoked", False) for d in decisions)
     details = {
         "provider": provider_name if evaluated else None,
         "provider_label": provider_label if evaluated else None,
         "configured_provider": provider_name,
         "external_verifier_configured": verifier is not None,
-        "external_provider_status": "invoked" if evaluated else "not-invoked",
-        "llm_invoked": evaluated > 0,
+        "external_provider_status": "unavailable-before-request" if credential_unavailable else ("invoked" if external_invoked else "not-invoked"),
+        "llm_invoked": external_invoked,
         "llm_recommendation_applied": llm_applied > 0,
-        "llm_unavailable": False,
+        "llm_unavailable": credential_unavailable,
         "external_verifier_not_configured": unavailable,
         "model": model_name if evaluated else None,
         "evaluated": evaluated,
@@ -811,7 +818,7 @@ def repair_missing_unicode(
         f"{details['verified_local_font_applied']} verified-local-font mapping(s), and "
         f"{llm_applied} external-verifier recommendation(s) applied; "
         f"{details['unresolved']} font/code mapping(s) remain unresolved. "
-        + _disclosure(evaluated, llm_applied, unavailable, provider_label)
+        + _disclosure(evaluated, llm_applied, credential_unavailable, provider_label)
     )
     details["provenance_message"] = disclosure
     if not accepted:
@@ -854,7 +861,7 @@ def repair_missing_unicode(
             rollback_message = (
                 f"Unicode repair rolled back: {reason}. "
                 f"{accepted_before_rollback} mapping(s) accepted from the recorded local/external evidence were discarded. "
-                + _disclosure(evaluated, 0, unavailable, provider_label)
+                + _disclosure(evaluated, 0, credential_unavailable, provider_label)
             )
             details["provenance_message"] = rollback_message
             return {

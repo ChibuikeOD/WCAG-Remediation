@@ -4,6 +4,23 @@ from backend import config, pdf_remediator_fixes
 from backend.remediation_report import generate_remediation_report_for_api
 from backend.tests.test_pdf_reviewed_glyph_rewrite import indirect_fixture
 from backend import pdf_unicode_mapping
+from backend.deepseek_unicode_verifier import DeepSeekDecision
+from backend.tests.test_pdf_unicode_mapping import build_type0_pdf
+
+
+def test_configured_verifier_without_credentials_reports_no_external_request(tmp_path, monkeypatch):
+    source = build_type0_pdf(tmp_path / 'unavailable.pdf', shown_cid=0x0B36)
+    calls = []
+    monkeypatch.setattr(pdf_unicode_mapping, 'build_ambiguity_context', lambda *a, **k: {})
+    def unavailable(context):
+        calls.append(context)
+        return DeepSeekDecision(False, None, None, 'api-key-unavailable')
+    result = pdf_unicode_mapping.repair_missing_unicode(source, verifier=unavailable)
+    assert len(calls) == 1
+    assert result['details']['evaluated'] == 1
+    assert not result['details']['llm_invoked'] and result['details']['llm_unavailable']
+    assert result['details']['external_provider_status'] == 'unavailable-before-request'
+    assert 'no external request was made' in result['message']
 
 
 def test_rolled_back_local_mapping_report_does_not_attribute_provider(tmp_path, monkeypatch):

@@ -481,7 +481,8 @@ class PDFRemediator:
                  reviewed_figure_sidecars=None, reviewed_figure_original: Optional[Path] = None,
                  reviewed_table_sidecars=None, reviewed_table_original: Optional[Path] = None,
                  reviewed_math_sidecar: Optional[Path] = None, reviewed_math_original: Optional[Path] = None,
-                 reviewed_table_projection_sidecars=None, reviewed_table_projection_original: Optional[Path] = None):
+                 reviewed_table_projection_sidecars=None, reviewed_table_projection_original: Optional[Path] = None,
+                 reviewed_link_sidecars=None, reviewed_link_original: Optional[Path] = None):
         """Initialize with PDF file path and optional byte-bound review input."""
         self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
         self.reviewed_glyph_original = reviewed_glyph_original
@@ -493,6 +494,8 @@ class PDFRemediator:
         self.reviewed_math_original = reviewed_math_original
         self.reviewed_table_projection_sidecars = reviewed_table_projection_sidecars
         self.reviewed_table_projection_original = reviewed_table_projection_original
+        self.reviewed_link_sidecars = reviewed_link_sidecars
+        self.reviewed_link_original = reviewed_link_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -830,6 +833,19 @@ class PDFRemediator:
             except Exception as e:
                 logger.error('Reviewed table projection application failed: %s', e, exc_info=True)
                 results.append(RemediationResult(issue_id='pdf-reviewed-table-projections', success=False, message=str(e)))
+
+        if self.reviewed_link_sidecars is not None:
+            try:
+                from .pdf_reviewed_links import apply_reviewed_link_purposes
+                if self.reviewed_link_original is None:
+                    raise ValueError('reviewed Link purposes require the original source path')
+                evidence=apply_reviewed_link_purposes(target,self.reviewed_link_original,self.reviewed_link_sidecars)
+                results.append(RemediationResult(issue_id='pdf-reviewed-link-purposes',success=evidence['unmatched']==0,
+                    message=f"{evidence['applied']} source-bound reviewed Link purpose(s) applied; {evidence['unmatched']} unresolved",
+                    new_value=str(evidence['applied']),details=evidence))
+            except Exception as error:
+                logger.error('Reviewed Link application failed: %s',error,exc_info=True)
+                results.append(RemediationResult(issue_id='pdf-reviewed-link-purposes',success=False,message=str(error)))
 
         # 12. Finalize metadata LAST ---------------------------------------
         # The OCR rebuild (PyMuPDF) and the C++ tagging pass (QPDF) both drop

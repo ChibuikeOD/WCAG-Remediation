@@ -20,6 +20,7 @@ def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, s
                   "tag_counts": {"P": 1}, "error": "test failure"}
     if count is not None:
         tag_result["inline_script_review_count"] = count
+        tag_result["table_review_count"] = count
     monkeypatch.setattr(engine, "auto_tag_document", lambda **kwargs: tag_result)
     names = ("fix_scanned_pages", "fix_pdf_unicode_mappings", "inject_link_annotations",
              "fix_content_stream_operator_states", "fix_heading_hierarchy", "fix_table_headers",
@@ -41,3 +42,4 @@ def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, s
     assert result.success is success
     # Missing evidence remains unknown, rather than silently becoming zero.
     assert result.model_dump()["details"]["inline_script_review_count"] == count
+    assert result.model_dump()["details"]["table_review_count"] == count

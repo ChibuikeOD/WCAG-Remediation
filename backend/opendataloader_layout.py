@@ -7,6 +7,7 @@ import importlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -336,8 +337,65 @@ class OpenDataLoaderLayoutAnalyzer:
                 "source_id": element.get("id"),
                 "provider": "opendataloader",
                 "raw_bbox": bbox,
+                "alt_text": element.get("alt_text", ""),
+                "table_review_required": tag == "Table",
             },
         )
+
+    @classmethod
+    def _map_table_cells(cls, element, page_sizes):
+        """Preserve supplied table geometry; do not invent headers or cells."""
+        cells = []
+        occupied = set()
+        rows = element.get("number of rows")
+        cols = element.get("number of columns")
+        def positive(value):
+            if type(value) is not int or value < 1:
+                raise ValueError("table indices/spans must be positive integers")
+            return value
+        rows, cols = positive(rows), positive(cols)
+        table_id = f"odl-p{element.get('page number')}-t{element.get('id')}"
+        for row in element.get("rows", ()):
+            for cell in row.get("cells", ()):
+                r, c = positive(cell.get("row number")), positive(cell.get("column number"))
+                rs, cs = positive(cell.get("row span", 1)), positive(cell.get("column span", 1))
+                if r + rs - 1 > rows or c + cs - 1 > cols:
+                    raise ValueError("table span exceeds supplied grid")
+                covered = {(y, x) for y in range(r, r + rs) for x in range(c, c + cs)}
+                if occupied & covered:
+                    raise ValueError("overlapping supplied table cells")
+                occupied.update(covered)
+                page_number = cell.get("page number", element.get("page number"))
+                if type(page_number) is not int or not 1 <= page_number <= len(page_sizes):
+                    raise ValueError("invalid table cell page")
+                bbox = cell.get("bounding box")
+                if (not isinstance(bbox, list) or len(bbox) != 4 or
+                    not all(isinstance(v, (int, float)) and math.isfinite(v) for v in bbox) or
+                    bbox[0] >= bbox[2] or bbox[1] >= bbox[3]):
+                    raise ValueError("invalid table cell bounding box")
+                header = cell.get("header")
+                if header is None:
+                    header = cell.get("table header")
+                if header is not None and type(header) is not bool:
+                    raise ValueError("table header flag must be boolean")
+                scope = str(cell.get("scope", "") or "").lstrip("/").capitalize()
+                if scope and scope not in {"Row", "Column", "Both"}:
+                    raise ValueError("invalid supplied header scope")
+                width, height = page_sizes[page_number - 1]
+                metadata = {"source_type": "table cell", "provider": "opendataloader",
+                    "raw_bbox": bbox, "table_id": table_id, "table_row": r - 1,
+                    "table_col": c - 1, "table_row_span": rs, "table_col_span": cs,
+                    "table_header": header is True, "table_scope": scope,
+                    "table_review_required": header is None or (header and not scope)}
+                images = [kid for kid in cell.get("kids", ()) if kid.get("type") == "image"]
+                if len(images) == 1:
+                    metadata["figure_alt_text"] = images[0].get("alt_text", "")
+                cells.append(StructureBlock(tag="TH" if header is True else "TD",
+                    bbox=cls._normalize_bbox(bbox, width, height), page_number=page_number - 1,
+                    content=cls._extract_text(cell), metadata=metadata))
+        if not cells:
+            raise ValueError("table has no supplied cells")
+        return cells
 
     @classmethod
     def _is_likert_header_run(cls, blocks: List[StructureBlock], start: int) -> bool:
@@ -570,6 +628,18 @@ class OpenDataLoaderLayoutAnalyzer:
             layouts.append(PageLayout(page_number=page_index, width=width, height=height))
 
         for element in json_data.get("kids", []) or []:
+            if str(element.get("type", "")).lower() == "table" and element.get("rows"):
+                try:
+                    for cell in cls._map_table_cells(element, page_sizes):
+                        layouts[cell.page_number].blocks.append(cell)
+                    continue
+                except ValueError as error:
+                    block = cls._map_element_to_block(element, page_sizes)
+                    if block is not None:
+                        block.metadata["table_review_required"] = True
+                        block.metadata["table_review_reason"] = str(error)
+                        layouts[block.page_number].blocks.append(block)
+                    continue
             block = cls._map_element_to_block(element, page_sizes)
             if block is None:
                 continue

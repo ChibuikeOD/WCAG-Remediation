@@ -710,14 +710,16 @@ class PDFRemediator:
                         f"structure tags across {tag_result['pages_processed']} pages"
                     ),
                     new_value=str(tag_result.get("tag_counts", {})),
-                    details={"inline_script_review_count": tag_result.get("inline_script_review_count")},
+                    details={"inline_script_review_count": tag_result.get("inline_script_review_count"),
+                             "table_review_count": tag_result.get("table_review_count")},
                 ))
             else:
                 results.append(RemediationResult(
                     issue_id="pdf-auto-tag",
                     success=False,
                     message=f"Auto-tagging failed: {tag_result.get('error', 'Unknown')}",
-                    details={"inline_script_review_count": tag_result.get("inline_script_review_count")},
+                    details={"inline_script_review_count": tag_result.get("inline_script_review_count"),
+                             "table_review_count": tag_result.get("table_review_count")},
                 ))
         else:
             logger.info("PDF layout tagging skipped (DISABLE_OPENDATALOADER is enabled)")

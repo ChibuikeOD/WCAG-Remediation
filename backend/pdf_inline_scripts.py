@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from math import floor, hypot
 import unicodedata
 
+import fitz
+
 
 @dataclass(frozen=True)
 class ScriptRun:
@@ -37,17 +39,27 @@ def detect_script_runs(page) -> list[ScriptRun]:
     and uses a spatial index rather than trusting text-object drawing order.
     """
     glyphs = []
-    for span in page.get_texttrace():
-        direction = span.get("dir", (1.0, 0.0))
-        if hypot(direction[0] - 1.0, direction[1]) > 0.01:
+    # get_texttrace() alone reproducibly corrupts native shutdown on the
+    # 209-page D10 input with the supported PyMuPDF runtime. Raw text keeps
+    # per-character origins, effective font sizes and line direction without
+    # creating that trace device. Exclude image payloads from this inventory.
+    raw = page.get_text("rawdict", flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)
+    for block in raw.get("blocks", ()):
+        if block.get("type", 0) != 0:
             continue
-        size = float(span.get("size", 0))
-        if size <= 0 or span.get("type", 0) == 3:
-            continue
-        for code, _gid, origin, bbox in span.get("chars", ()):
-            if code < 0 or code > 0x10FFFF:
+        for line in block.get("lines", ()):
+            direction = line.get("dir", (1.0, 0.0))
+            if hypot(direction[0] - 1.0, direction[1]) > 0.01:
                 continue
-            glyphs.append((chr(code), tuple(origin), tuple(bbox), size))
+            for span in line.get("spans", ()):
+                size = float(span.get("size", 0))
+                if size <= 0:
+                    continue
+                for char in span.get("chars", ()):
+                    text = char.get("c", "")
+                    if len(text) != 1:
+                        continue
+                    glyphs.append((text, tuple(char["origin"]), tuple(char["bbox"]), size))
 
     grid = {}
     for index, glyph in enumerate(glyphs):

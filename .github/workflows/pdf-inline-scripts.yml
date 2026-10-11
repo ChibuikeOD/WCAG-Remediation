@@ -8,10 +8,13 @@ on:
       - 'backend/opendataloader_layout.py'
       - 'backend/pdf_unicode_mapping.py'
       - 'backend/pdf_remediator_fixes.py'
+      - 'backend/pdf_link_descriptions.py'
+      - 'backend/remediator.py'
       - 'backend/tests/test_pdf_inline_scripts.py'
       - 'backend/tests/test_pdf_unicode_font_cache.py'
       - 'backend/tests/test_native_inline_scripts.py'
       - 'backend/tests/test_pdf_bookmark_failure_recovery.py'
+      - 'backend/tests/test_pdf_link_descriptions.py'
       - 'pdfua_remediator_cpp/**'
       - '.github/workflows/pdf-inline-scripts.yml'
 
@@ -49,4 +52,4 @@ jobs:
         shell: pwsh
         run: |
           $env:PDFACCESS_TEST_NATIVE_CLI = Join-Path $env:GITHUB_WORKSPACE 'native-build/Release/pdfua-remediator-cli.exe'
-          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py backend/tests/test_pdf_bookmark_failure_recovery.py -q
+          python -m pytest backend/tests/test_pdf_inline_scripts.py backend/tests/test_pdf_unicode_font_cache.py backend/tests/test_native_inline_scripts.py backend/tests/test_pdf_bookmark_failure_recovery.py backend/tests/test_pdf_link_descriptions.py -q

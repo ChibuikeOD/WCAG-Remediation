@@ -42,6 +42,7 @@ class MissingUnicodeFinding:
     cid: int
     gid: Optional[int]
     occurrences: tuple[TextOccurrence, ...]
+    unresolved_reason: Optional[str] = None
 
     @property
     def occurrence_count(self) -> int:
@@ -418,6 +419,9 @@ def _font_gid(font: pikepdf.Object, cid: int) -> Optional[int]:
     descendants = font.get("/DescendantFonts", [])
     if not descendants:
         return None
+    if str(descendants[0].get("/Subtype", "")) != "/CIDFontType2":
+        # CFF CID charsets need an explicit CID-to-GID lookup, not identity.
+        return None
     mapping = descendants[0].get("/CIDToGIDMap")
     if mapping is None or str(mapping) == "/Identity":
         return cid
@@ -452,6 +456,7 @@ def _iter_resource_streams(container: pikepdf.Object):
 def inventory_missing_unicode(pdf_path: Path) -> list[MissingUnicodeFinding]:
     """Find every used font character code absent from its ToUnicode CMap."""
     grouped: dict[tuple[tuple[int, int], int], tuple[pikepdf.Object, list[TextOccurrence]]] = {}
+    parsed_fonts: dict[tuple[int, int], tuple[ParsedToUnicode, Optional[str]]] = {}
     with pikepdf.open(pdf_path) as pdf:
         for page_number, page in enumerate(pdf.pages, start=1):
             for stream_owner, resources in _iter_resource_streams(page.obj):
@@ -471,11 +476,24 @@ def inventory_missing_unicode(pdf_path: Path) -> list[MissingUnicodeFinding]:
                     font = fonts.get(active_name)
                     if font is None:
                         continue
-                    cmap_stream = font.get("/ToUnicode")
-                    if isinstance(cmap_stream, pikepdf.Stream):
-                        parsed = parse_to_unicode_cmap(cmap_stream.read_bytes())
-                    else:
-                        parsed = ParsedToUnicode(code_width=2, mappings={})
+                    objgen = tuple(font.objgen)
+                    if objgen not in parsed_fonts:
+                        default_width = 2 if str(font.get("/Subtype", "")) == "/Type0" else 1
+                        cmap_stream = font.get("/ToUnicode")
+                        reason = None
+                        try:
+                            parsed = (parse_to_unicode_cmap(cmap_stream.read_bytes())
+                                      if isinstance(cmap_stream, pikepdf.Stream)
+                                      else ParsedToUnicode(default_width, {}))
+                            if parsed.code_width not in {1, 2, 3, 4}:
+                                raise ValueError("unsupported ToUnicode code width")
+                        except (ValueError, UnicodeError) as error:
+                            # Keep the entire damaged map untouched. Never append duplicate
+                            # mappings or reinterpret an invalid UTF16 destination.
+                            parsed = ParsedToUnicode(default_width, {})
+                            reason = f"malformed-to-unicode: {error}"
+                        parsed_fonts[objgen] = (parsed, reason)
+                    parsed, _reason = parsed_fonts[objgen]
                     width = parsed.code_width
                     for raw in _string_bytes(operands, name):
                         if len(raw) % width:
@@ -505,6 +523,7 @@ def inventory_missing_unicode(pdf_path: Path) -> list[MissingUnicodeFinding]:
                     cid=cid,
                     gid=_font_gid(font, cid),
                     occurrences=tuple(occurrences),
+                    unresolved_reason=parsed_fonts[tuple(font.objgen)][1],
                 )
             )
     return sorted(findings, key=lambda item: (item.font_objgen, item.cid))
@@ -646,6 +665,16 @@ def repair_missing_unicode(
     font_evidence: dict[tuple[int, int], FontEvidence] = {}
 
     for finding in findings:
+        if finding.unresolved_reason:
+            decisions.append({
+                "font_objgen": list(finding.font_objgen), "font": finding.base_font,
+                "cid": finding.cid, "pages": list(finding.pages),
+                "occurrence_count": finding.occurrence_count,
+                "resolution_source": "unresolved", "llm_invoked": False,
+                "llm_recommendation_applied": False,
+                "unresolved_reason": finding.unresolved_reason,
+            })
+            continue
         if finding.font_objgen not in font_evidence:
             font_evidence[finding.font_objgen] = collect_font_evidence(pdf_path, finding)
         evidence = font_evidence[finding.font_objgen]

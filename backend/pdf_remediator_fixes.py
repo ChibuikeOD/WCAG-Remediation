@@ -1346,11 +1346,12 @@ def fix_pdf_unicode_mappings(pdf_path: Path, *, reviewed_glyph_sidecar: Optional
     if isinstance(details, dict):
         details["min_confidence"] = settings.PDF_UNICODE_LLM_MIN_CONFIDENCE
         details["max_occurrences"] = settings.PDF_UNICODE_LLM_MAX_OCCURRENCES
-        details["provider"] = "Gemini"
-        details["use_vision"] = True
+        details["provider"] = "Gemini" if details.get("llm_invoked") else None
+        details["use_vision"] = bool(details.get("llm_invoked"))
         details["max_attempts"] = settings.PDF_UNICODE_LLM_MAX_ATTEMPTS
         details["endpoint"] = settings.GEMINI_API_ENDPOINT
-        if settings.GEMINI_MODEL:
+        details["configured_model"] = settings.GEMINI_MODEL
+        if settings.GEMINI_MODEL and details.get("llm_invoked"):
             details["model"] = settings.GEMINI_MODEL
     return result
 

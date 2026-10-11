@@ -49,6 +49,15 @@ def test_repair_exact_reviewed_type3_without_cmap_preserves_pixels_and_program(t
     result = repair_missing_unicode(target, reviewed_glyph_sidecar=sidecar, reviewed_glyph_original=original)
     assert result['success']
     assert result['details']['reviewed_sidecar_applied'] == 1
+    assert result['details']['total_mappings_applied'] == 1
+    assert result['details']['font_metadata_applied'] == 0
+    assert result['details']['verified_local_font_applied'] == 0
+    assert result['details']['provider'] is None
+    assert result['details']['external_provider_status'] == 'not-invoked'
+    assert not result['details']['external_verifier_configured']
+    assert '1 model-reviewed sidecar mapping(s)' in result['message']
+    assert 'No external Unicode verifier was invoked.' in result['message']
+    assert 'requested but unavailable' not in result['message']
     decision = result['details']['decisions'][0]
     assert decision['resolution_source'] == 'model-reviewed-sidecar'
     assert not decision['llm_invoked']
@@ -115,3 +124,15 @@ def test_other_original_sha_and_unreviewed_sidecar_are_rejected(tmp_path):
     sidecar.write_text(json.dumps(data), encoding='utf-8')
     with pytest.raises(ValueError, match='unreviewed'):
         load_reviewed_glyphs(sidecar, original, original)
+
+
+def test_reviewed_rollback_reports_zero_applied(tmp_path, monkeypatch):
+    from backend import pdf_unicode_mapping as module
+    original, sidecar, _ = fixture(tmp_path)
+    target = tmp_path / 'rollback.pdf'; target.write_bytes(original.read_bytes())
+    monkeypatch.setattr(module, 'verify_repair', lambda *_: (False, 'visual-diff'))
+    result = repair_missing_unicode(target, reviewed_glyph_sidecar=sidecar, reviewed_glyph_original=original)
+    assert not result['success']
+    assert result['details']['reviewed_sidecar_applied'] == 0
+    assert result['details']['total_mappings_applied'] == 0
+    assert target.read_bytes() == original.read_bytes()

@@ -642,13 +642,8 @@ def _qpdf_check(pdf_path: Path) -> tuple[bool, str]:
 def _disclosure(
     evaluated: int, applied: int, unavailable: bool, provider_label: str
 ) -> str:
-    if unavailable:
-        return (
-            f"{provider_label} was requested but unavailable; "
-            "no ambiguous mappings were changed."
-        )
     if evaluated == 0:
-        return f"{provider_label} was not used; all Unicode decisions were deterministic."
+        return "No external Unicode verifier was invoked."
     return (
         f"{provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
         f"{applied} recommendation(s) were applied."
@@ -721,7 +716,8 @@ def repair_missing_unicode(
                     "cid": finding.cid,
                     "pages": list(finding.pages),
                     "occurrence_count": finding.occurrence_count,
-                    "resolution_source": "font-metadata",
+                    "resolution_source": ("verified-local-font-ssty" if "verified-local-font-ssty" in deterministic.evidence
+                                          else "font-metadata"),
                     "llm_invoked": False,
                     "llm_recommendation_applied": False,
                     "unicode_text": deterministic.text,
@@ -742,7 +738,7 @@ def repair_missing_unicode(
                     "resolution_source": "unresolved",
                     "llm_invoked": False,
                     "llm_recommendation_applied": False,
-                    "unresolved_reason": "deepseek-unavailable",
+                    "unresolved_reason": "no-external-verifier-configured",
                 }
             )
             continue
@@ -786,22 +782,38 @@ def repair_missing_unicode(
         decisions.append(record)
 
     details = {
-        "provider": provider_name,
-        "provider_label": provider_label,
+        "provider": provider_name if evaluated else None,
+        "provider_label": provider_label if evaluated else None,
+        "configured_provider": provider_name,
+        "external_verifier_configured": verifier is not None,
+        "external_provider_status": "invoked" if evaluated else "not-invoked",
         "llm_invoked": evaluated > 0,
         "llm_recommendation_applied": llm_applied > 0,
-        "llm_unavailable": unavailable,
+        "llm_unavailable": False,
+        "external_verifier_not_configured": unavailable,
         "model": model_name if evaluated else None,
         "evaluated": evaluated,
         "applied": llm_applied,
         "decisions": decisions,
         "reviewed_sidecar_applied": sum(d.get("resolution_source") == "model-reviewed-sidecar" for d in decisions),
         "reviewed_sidecar_bound": len(reviewed),
+        "reviewed_sidecar_binding_counts": getattr(reviewed, "binding_counts", None),
         "reviewed_sidecar_unused": len(set(reviewed) - {(f.font_objgen, f.cid) for f in findings}),
+        "font_metadata_applied": sum(d.get("resolution_source") == "font-metadata" for d in decisions),
+        "verified_local_font_applied": sum(d.get("resolution_source") == "verified-local-font-ssty" for d in decisions),
+        "total_mappings_applied": len(accepted),
         "findings_total": len(findings),
         "unresolved": len(findings) - len(accepted),
     }
-    disclosure = _disclosure(evaluated, llm_applied, unavailable, provider_label)
+    disclosure = (
+        f"{details['reviewed_sidecar_applied']} model-reviewed sidecar mapping(s), "
+        f"{details['font_metadata_applied']} font-metadata mapping(s), "
+        f"{details['verified_local_font_applied']} verified-local-font mapping(s), and "
+        f"{llm_applied} external-verifier recommendation(s) applied; "
+        f"{details['unresolved']} font/code mapping(s) remain unresolved. "
+        + _disclosure(evaluated, llm_applied, unavailable, provider_label)
+    )
+    details["provenance_message"] = disclosure
     if not accepted:
         return {
             "issue_id": "pdf-unicode-mapping",
@@ -828,6 +840,9 @@ def repair_missing_unicode(
             details["llm_recommendation_applied"] = False
             details["applied"] = 0
             details["reviewed_sidecar_applied"] = 0
+            details["font_metadata_applied"] = 0
+            details["verified_local_font_applied"] = 0
+            details["total_mappings_applied"] = 0
             for record in decisions:
                 if record.get("resolution_source") == "model-reviewed-sidecar":
                     record["unresolved_reason"] = f"rolled-back-{reason}"
@@ -841,6 +856,7 @@ def repair_missing_unicode(
                 f"{provider_label} evaluated {evaluated} ambiguous Unicode mapping(s); "
                 f"{accepted_before_rollback} recommendation(s) were accepted before rollback."
             )
+            details["provenance_message"] = rollback_message
             return {
                 "issue_id": "pdf-unicode-mapping",
                 "success": False,

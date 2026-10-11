@@ -219,10 +219,10 @@ def apply_reviewed_figure_alternatives(working: Path, original: Path, sidecars) 
                 status.update(status='unmatched',reason=str(error));outcome['unmatched']+=1
         if not affected: return outcome
         pdf.save(candidate,compress_streams=False,stream_decode_level=pikepdf.StreamDecodeLevel.none)
-    with fitz.open(working) as before,fitz.open(candidate) as after:
-        for index in affected:
-            a,b=before[index],after[index]
-            if a.get_text()!=b.get_text() or a.get_pixmap(dpi=96,alpha=False).samples!=b.get_pixmap(dpi=96,alpha=False).samples:
-                raise ValueError(f'reviewed Figure edit changed painting/text; retained {candidate}')
+    from .pdf_visual_fidelity import verify_isolated_fidelity
+    try:
+        outcome['fidelity_verification']=verify_isolated_fidelity(working,candidate,affected)
+    except (ValueError,TimeoutError,RuntimeError) as error:
+        raise ValueError(f'reviewed Figure fidelity verification failed: {error}; retained {candidate}') from error
     os.replace(candidate,working)
     return outcome

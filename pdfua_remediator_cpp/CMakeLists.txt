@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set QPDF Paths for Windows
 if(WIN32)
-    set(QPDF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/qpdf-12.3.2-msvc64")
+    set(QPDF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/qpdf-12.3.2-msvc64" CACHE PATH "Existing QPDF installation")
     include_directories("${QPDF_DIR}/include")
     link_directories("${QPDF_DIR}/lib")
 endif()

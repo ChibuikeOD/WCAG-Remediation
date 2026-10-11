@@ -5,6 +5,7 @@
 #include <vector>
 #include <map>
 #include <regex>
+#include <cmath>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFWriter.hh>
 #include "content_tagger.h"
@@ -32,6 +33,10 @@ std::vector<LayoutBlock> parse_layout_json(const std::string& path) {
     std::regex table_row_regex("\"table_row\"\\s*:\\s*(-?\\d+)");
     std::regex table_col_regex("\"table_col\"\\s*:\\s*(-?\\d+)");
     std::regex table_header_regex("\"table_header\"\\s*:\\s*(true|false)");
+    std::regex alt_hex_regex("\"alt_hex\"\\s*:\\s*\"([0-9a-fA-F]*)\"");
+    std::regex inline_order_regex("\"inline_order\"\\s*:\\s*\"([0-9eE.,; +\\-]+)\"");
+    std::regex inline_group_regex("\"inline_group_id\"\\s*:\\s*\"([a-zA-Z0-9-]+)\"");
+    std::regex inline_parent_regex("\"inline_parent_id\"\\s*:\\s*\"([a-zA-Z0-9-]+)\"");
 
     // Scan the JSON array for block objects enclosed in { }
     size_t pos = 0;
@@ -72,8 +77,32 @@ std::vector<LayoutBlock> parse_layout_json(const std::string& path) {
         if (std::regex_search(obj_str, match, table_header_regex)) {
             block.table_header = match[1].str() == "true";
         }
+        if (std::regex_search(obj_str, match, alt_hex_regex)) {
+            const std::string hex = match[1].str();
+            if (hex.size() % 2 != 0) throw std::runtime_error("Invalid alt_hex length");
+            for (size_t i = 0; i < hex.size(); i += 2) {
+                block.alt_text.push_back(static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)));
+            }
+        }
+        if (std::regex_search(obj_str, match, inline_order_regex)) {
+            std::istringstream runs(match[1].str());
+            std::string run;
+            while (std::getline(runs, run, ';')) {
+                std::istringstream fields(run);
+                std::vector<double> values;
+                std::string field;
+                while (std::getline(fields, field, ',')) values.push_back(std::stod(field));
+                if (values.size() != 6 || values[0] > values[2] || values[1] > values[3]) {
+                    throw std::runtime_error("Invalid inline_order coordinates");
+                }
+                for (double value : values) if (!std::isfinite(value)) throw std::runtime_error("Non-finite inline_order coordinate");
+                block.inline_runs.push_back(values);
+            }
+        }
 
         blocks.push_back(block);
+        if (std::regex_search(obj_str, match, inline_group_regex)) blocks.back().inline_group_id = match[1].str();
+        if (std::regex_search(obj_str, match, inline_parent_regex)) blocks.back().inline_parent_id = match[1].str();
     }
 
     return blocks;

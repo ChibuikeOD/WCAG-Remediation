@@ -314,6 +314,12 @@ class OpenDataLoaderLayoutAnalyzer:
             tag = "Figure"
         elif raw_type == "caption":
             tag = "Caption"
+        elif raw_type == "formula":
+            tag = "Formula"
+        elif raw_type in {"footnote", "note"}:
+            tag = "Note"
+        elif raw_type == "reference":
+            tag = "Reference"
         elif raw_type in {"header", "footer"}:
             tag = "Artifact"
         else:
@@ -582,6 +588,10 @@ class OpenDataLoaderLayoutAnalyzer:
 
         page_sizes = self._load_page_sizes(file_path)
         layouts = self.parse_opendataloader_json(data, page_sizes)
+        from .pdf_inline_scripts import associate_script_blocks
+        with fitz.open(file_path) as document:
+            for layout in layouts:
+                associate_script_blocks(document[layout.page_number], layout)
         total_blocks = sum(len(layout.blocks) for layout in layouts)
         logger.info(
             "OpenDataLoader layout analysis complete: %s pages, %s structure blocks",

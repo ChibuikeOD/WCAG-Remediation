@@ -132,9 +132,13 @@ def auto_tag_pdf(
         tag_counts = {}
         pages_processed = len(layouts)
 
+        table_review_keys = set()
         for layout in layouts:
             for block in layout.blocks:
                 # Retrieve raw bounding box in PDF points if available, otherwise fallback to normalized
+                if block.metadata.get("table_review_required"):
+                    table_review_keys.add((layout.page_number,
+                        block.metadata.get("table_id", block.metadata.get("source_id"))))
                 raw_bbox = block.metadata.get("raw_bbox") if block.metadata else None
                 bbox_coords = list(raw_bbox) if raw_bbox else []
 
@@ -143,7 +147,7 @@ def auto_tag_pdf(
                     "tag": block.tag,
                     "bbox": bbox_coords
                 }
-                for key in ("table_id", "table_row", "table_col", "table_header", "inline_group_id", "inline_parent_id"):
+                for key in ("table_id", "table_row", "table_col", "table_header", "table_row_span", "table_col_span", "table_scope", "inline_group_id", "inline_parent_id"):
                     if key in block.metadata:
                         block_data[key] = block.metadata[key]
 
@@ -154,6 +158,11 @@ def auto_tag_pdf(
                     block_data["inline_order"] = hints
                 if review_count:
                     block_data["inline_script_review_count"] = review_count
+                figure_alt = str(block.metadata.get("figure_alt_text", "") or "").strip()
+                if figure_alt and figure_alt.casefold() not in {
+                    "[image requires alt text]", "image", "figure", "formula",
+                }:
+                    block_data["figure_alt_hex"] = figure_alt.encode("utf-8").hex()
                 alt_text = str(block.metadata.get("alt_text", "") or "").strip()
                 if alt_text and alt_text.casefold() not in {
                     "[image requires alt text]", "image", "figure", "formula",
@@ -249,6 +258,7 @@ def auto_tag_pdf(
             "tags_created": total_tags,
             "tag_counts": tag_counts,
             "inline_script_review_count": sum(b.get("inline_script_review_count", 0) for b in blocks_data),
+            "table_review_count": len(table_review_keys),
             "pages_processed": pages_processed,
             "output_path": str(target),
             "language": normalized_language,

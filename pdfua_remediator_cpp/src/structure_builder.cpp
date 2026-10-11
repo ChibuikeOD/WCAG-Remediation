@@ -43,6 +43,13 @@ static std::string trim_ascii(const std::string& raw) {
     return raw.substr(start, end - start);
 }
 
+static bool supported_alt(const std::string& raw) {
+    std::string text = trim_ascii(raw);
+    for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return !text.empty() && text != "[image requires alt text]" &&
+           text != "image" && text != "figure" && text != "formula";
+}
+
 static std::string normalize_language_tag(const std::string& raw) {
     std::string lang = trim_ascii(raw);
     if (lang.empty()) {
@@ -419,12 +426,13 @@ void build_struct_tree(QPDF& pdf,
         std::map<std::string, std::vector<int>> table_groups;
         for (int b = 0; b < num_blocks; ++b) {
             const LayoutBlock& block = blocks_on_page[b];
-            if (block_has_content[b] &&
+            if ((block.tag == "TD" || block.tag == "TH") &&
                 !block.table_id.empty() && block.table_row >= 0 && block.table_col >= 0) {
                 table_groups[block.table_id].push_back(b);
             }
         }
 
+        std::map<int, QPDFObjectHandle> table_at_block;
         for (auto& group : table_groups) {
             auto& cell_indices = group.second;
             std::sort(cell_indices.begin(), cell_indices.end(), [&](int lhs, int rhs) {
@@ -442,7 +450,7 @@ void build_struct_tree(QPDF& pdf,
             table_se.replaceKey("/Pg",   page.getObjectHandle());
             table_se.replaceKey("/K",    table_kids);
             QPDFObjectHandle table_indirect = pdf.makeIndirectObject(table_se);
-            doc_kids.appendItem(table_indirect);
+            table_at_block[*std::min_element(cell_indices.begin(), cell_indices.end())] = table_indirect;
 
             std::map<int, QPDFObjectHandle> row_struct_elems;
             std::map<int, QPDFObjectHandle> row_kids_arrays;
@@ -476,7 +484,19 @@ void build_struct_tree(QPDF& pdf,
                 cell_se.replaceKey("/Pg",   page.getObjectHandle());
                 cell_se.replaceKey("/K",    cell_kids);
                 if (cell_block.table_header) {
-                    attach_table_scope_attr(cell_se, cell_block.table_col == 0 ? "/Row" : "/Column");
+                    if (!cell_block.table_scope.empty())
+                        attach_table_scope_attr(cell_se, "/" + cell_block.table_scope);
+                    else if (!cell_block.table_scope_supplied)
+                        attach_table_scope_attr(cell_se, cell_block.table_row == 0 ? "/Column" : "/Row");
+                }
+                if (cell_block.table_row_span > 1 || cell_block.table_col_span > 1) {
+                    QPDFObjectHandle spans = QPDFObjectHandle::newDictionary();
+                    spans.replaceKey("/O", QPDFObjectHandle::newName("/Table"));
+                    if (cell_block.table_row_span > 1)
+                        spans.replaceKey("/RowSpan", QPDFObjectHandle::newInteger(cell_block.table_row_span));
+                    if (cell_block.table_col_span > 1)
+                        spans.replaceKey("/ColSpan", QPDFObjectHandle::newInteger(cell_block.table_col_span));
+                    append_attr(cell_se, spans);
                 }
                 attach_bbox_attr(cell_se, cell_block.bbox);
 
@@ -488,6 +508,8 @@ void build_struct_tree(QPDF& pdf,
         }
 
         for (int b = 0; b < num_blocks; ++b) {
+            auto table_position = table_at_block.find(b);
+            if (table_position != table_at_block.end()) doc_kids.appendItem(table_position->second);
             if (block_struct_elems[b].isInitialized()) {
                 continue;
             }
@@ -508,7 +530,7 @@ void build_struct_tree(QPDF& pdf,
 
             attach_bbox_attr(se, blocks_on_page[b].bbox);
 
-            if (tag == "Formula" && !blocks_on_page[b].alt_text.empty()) {
+            if (tag == "Formula" && supported_alt(blocks_on_page[b].alt_text)) {
                 se.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString(blocks_on_page[b].alt_text));
             }
             if (tag == "Note") {
@@ -557,7 +579,7 @@ void build_struct_tree(QPDF& pdf,
                 const int figure_block = mcid_block[mcid];
                 if (figure_block >= 0 && figure_block < num_blocks &&
                     blocks_on_page[figure_block].tag == "Figure" &&
-                    !blocks_on_page[figure_block].alt_text.empty()) {
+                    supported_alt(blocks_on_page[figure_block].alt_text)) {
                     se.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString(blocks_on_page[figure_block].alt_text));
                 }
 
@@ -577,7 +599,26 @@ void build_struct_tree(QPDF& pdf,
                 }
 
                 QPDFObjectHandle se_indirect = pdf.makeIndirectObject(se);
-                doc_kids.appendItem(se_indirect);
+                bool inside_cell = false;
+                if (figure_block >= 0 && figure_block < num_blocks &&
+                    !blocks_on_page[figure_block].table_id.empty() &&
+                    block_struct_elems[figure_block].isInitialized() && info_map) {
+                    auto found = info_map->find(mcid);
+                    const auto& cell_bbox = blocks_on_page[figure_block].bbox;
+                    if (found != info_map->end() && found->second.bbox.size() == 4 && cell_bbox.size() == 4) {
+                        const auto& image_bbox = found->second.bbox;
+                        inside_cell = image_bbox[0] >= cell_bbox[0] - 0.1 && image_bbox[1] >= cell_bbox[1] - 0.1 &&
+                                      image_bbox[2] <= cell_bbox[2] + 0.1 && image_bbox[3] <= cell_bbox[3] + 0.1;
+                    }
+                }
+                if (inside_cell) {
+                    se_indirect.replaceKey("/P", block_struct_elems[figure_block]);
+                    const std::string& alt = blocks_on_page[figure_block].figure_alt_text;
+                    if (supported_alt(alt)) se_indirect.replaceKey("/Alt", QPDFObjectHandle::newUnicodeString(alt));
+                    block_kids_arrays[figure_block].appendItem(se_indirect);
+                } else {
+                    doc_kids.appendItem(se_indirect);
+                }
                 mcid_parent[mcid] = se_indirect;
                 continue;
             }

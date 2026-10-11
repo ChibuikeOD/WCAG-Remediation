@@ -21,6 +21,11 @@ struct LayoutBlock {
     int table_row = -1;
     int table_col = -1;
     bool table_header = false;
+    int table_row_span = 1;
+    int table_col_span = 1;
+    std::string table_scope;
+    bool table_scope_supplied = false;
+    std::string figure_alt_text;
 };
 
 // Geometry of a single injected MCID, expressed in PDF default user space

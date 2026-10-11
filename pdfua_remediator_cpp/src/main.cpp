@@ -33,7 +33,11 @@ std::vector<LayoutBlock> parse_layout_json(const std::string& path) {
     std::regex table_row_regex("\"table_row\"\\s*:\\s*(-?\\d+)");
     std::regex table_col_regex("\"table_col\"\\s*:\\s*(-?\\d+)");
     std::regex table_header_regex("\"table_header\"\\s*:\\s*(true|false)");
+    std::regex table_row_span_regex("\"table_row_span\"\\s*:\\s*(\\d+)");
+    std::regex table_col_span_regex("\"table_col_span\"\\s*:\\s*(\\d+)");
+    std::regex table_scope_regex("\"table_scope\"\\s*:\\s*\"([^\"]*)\"");
     std::regex alt_hex_regex("\"alt_hex\"\\s*:\\s*\"([0-9a-fA-F]*)\"");
+    std::regex figure_alt_hex_regex("\"figure_alt_hex\"\\s*:\\s*\"([0-9a-fA-F]*)\"");
     std::regex inline_order_regex("\"inline_order\"\\s*:\\s*\"([0-9eE.,; +\\-]+)\"");
     std::regex inline_group_regex("\"inline_group_id\"\\s*:\\s*\"([a-zA-Z0-9-]+)\"");
     std::regex inline_parent_regex("\"inline_parent_id\"\\s*:\\s*\"([a-zA-Z0-9-]+)\"");
@@ -76,6 +80,27 @@ std::vector<LayoutBlock> parse_layout_json(const std::string& path) {
         }
         if (std::regex_search(obj_str, match, table_header_regex)) {
             block.table_header = match[1].str() == "true";
+        }
+        if (std::regex_search(obj_str, match, table_row_span_regex)) {
+            block.table_row_span = std::stoi(match[1].str());
+            if (block.table_row_span < 1) throw std::runtime_error("Invalid table row span");
+        }
+        if (std::regex_search(obj_str, match, table_col_span_regex)) {
+            block.table_col_span = std::stoi(match[1].str());
+            if (block.table_col_span < 1) throw std::runtime_error("Invalid table column span");
+        }
+        if (std::regex_search(obj_str, match, table_scope_regex)) {
+            block.table_scope_supplied = true;
+            block.table_scope = match[1].str();
+            if (!block.table_scope.empty() && block.table_scope != "Row" &&
+                block.table_scope != "Column" && block.table_scope != "Both")
+                throw std::runtime_error("Invalid table header scope");
+        }
+        if (std::regex_search(obj_str, match, figure_alt_hex_regex)) {
+            const std::string hex = match[1].str();
+            if (hex.size() % 2 != 0) throw std::runtime_error("Invalid figure_alt_hex length");
+            for (size_t i = 0; i < hex.size(); i += 2)
+                block.figure_alt_text.push_back(static_cast<char>(std::stoi(hex.substr(i, 2), nullptr, 16)));
         }
         if (std::regex_search(obj_str, match, alt_hex_regex)) {
             const std::string hex = match[1].str();

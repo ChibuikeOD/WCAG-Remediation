@@ -723,8 +723,10 @@ class PDFRemediator:
 
         # 4-11. Structural / content fixes --------------------------------
         from .pdf_link_descriptions import repair_link_descriptions
+        from .pdf_cidset import repair_cidsets
         fix_funcs = [
             fixes.fix_content_stream_operator_states,
+            repair_cidsets,
             fixes.fix_heading_hierarchy,
             fixes.fix_table_headers,
             fixes.fix_list_structure,
@@ -744,6 +746,7 @@ class PDFRemediator:
                     success=r["success"],
                     message=r["message"],
                     new_value=r.get("new_value", ""),
+                    details=r.get("details"),
                 ))
             except Exception as e:
                 logger.error(f"{fn.__name__} raised: {e}", exc_info=True)

@@ -46,16 +46,48 @@ def _link_alternatives(root):
     return descriptions
 
 
+def _word_inside_annotation(box, word):
+    rectangle = fitz.Rect(word[:4])
+    # Annotation rectangles often cover glyph ink rather than the font's full
+    # ascender/descender box. Require the complete word horizontally and at
+    # least three quarters vertically; adjacent line fringes are excluded.
+    return (box.x0 - 0.01 <= rectangle.x0 and rectangle.x1 <= box.x1 + 0.01
+            and rectangle.height > 0
+            and (rectangle & box).height >= 0.75 * rectangle.height
+            and box.y0 <= (rectangle.y0 + rectangle.y1) / 2 <= box.y1)
+
+
+def _visible_label(box, raw_text):
+    lines = []
+    for block in raw_text.get("blocks", []):
+        for line in block.get("lines", []):
+            characters = [character for span in line.get("spans", [])
+                          for character in span.get("chars", [])]
+            selected = [index for index, character in enumerate(characters)
+                        if _word_inside_annotation(box, character["bbox"])]
+            if selected:
+                first, last = selected[0], selected[-1]
+                # A clipped alphanumeric word is insufficient label evidence.
+                if ((first > 0 and characters[first - 1]["c"].isalnum()
+                     and characters[first]["c"].isalnum())
+                    or (last + 1 < len(characters) and characters[last + 1]["c"].isalnum()
+                        and characters[last]["c"].isalnum())):
+                    continue
+            text = "".join(characters[index]["c"] for index in selected)
+            if text.strip():
+                lines.append(text)
+    return _meaningful(" ".join(lines))
+
+
 def repair_link_descriptions(pdf_path: Path):
     repaired = unresolved = 0
+    labels = {}
     # Close the renderer before opening the overwrite writer on Windows.
-    with fitz.open(str(pdf_path)) as document:
-        page_evidence = [(page.transformation_matrix, page.get_text("words")) for page in document]
-    with pikepdf.open(pdf_path, allow_overwriting_input=True) as pdf:
-        alternatives = _link_alternatives(pdf.Root.get("/StructTreeRoot", pikepdf.Dictionary()))
-        for page_index, page in enumerate(pdf.pages):
-            matrix, words = page_evidence[page_index]
-            for annotation in page.obj.get("/Annots", []):
+    with fitz.open(str(pdf_path)) as document, pikepdf.open(pdf_path) as source:
+        alternatives = _link_alternatives(source.Root.get("/StructTreeRoot", pikepdf.Dictionary()))
+        for page_index, page in enumerate(source.pages):
+            raw_text = None
+            for annotation_index, annotation in enumerate(page.obj.get("/Annots", [])):
                 if str(annotation.get("/Subtype", "")) != "/Link":
                     continue
                 if _meaningful(annotation.get("/Contents", "")):
@@ -64,11 +96,18 @@ def repair_link_descriptions(pdf_path: Path):
                 if not label:
                     rect = annotation.get("/Rect")
                     if rect is not None and len(rect) == 4:
-                        box = fitz.Rect(*map(float, rect)) * matrix
-                        # Require complete words inside the clickable region.
-                        selected = [word for word in words if box.contains(fitz.Rect(word[:4]))]
-                        selected.sort(key=lambda word: (word[5], word[6], word[7]))
-                        label = _meaningful(" ".join(word[4] for word in selected))
+                        if raw_text is None:
+                            raw_text = document[page_index].get_text("rawdict")
+                        box = fitz.Rect(*map(float, rect)) * document[page_index].transformation_matrix
+                        label = _visible_label(box, raw_text)
+                labels[(page_index, annotation_index)] = label
+    with pikepdf.open(pdf_path, allow_overwriting_input=True) as pdf:
+        for page_index, page in enumerate(pdf.pages):
+            for annotation_index, annotation in enumerate(page.obj.get("/Annots", [])):
+                key = (page_index, annotation_index)
+                if key not in labels:
+                    continue
+                label = labels[key]
                 if label:
                     annotation.Contents = pikepdf.String(label)
                     repaired += 1

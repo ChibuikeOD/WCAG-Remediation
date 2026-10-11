@@ -753,6 +753,7 @@ def inject_link_annotations(pdf_path: Path) -> Dict[str, Any]:
     if not HAS_PYMUPDF:
         return _result("pdf-inject-link-annots", False, "PyMuPDF not available")
 
+    doc = None
     try:
         doc = fitz.open(str(pdf_path))
         added = 0
@@ -777,7 +778,6 @@ def inject_link_annotations(pdf_path: Path) -> Dict[str, Any]:
                         added += 1
         if added > 0:
             doc.save(str(pdf_path), incremental=True, encryption=0)
-        doc.close()
         return _result(
             "pdf-inject-link-annots", True,
             f"Injected {added} Link annotation(s) for URLs",
@@ -786,6 +786,9 @@ def inject_link_annotations(pdf_path: Path) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"inject_link_annotations: {e}", exc_info=True)
         return _result("pdf-inject-link-annots", False, str(e))
+    finally:
+        if doc is not None:
+            doc.close()
 
 
 def fix_untagged_urls(pdf_path: Path) -> Dict[str, Any]:

@@ -720,6 +720,7 @@ class PDFRemediator:
             ))
 
         # 4-11. Structural / content fixes --------------------------------
+        from .pdf_link_descriptions import repair_link_descriptions
         fix_funcs = [
             fixes.fix_content_stream_operator_states,
             fixes.fix_heading_hierarchy,
@@ -728,6 +729,7 @@ class PDFRemediator:
             fixes.fix_span_overuse,
             fixes.fix_reading_order,
             fixes.fix_untagged_urls,
+            repair_link_descriptions,
             fixes.fix_bookmarks,
             fixes.fix_form_labels,
             fixes.fix_tab_order,

@@ -478,12 +478,15 @@ class PDFRemediator:
     """
     
     def __init__(self, file_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None,
-                 reviewed_figure_sidecars=None, reviewed_figure_original: Optional[Path] = None):
+                 reviewed_figure_sidecars=None, reviewed_figure_original: Optional[Path] = None,
+                 reviewed_table_sidecars=None, reviewed_table_original: Optional[Path] = None):
         """Initialize with PDF file path and optional byte-bound review input."""
         self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
         self.reviewed_glyph_original = reviewed_glyph_original
         self.reviewed_figure_sidecars = reviewed_figure_sidecars
         self.reviewed_figure_original = reviewed_figure_original
+        self.reviewed_table_sidecars = reviewed_table_sidecars
+        self.reviewed_table_original = reviewed_table_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -773,6 +776,21 @@ class PDFRemediator:
                     success=False,
                     message=str(e),
                 ))
+
+        if self.reviewed_table_sidecars is not None:
+            try:
+                from .pdf_reviewed_tables import apply_reviewed_table_grids
+                if self.reviewed_table_original is None:
+                    raise ValueError('reviewed tables require the original source path')
+                evidence=apply_reviewed_table_grids(target,self.reviewed_table_original,
+                                                  self.reviewed_table_sidecars)
+                results.append(RemediationResult(issue_id='pdf-reviewed-table-grids',
+                    success=evidence['unmatched_tables']==0,
+                    message=f"{evidence['applied_tables']} source-bound reviewed table grid(s) applied; {evidence['unmatched_tables']} unresolved",
+                    new_value=str(evidence['applied_tables']),details=evidence))
+            except Exception as error:
+                results.append(RemediationResult(issue_id='pdf-reviewed-table-grids',success=False,
+                                                 message=str(error)))
 
         if self.reviewed_figure_sidecars is not None:
             try:

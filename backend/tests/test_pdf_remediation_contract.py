@@ -8,9 +8,17 @@ from backend.models import RemediationRequest, RemediationResult
 from backend.remediator import PDFRemediator
 
 
-def _make_minimal_pdf(path: Path) -> None:
+def _make_minimal_pdf(path: Path, tagged: bool = False) -> None:
     with pikepdf.Pdf.new() as pdf:
-        pdf.add_blank_page(page_size=(72, 72))
+        page = pdf.add_blank_page(page_size=(72, 72))
+        if tagged:
+            root = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name('/StructTreeRoot')))
+            owner = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name('/StructElem'), S=pikepdf.Name('/P'), P=root, Pg=page.obj, K=0))
+            root.K = pikepdf.Array([owner])
+            root.ParentTree = pikepdf.Dictionary(Nums=pikepdf.Array([0, pikepdf.Array([owner])]))
+            page.StructParents = 0
+            pdf.Root.StructTreeRoot = root
+            page.Contents = pdf.make_stream(b'/P <</MCID 0>> BDC 0 0 2 2 re f EMC')
         pdf.save(path)
 
 
@@ -81,8 +89,9 @@ def test_unicode_repair_uses_configured_gemini_vision_verifier(
         return DeepSeekDecision(True, "2", 0.99, None)
 
     def fake_repair(
-        path, *, verifier, max_occurrences, provider_name, provider_label, model_name
+        path, *, verifier, max_occurrences, provider_name, provider_label, model_name, **reviewed_options
     ):
+        assert all(value is None for value in reviewed_options.values())
         assert provider_name == "Gemini"
         assert provider_label == "Gemini 3.1 Flash-Lite"
         assert model_name == "gemini-3.1-flash-lite"
@@ -132,6 +141,7 @@ def test_full_pdf_remediation_always_requests_structure_overwrite(
 
     def fake_auto_tag_document(**kwargs):
         captured.update(kwargs)
+        _make_minimal_pdf(pdf_path, tagged=True)
         return {
             "success": True,
             "tags_created": 1,
@@ -182,7 +192,7 @@ def test_fix_all_runs_unicode_repair_immediately_after_ocr(
     from backend import pdf_remediator_fixes as fixes
 
     pdf_path = tmp_path / "minimal.pdf"
-    _make_minimal_pdf(pdf_path)
+    _make_minimal_pdf(pdf_path, tagged=True)
     remediator = PDFRemediator(pdf_path)
     calls: list[str] = []
 

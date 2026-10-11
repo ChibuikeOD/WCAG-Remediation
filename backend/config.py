@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     # (OpenDataLoader/Java layout extraction and the C++ tagging engine).
     # Without this, a wedged or thrashing subprocess hangs the request forever.
     PDF_SUBPROCESS_TIMEOUT_SECONDS: int = 180
+    # Layout extraction has its own bounded budget; native tagging keeps the
+    # existing subprocess cap. Increase only for measured local workloads.
+    OPENDATALOADER_TIMEOUT_SECONDS: int = Field(default=180, ge=1, le=900)
     
     # Playwright settings
     PLAYWRIGHT_HEADLESS: bool = True

@@ -760,6 +760,12 @@ class PDFRemediator:
                 message="PDF auto-tagging skipped (OpenDataLoader layout analysis disabled)",
             ))
 
+        # A failed required rebuild or missing structure is an unsuccessful
+        # remediation, even if earlier metadata/Unicode repairs succeeded.
+        from .pdf_tagging_gate import require_pdf_tagging
+        require_pdf_tagging(target, tagging_required=not settings.DISABLE_OPENDATALOADER,
+                           tagging_result=tag_result if not settings.DISABLE_OPENDATALOADER else None)
+
         # 4-11. Structural / content fixes --------------------------------
         from .pdf_link_descriptions import repair_link_descriptions
         from .pdf_cidset import repair_cidsets

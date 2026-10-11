@@ -7,6 +7,7 @@ import json
 import shutil
 
 from backend.pdf_reviewed_tables import _prune_removed, _rewrite_table_page, _page_owners, bind_table_text_shows, apply_reviewed_table_grids
+from backend.pdf_paint_ownership import verified_source_text_shows
 
 
 def fixture():
@@ -167,3 +168,36 @@ def test_source_bound_public_grid_application_preserves_original_text_pixels_and
         header=rebuilt.K[0].K[0];body=rebuilt.K[1].K[0]
         assert str(header.S)=='/TH' and str(body.S)=='/TD'
         assert str(body.A.Headers[0])==str(header.ID)
+
+
+def test_source_paint_transfer_ignores_only_unicode_expansion():
+    pdf, _, _, _, _, _, table, _ = fixture()
+    with pdf:
+        buffer=BytesIO();pdf.save(buffer)
+    with pikepdf.open(BytesIO(buffer.getvalue())) as source,pikepdf.open(BytesIO(buffer.getvalue())) as working,fitz.open(stream=buffer.getvalue(),filetype='pdf') as doc:
+        working.pages[0].Resources.Font.F1.ToUnicode=working.make_stream(b'/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Test def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <48> <00660066> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end')
+        lines=[line for block in doc[0].get_text('rawdict')['blocks'] for line in block.get('lines', [])]
+        for cell,line in zip(table['cells'],lines):cell['glyphs']=[dict(text=c['c'],origin=list(c['origin'])) for span in line['spans'] for c in span['chars']]
+        table.update(page=1,source_format='B',caption_words=[])
+        after=BytesIO();working.save(after)
+        with fitz.open(stream=after.getvalue(),filetype='pdf') as changed:
+            assert 'ff' in changed[0].get_text()
+            assert doc[0].get_pixmap().samples==changed[0].get_pixmap().samples
+        binding=bind_table_text_shows(table,doc[0],working,source)
+        assert binding['ownership_basis']=='verified-identical-source-encoded-painting'
+        assert binding['source_glyph_count']==10 and len(binding['assignments'])==2
+
+
+@pytest.mark.parametrize('change',['encoding','metrics','program','transform','advance'])
+def test_paint_transfer_rejects_changed_paint_or_font_identity(change):
+    pdf, _, _, _, _, _, _, _=fixture()
+    with pdf:
+        buffer=BytesIO();pdf.save(buffer)
+    with pikepdf.open(BytesIO(buffer.getvalue())) as source,pikepdf.open(BytesIO(buffer.getvalue())) as working:
+        page=working.pages[0];font=page.Resources.Font.F1
+        if change=='encoding':font.Encoding=pikepdf.Name('/MacRomanEncoding')
+        elif change=='metrics':font.Widths=pikepdf.Array([500]);font.FirstChar=72
+        elif change=='program':font.FontDescriptor=pikepdf.Dictionary(FontFile=working.make_stream(b'different program'))
+        elif change=='transform':page.Contents=working.make_stream(page.Contents.read_bytes().replace(b'20 250 Td',b'21 250 Td'))
+        elif change=='advance':page.Contents=working.make_stream(page.Contents.read_bytes().replace(b'(Header) Tj',b'[(Header) -5] TJ'))
+        assert verified_source_text_shows(source,working,0) is None

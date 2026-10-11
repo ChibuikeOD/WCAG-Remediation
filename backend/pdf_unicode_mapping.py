@@ -540,6 +540,7 @@ def _write_unicode_mappings(
     source: Path,
     destination: Path,
     mappings: list[tuple[tuple[int, int], int, str]],
+    *, reviewed_type3_fonts: Optional[set[tuple[int, int]]] = None,
 ) -> None:
     by_font: dict[tuple[int, int], dict[int, str]] = {}
     for objgen, cid, text in mappings:
@@ -549,7 +550,12 @@ def _write_unicode_mappings(
             font = pdf.get_object(objgen)
             cmap = font.get("/ToUnicode")
             if not isinstance(cmap, pikepdf.Stream):
-                raise ValueError(f"font {objgen} has no writable ToUnicode stream")
+                if objgen not in (reviewed_type3_fonts or set()) or str(font.get("/Subtype")) != "/Type3" or any(not 0 <= code <= 255 for code in additions):
+                    raise ValueError(f"font {objgen} has no writable ToUnicode stream")
+                # Accepted Type3 additions come only from byte-bound reviewed
+                # proposals. Keep Encoding, CharProcs and rendering untouched.
+                cmap = pdf.make_stream(b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /ReviewedType3 def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n")
+                font["/ToUnicode"] = cmap
             cmap.write(add_cmap_mappings(cmap.read_bytes(), additions))
         pdf.save(destination)
 
@@ -657,8 +663,16 @@ def repair_missing_unicode(
     provider_name: str = "Gemini",
     provider_label: str = "Gemini 3.1 Flash-Lite",
     model_name: str = "gemini-3.1-flash-lite",
+    reviewed_glyph_sidecar: Optional[Path] = None,
+    reviewed_glyph_original: Optional[Path] = None,
 ) -> dict:
     """Resolve missing mappings and atomically install only verified changes."""
+    reviewed = {}
+    if reviewed_glyph_sidecar is not None:
+        if reviewed_glyph_original is None:
+            raise ValueError("reviewed glyph sidecar requires original-source path")
+        from .pdf_reviewed_glyphs import load_reviewed_glyphs
+        reviewed = load_reviewed_glyphs(Path(reviewed_glyph_sidecar), Path(reviewed_glyph_original), pdf_path)
     findings = inventory_missing_unicode(pdf_path)
     accepted: list[tuple[tuple[int, int], int, str]] = []
     decisions: list[dict] = []
@@ -672,6 +686,17 @@ def repair_missing_unicode(
     font_evidence: dict[tuple[int, int], FontEvidence] = {}
 
     for finding in findings:
+        review = reviewed.get((finding.font_objgen, finding.cid))
+        if review is not None and not finding.unresolved_reason:
+            accepted.append((finding.font_objgen, finding.cid, review["text"]))
+            affected_pages.update(finding.pages)
+            decisions.append({"font_objgen": list(finding.font_objgen), "font": finding.base_font,
+                              "cid": finding.cid, "pages": list(finding.pages),
+                              "occurrence_count": finding.occurrence_count,
+                              "resolution_source": "model-reviewed-sidecar", "unicode_text": review["text"],
+                              "llm_invoked": False, "llm_recommendation_applied": False,
+                              "reviewed_glyph_evidence": review})
+            continue
         if finding.unresolved_reason:
             decisions.append({
                 "font_objgen": list(finding.font_objgen), "font": finding.base_font,
@@ -747,6 +772,8 @@ def repair_missing_unicode(
         }
         if decision.response is not None:
             record["llm_response"] = decision.response
+        if decision.consensus is not None:
+            record["jev_consensus"] = decision.consensus
         if decision.rejection_reason:
             record["rejection_reason"] = decision.rejection_reason
         if decision.accepted and decision.text:
@@ -768,6 +795,9 @@ def repair_missing_unicode(
         "evaluated": evaluated,
         "applied": llm_applied,
         "decisions": decisions,
+        "reviewed_sidecar_applied": sum(d.get("resolution_source") == "model-reviewed-sidecar" for d in decisions),
+        "reviewed_sidecar_bound": len(reviewed),
+        "reviewed_sidecar_unused": len(set(reviewed) - {(f.font_objgen, f.cid) for f in findings}),
         "findings_total": len(findings),
         "unresolved": len(findings) - len(accepted),
     }
@@ -787,13 +817,20 @@ def repair_missing_unicode(
     candidate = Path(handle.name)
     handle.close()
     try:
-        _write_unicode_mappings(pdf_path, candidate, accepted)
+        if reviewed:
+            _write_unicode_mappings(pdf_path, candidate, accepted,
+                                    reviewed_type3_fonts={key[0] for key in reviewed})
+        else:
+            _write_unicode_mappings(pdf_path, candidate, accepted)
         verified, reason = verify_repair(pdf_path, candidate, accepted, affected_pages)
         if not verified:
             accepted_before_rollback = llm_applied
             details["llm_recommendation_applied"] = False
             details["applied"] = 0
+            details["reviewed_sidecar_applied"] = 0
             for record in decisions:
+                if record.get("resolution_source") == "model-reviewed-sidecar":
+                    record["unresolved_reason"] = f"rolled-back-{reason}"
                 if record.get("llm_recommendation_applied"):
                     record["llm_recommendation_applied"] = False
                     record["unresolved_reason"] = f"rolled-back-{reason}"

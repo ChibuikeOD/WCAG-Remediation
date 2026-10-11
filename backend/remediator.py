@@ -477,8 +477,10 @@ class PDFRemediator:
     manual intervention or specialized tools.
     """
     
-    def __init__(self, file_path: Path):
-        """Initialize with PDF file path."""
+    def __init__(self, file_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None):
+        """Initialize with PDF file path and optional byte-bound review input."""
+        self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
+        self.reviewed_glyph_original = reviewed_glyph_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -645,7 +647,11 @@ class PDFRemediator:
         # 2a. Repair used font codes missing from ToUnicode. Deterministic
         # evidence is preferred; DeepSeek V4 Pro is called only for ambiguity.
         try:
-            r = fixes.fix_pdf_unicode_mappings(target)
+            glyph_options = {}
+            if self.reviewed_glyph_sidecar is not None:
+                glyph_options = {"reviewed_glyph_sidecar": self.reviewed_glyph_sidecar,
+                                 "reviewed_glyph_original": self.reviewed_glyph_original}
+            r = fixes.fix_pdf_unicode_mappings(target, **glyph_options)
             results.append(RemediationResult(
                 issue_id=r["issue_id"],
                 success=r["success"],

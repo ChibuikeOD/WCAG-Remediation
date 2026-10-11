@@ -8,12 +8,16 @@ from backend.remediator import PDFRemediator
 
 @pytest.mark.parametrize("count", [3, None])
 @pytest.mark.parametrize("success", [True, False])
-def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, success):
+@pytest.mark.parametrize("glyph_opt_in", [True, False])
+def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, success, glyph_opt_in):
     path = tmp_path / "document.pdf"
     with fitz.open() as document:
         document.new_page().insert_text((30, 40), "Scientific text")
         document.save(path)
-    engine = PDFRemediator(path)
+    glyph_sidecar = tmp_path / "review.json"
+    glyph_original = tmp_path / "readonly-original.pdf"
+    engine = PDFRemediator(path, reviewed_glyph_sidecar=glyph_sidecar if glyph_opt_in else None,
+                          reviewed_glyph_original=glyph_original if glyph_opt_in else None)
     monkeypatch.setattr(config.settings, "DISABLE_OPENDATALOADER", False)
     monkeypatch.setattr(engine, "fix_metadata", lambda **kwargs: [])
     tag_result = {"success": success, "tags_created": 1, "pages_processed": 1,
@@ -28,9 +32,16 @@ def test_pipeline_retains_script_review_evidence(tmp_path, monkeypatch, count, s
              "fix_bookmarks", "fix_form_labels", "fix_tab_order")
     for name in names:
         monkeypatch.setattr(fixes, name, lambda path: {"issue_id": "test", "success": True, "message": "ok"})
+    glyph_calls = []
+    def unicode_fix(path, **kwargs):
+        glyph_calls.append(kwargs)
+        return {"issue_id": "test", "success": True, "message": "ok"}
+    monkeypatch.setattr(fixes, "fix_pdf_unicode_mappings", unicode_fix)
     monkeypatch.setattr(pdf_link_descriptions, "repair_link_descriptions",
                         lambda path: {"issue_id": "test", "success": True, "message": "ok"})
     results = engine.fix_all()
+    assert glyph_calls == ([{"reviewed_glyph_sidecar": glyph_sidecar,
+                             "reviewed_glyph_original": glyph_original}] if glyph_opt_in else [{}])
     target = next(item for item in results if item.issue_id == "pdf-validation-target")
     assert target.details == {
         "validation_target": "PDF/UA-1", "validation_profile": "ua1",

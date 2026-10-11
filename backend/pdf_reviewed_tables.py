@@ -10,7 +10,7 @@ import fitz
 import pikepdf
 
 from .pdf_paint_ownership import _glyphs, text_show_ownership, verified_source_text_shows
-from .pdf_reviewed_figures import _sha
+from .pdf_reviewed_figures import _sha, _placements, _same, _single_do_owner, _nested_payloads
 
 
 def _review_tables(path):
@@ -57,6 +57,8 @@ def _review_tables(path):
                 if not glyphs and (str(c.get('literal_visually_verified_text','') or '').strip()
                                    or c.get('embedded_image_binding')):
                     cells[-1]['raster_literal_without_native_glyphs']=True
+                if c.get('embedded_image_binding'):
+                    cells[-1]['embedded_image_binding']=c['embedded_image_binding']
             captions=[{'text':catalog[i]['text_extracted'],'origin':catalog[i]['origin_pymupdf']}
                       for i in table['caption_source_glyph_ids'] if not catalog[i]['text_extracted'].isspace()]
             yield dict(id=table['table_id'],sha=table['original_sha256'],page=table['physical_page'],cells=cells,
@@ -88,7 +90,7 @@ def bind_table_text_shows(table, source_page, working_pdf, source_pdf=None):
     if len(by_id)!=len(cells):raise ValueError('duplicate cell IDs')
     occupied=set()
     for c in cells:
-        if c.get('raster_literal_without_native_glyphs'):
+        if c.get('raster_literal_without_native_glyphs') and not c.get('embedded_image_binding'):
             raise ValueError('raster cell requires verified image-region painting ownership')
         if c['role'] not in ('TH','TD') or c['row']<0 or c['col']<0 or c['rowspan']<1 or c['colspan']<1:
             raise ValueError('invalid reviewed grid/role')
@@ -267,7 +269,114 @@ def _insert_parent(root,owner):
     return root,0
 
 
+def _reuse_existing_image_grid(pdf, page, table, binding, source_pdf):
+    """Keep an already-correct image-cell graph; verify every cell before attributes."""
+    root=pdf.Root.StructTreeRoot;owners=_page_owners(root,page)
+    instructions,scopes=_scopes(page);nodes={};figures={}
+    for cell in table['cells']:
+        image=cell.get('embedded_image_binding')
+        if image:
+            if cell['glyphs']:raise ValueError('mixed image/text cell requires separate ownership proof')
+            record=dict(subtype='/Image',payload=image['original_raw_stream_sha256'],
+                        bbox=image['verified_page_bbox_pdf_exact_decimal'])
+            source=[p for p in _placements(source_pdf.pages[table['page']-1]) if _same(record,p)]
+            current=[p for p in _placements(page) if _same(record,p)]
+            if len(source)!=1 or len(current)!=1 or current[0]['artifact']:
+                raise ValueError('reviewed image cell source/current placement not unique')
+            from .pdf_paint_ownership import _paint_value
+            if _paint_value(source[0]['object'])!=_paint_value(current[0]['object']):
+                raise ValueError('reviewed image cell painting resources changed')
+            if len(current[0]['mcids'])!=1:raise ValueError('reviewed image cell MCID namespace ambiguous')
+            mcid=current[0]['mcids'][0];figure=owners.get(mcid)
+            if figure is None or str(figure.get('/S'))!='/Figure' or not _single_do_owner(figure,page,mcid):
+                raise ValueError('reviewed image cell Figure owns additional painting')
+            node=figure.get('/P');figures[cell['id']]=figure
+            if not isinstance(node,pikepdf.Dictionary) or str(node.get('/S'))!='/TD':
+                raise ValueError('reviewed image does not already belong to a table cell')
+        else:
+            indices=set(binding['cell_show_order'].get(cell['id'],[]))
+            if not indices:raise ValueError('existing reviewed cell has no bound native glyphs')
+            matched=[scope for scope in scopes if scope['paint']&indices]
+            if any(scope['mcid'] is None or scope['paint']-indices for scope in matched):
+                raise ValueError('existing reviewed cell scope owns additional painting')
+            candidates={owners[scope['mcid']].objgen:owners[scope['mcid']] for scope in matched
+                        if scope['mcid'] in owners}
+            if len(candidates)!=1:raise ValueError('reviewed glyphs do not belong to one existing cell')
+            node=next(iter(candidates.values()))
+            if str(node.get('/S')) not in ('/TH','/TD'):raise ValueError('reviewed text owner is not an existing cell')
+        if '/ID' in node or '/Ref' in node:raise ValueError('existing image grid has structural dependencies')
+        nodes[cell['id']]=node
+    if len({n.objgen for n in nodes.values()})!=len(nodes):raise ValueError('reviewed cells share existing ownership')
+    for cell_id,node in nodes.items():
+        kids=node.get('/K',[]);kids=list(kids) if isinstance(kids,pikepdf.Array) else [kids]
+        for child in kids:
+            if isinstance(child,pikepdf.Dictionary) and str(child.get('/S'))=='/Figure':
+                if cell_id not in figures or child.objgen!=figures[cell_id].objgen:
+                    raise ValueError('existing cell owns an unreviewed Figure')
+            elif isinstance(child,pikepdf.Dictionary) and '/MCID' in child and '/Stm' not in child:
+                pg=child.get('/Pg',node.get('/Pg'))
+                owner=owners.get(int(child.MCID))
+                if pg is None or pg.objgen!=page.obj.objgen or owner is None or owner.objgen!=node.objgen:
+                    raise ValueError('existing cell has foreign or conflicting MCID ownership')
+            elif isinstance(child,int) and node.get('/Pg') is not None and node.Pg.objgen==page.obj.objgen:
+                owner=owners.get(child)
+                if owner is None or owner.objgen!=node.objgen:raise ValueError('existing integer MCID ownership conflicts')
+            else:raise ValueError('existing cell has unverified nested/foreign content')
+
+    tables={}
+    for node in nodes.values():
+        row=node.get('/P');grid=row.get('/P') if isinstance(row,pikepdf.Dictionary) else None
+        if not isinstance(grid,pikepdf.Dictionary) or str(row.get('/S'))!='/TR' or str(grid.get('/S'))!='/Table':
+            raise ValueError('existing image grid cell ancestry invalid')
+        tables[grid.objgen]=grid
+    if len(tables)!=1:raise ValueError('reviewed cells cross existing tables')
+    grid=next(iter(tables.values()));rows=list(grid.get('/K',[]))
+    expected_rows=sorted({c['row'] for c in table['cells']})
+    if expected_rows!=list(range(len(rows))):raise ValueError('existing image grid row count differs')
+    for index,row in enumerate(rows):
+        expected=[nodes[c['id']].objgen for c in sorted(table['cells'],key=lambda c:c['col']) if c['row']==index]
+        if str(row.get('/S'))!='/TR' or [n.objgen for n in row.get('/K',[])]!=expected:
+            raise ValueError('existing image grid logical cell order differs')
+    ancestor=grid;seen=set()
+    while isinstance(ancestor,pikepdf.Dictionary):
+        if ancestor.objgen in seen:raise ValueError('cyclic existing image grid ancestry')
+        seen.add(ancestor.objgen)
+        if '/ID' in ancestor or '/Ref' in ancestor or str(ancestor.get('/S')) in ('/Link','/Formula','/Note','/Reference'):
+            raise ValueError('existing image grid has protected structural dependencies')
+        ancestor=ancestor.get('/P')
+    parents=_number_tree(root.ParentTree).get(int(page.StructParents))
+    if not isinstance(parents,pikepdf.Array):raise ValueError('image grid ParentTree unavailable')
+    measurement=verified_source_text_shows(source_pdf,pdf,table['page']-1)
+    shown={show['instruction_index']:show['glyphs'] for show in measurement['shows']}
+    target=set(binding['assignments']);cell_ids={n.objgen for n in nodes.values()}
+    for scope in scopes:
+        owner=owners.get(scope['mcid'])
+        if owner is None or owner.objgen not in cell_ids|{f.objgen for f in figures.values()}:continue
+        if scope['mcid']<0 or scope['mcid']>=len(parents) or parents[scope['mcid']] is None or parents[scope['mcid']].objgen!=owner.objgen:
+            raise ValueError('existing image grid ParentTree owner conflicts')
+        if owner.objgen in cell_ids:
+            for i in scope['paint']-target:
+                if i not in shown or shown[i]:raise ValueError('existing cell owns unreviewed visible painting')
+    ids=_name_tree(root.IDTree) if '/IDTree' in root else {};names={}
+    for cell in table['cells']:
+        name='review-'+table['sha'][:12]+'-'+cell['id']
+        if name in ids:raise ValueError('reviewed image grid ID conflicts')
+        names[cell['id']]=name
+    # All ownership checks precede the first mutation. Keep K, streams and ParentTree exact.
+    for cell in table['cells']:
+        node=nodes[cell['id']];node.S=pikepdf.Name('/'+cell['role']);node.ID=pikepdf.String(names[cell['id']]);ids[names[cell['id']]]=node
+        attributes=pikepdf.Dictionary(O=pikepdf.Name('/Table'),RowSpan=cell['rowspan'],ColSpan=cell['colspan'])
+        if cell['scope']:attributes.Scope=pikepdf.Name('/'+cell['scope'].title())
+        if cell['headers']:attributes.Headers=pikepdf.Array([pikepdf.String(names[h]) for h in cell['headers']])
+        old=node.get('/A',[]);old=list(old) if isinstance(old,pikepdf.Array) else [old]
+        node.A=pikepdf.Array([a for a in old if isinstance(a,pikepdf.Dictionary) and str(a.get('/O'))!='/Table']+[attributes])
+    root.IDTree=pikepdf.Dictionary(Names=pikepdf.Array([v for name in sorted(ids) for v in (pikepdf.String(name),ids[name])]))
+    return {'preserved_image_cells':len(figures),'preserved_existing_grid':True}
+
+
 def _rewrite_table_page(pdf,page,bindings):
+    if any(c.get('embedded_image_binding') for t,b in bindings for c in t['cells']):
+        raise ValueError('image cell requires preserved existing-grid ownership')
     root=pdf.Root.StructTreeRoot;instructions,scopes=_scopes(page)
     selected={};labels={};all_cells={};caption_keys={}
     for table,binding in bindings:
@@ -399,7 +508,11 @@ def apply_reviewed_table_grids(working,original,sidecars):
             item={'id':table['id'],'page':table['page']};result['records'].append(item)
             try:
                 binding=bind_table_text_shows(table,source[table['page']-1],pdf,source_pdf)
-                groups[table['page']-1].append((table,binding,item))
+                if any(c.get('embedded_image_binding') for c in table['cells']):
+                    details=_reuse_existing_image_grid(pdf,pdf.pages[table['page']-1],table,binding,source_pdf)
+                    item.update(status='applied',ownership_basis=binding['ownership_basis'],**details)
+                    result['applied_tables']+=1;result['applied_cells']+=len(table['cells']);affected.add(table['page']-1)
+                else:groups[table['page']-1].append((table,binding,item))
             except (ValueError,KeyError,IndexError) as error:
                 item.update(status='unmatched',reason=str(error));result['unmatched_tables']+=1
         for index,entries in groups.items():

@@ -9,7 +9,7 @@ import tempfile
 import fitz
 import pikepdf
 
-from .pdf_paint_ownership import _glyphs, text_show_ownership
+from .pdf_paint_ownership import _glyphs, text_show_ownership, verified_source_text_shows
 from .pdf_reviewed_figures import _sha
 
 
@@ -78,7 +78,7 @@ def _source_catalog(page):
     return catalog
 
 
-def bind_table_text_shows(table, source_page, working_pdf):
+def bind_table_text_shows(table, source_page, working_pdf, source_pdf=None):
     """Prove whole-show membership from reviewed source glyph origins.
 
     A show spanning cells, unassigned Form glyph, overlapping ownership or
@@ -134,7 +134,8 @@ def bind_table_text_shows(table, source_page, working_pdf):
                for _,v in verified):raise ValueError('duplicate/overlapping reviewed glyph ownership')
         verified.append((cell,matches[0]))
     if not verified:raise ValueError('reviewed grid has no native text glyph ownership')
-    measurement=text_show_ownership(working_pdf,table['page']-1)
+    measurement=verified_source_text_shows(source_pdf,working_pdf,table['page']-1) if source_pdf is not None else None
+    if measurement is None:measurement=text_show_ownership(working_pdf,table['page']-1)
     for g in measurement['unassigned_glyphs']:
         if any(_near_origin(g['origin'],v['origin']) for _,v in verified):
             raise ValueError('table glyph belongs to unassigned Form/colored-font painting')
@@ -158,7 +159,7 @@ def bind_table_text_shows(table, source_page, working_pdf):
     if covered!=set(range(len(verified))):raise ValueError('reviewed table native glyph coverage incomplete')
     return {'assignments':assignments,'cell_show_order':{cell:[i for _,i in sorted(values)] for cell,values in cell_shows.items()},
             'source_glyph_count':len(verified),'caption_glyph_count':len(caption_glyphs),
-            'text_show_count':len(assignments)}
+            'text_show_count':len(assignments),'ownership_basis':measurement.get('ownership_basis','current-painted-glyph-origins')}
 
 
 _PAINT={'Do','Tj','TJ',"'",'"','S','s','f','F','f*','B','B*','b','b*','sh','INLINE IMAGE'}
@@ -392,12 +393,12 @@ def apply_reviewed_table_grids(working,original,sidecars):
     if not selected:return result
     handle=tempfile.NamedTemporaryFile(prefix='.reviewed-tables-',suffix='.pdf',dir=Path(working).parent,delete=False)
     candidate=Path(handle.name);handle.close();affected=set()
-    with fitz.open(original) as source,pikepdf.open(working) as pdf:
+    with fitz.open(original) as source,pikepdf.open(original) as source_pdf,pikepdf.open(working) as pdf:
         groups=defaultdict(list)
         for table in selected:
             item={'id':table['id'],'page':table['page']};result['records'].append(item)
             try:
-                binding=bind_table_text_shows(table,source[table['page']-1],pdf)
+                binding=bind_table_text_shows(table,source[table['page']-1],pdf,source_pdf)
                 groups[table['page']-1].append((table,binding,item))
             except (ValueError,KeyError,IndexError) as error:
                 item.update(status='unmatched',reason=str(error));result['unmatched_tables']+=1
@@ -408,7 +409,7 @@ def apply_reviewed_table_grids(working,original,sidecars):
                 # Rewriting is deliberately atomic at the document level.
                 raise ValueError(f'reviewed table page {index+1} rejected: {error}') from error
             for table,binding,item in entries:
-                item.update(status='applied',source_glyph_count=binding['source_glyph_count'],text_show_count=binding['text_show_count'])
+                item.update(status='applied',source_glyph_count=binding['source_glyph_count'],text_show_count=binding['text_show_count'],ownership_basis=binding['ownership_basis'])
                 result['applied_tables']+=1;result['applied_cells']+=len(table['cells'])
             affected.add(index)
         if not affected:return result

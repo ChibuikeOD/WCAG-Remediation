@@ -182,6 +182,14 @@ class Settings(BaseSettings):
         "https://wcag-remediation.vercel.app"
     ]
     CORS_ALLOW_ALL: bool = False
+    CORS_ORIGINS_LIST: Optional[str] = None
+
+    @model_validator(mode="after")
+    def resolve_cors_origins(self) -> "Settings":
+        """Resolve CSV overrides from the same settings sources as other fields."""
+        if self.CORS_ORIGINS_LIST:
+            self.CORS_ORIGINS = [origin.strip() for origin in self.CORS_ORIGINS_LIST.split(",") if origin.strip()]
+        return self
 
     @model_validator(mode="after")
     def validate_trial_deployment(self) -> "Settings":
@@ -264,11 +272,6 @@ def _enforce_runtime_cors_isolation(configured_settings: Settings) -> None:
         raise ValueError(
             "CORS_ORIGINS_LIST must be exactly https://pdfaccess.org in trial mode"
         )
-
-# Allow configuring allowed origins via a comma-separated env variable
-_origins_env = os.getenv("CORS_ORIGINS_LIST")
-if _origins_env:
-    settings.CORS_ORIGINS = [o.strip() for o in _origins_env.split(",") if o.strip()]
 
 # In serverless demo deployments it's common to serve the frontend and API
 # from the same origin, but preview domains vary. Allow opting into permissive

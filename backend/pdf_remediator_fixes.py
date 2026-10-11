@@ -1313,7 +1313,7 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 # 8. Scanned pages / OCR (WCAG 1.4.5)
 # ---------------------------------------------------------------------------
 
-def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
+def fix_pdf_unicode_mappings(pdf_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None) -> Dict[str, Any]:
     """Repair incomplete ToUnicode maps, using Gemini vision only for ambiguity."""
     from .config import settings
     from .gemini_unicode_verifier import verify_ambiguous_unicode
@@ -1334,6 +1334,8 @@ def fix_pdf_unicode_mappings(pdf_path: Path) -> Dict[str, Any]:
 
     result = repair_missing_unicode(
         Path(pdf_path),
+        reviewed_glyph_sidecar=reviewed_glyph_sidecar,
+        reviewed_glyph_original=reviewed_glyph_original,
         verifier=verifier,
         max_occurrences=settings.PDF_UNICODE_LLM_MAX_OCCURRENCES,
         provider_name="Gemini",

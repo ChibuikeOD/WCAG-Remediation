@@ -8,6 +8,12 @@ from pathlib import Path
 import pikepdf
 
 
+class ReviewedGlyphMappings(dict):
+    def __init__(self):
+        super().__init__()
+        self.binding_counts = {"considered": 0, "matched": 0, "unmatched": 0}
+
+
 def _sha_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -37,6 +43,30 @@ def _glyph(font, code: int) -> str | None:
                 return str(entry)
             current += 1
     return None
+
+
+def _encoding_content(font) -> bytes | None:
+    """Canonical simple-font encoding values, never indirect object numbers."""
+    encoding = font.get("/Encoding")
+    if not isinstance(encoding, pikepdf.Dictionary):
+        return None
+    values = {}
+    for key, value in encoding.items():
+        if key == "/Differences" and isinstance(value, pikepdf.Array):
+            entries = []
+            for entry in value:
+                if isinstance(entry, int):
+                    entries.append(entry)
+                elif isinstance(entry, pikepdf.Name):
+                    entries.append(str(entry))
+                else:
+                    return None
+            values[key] = entries
+        elif key in ("/Type", "/BaseEncoding") and isinstance(value, pikepdf.Name):
+            values[key] = str(value)
+        else:
+            return None
+    return json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _fonts(pdf, resource: str):
@@ -69,7 +99,7 @@ def _matches(font, binding, source):
         isinstance(glyph, pikepdf.Stream)
         and hashlib.sha256(glyph.read_bytes()).hexdigest() == binding["decoded_charproc_sha256"]
         and _fingerprint(font) == binding["font_fingerprint_sha256"]
-        and hashlib.sha256(font.Encoding.unparse()).hexdigest() == source["verified_encoding_sha256"]
+        and _encoding_content(font) == source["verified_encoding_content"]
         and [float(x) for x in font.get("/FontMatrix", [])] == source["font_matrix"]
         and [float(x) for x in font.get("/FontBBox", [])] == source["font_bbox"]
     )
@@ -89,7 +119,7 @@ def load_reviewed_glyphs(sidecar: Path, original: Path, working_pdf: Path) -> di
     sources = {s["source_id"]: s for s in data["sources"] if s["input_sha256"] == original_sha}
     if not sources:
         raise ValueError("glyph sidecar does not match original document SHA256")
-    result = {}
+    result = ReviewedGlyphMappings()
     with pikepdf.open(original) as original_pdf, pikepdf.open(working_pdf) as target:
         original_resources_cache = {}
         target_fonts_cache = {}
@@ -110,7 +140,9 @@ def load_reviewed_glyphs(sidecar: Path, original: Path, working_pdf: Path) -> di
                 encoding_sha = hashlib.sha256(original_font.Encoding.unparse()).hexdigest()
                 if any(record.get("font_encoding_sha256", encoding_sha) != encoding_sha for record in (source, binding)):
                     raise ValueError("reviewed original encoding hash does not match")
-                source["verified_encoding_sha256"] = encoding_sha
+                source["verified_encoding_content"] = _encoding_content(original_font)
+                if source["verified_encoding_content"] is None:
+                    raise ValueError("unsupported reviewed original encoding structure")
                 resource = binding["font_resource"]
                 if resource not in original_resources_cache:
                     original_resources_cache[resource] = {f.objgen for f in _fonts(original_pdf, resource)}
@@ -118,6 +150,8 @@ def load_reviewed_glyphs(sidecar: Path, original: Path, working_pdf: Path) -> di
                 original_resources = original_resources_cache[resource]
                 if original_font.objgen not in original_resources or not _matches(original_font, binding, source):
                     raise ValueError("reviewed original font evidence does not match")
+                result.binding_counts["considered"] += 1
+                matched = False
                 for font in target_fonts_cache[resource]:
                     if not _matches(font, binding, source):
                         continue
@@ -133,5 +167,8 @@ def load_reviewed_glyphs(sidecar: Path, original: Path, working_pdf: Path) -> di
                     result[key] = {"text": text, "resolution_source": "model-reviewed-sidecar",
                                    "proposal_id": proposal["proposal_id"], "source_sha256": original_sha,
                                    "decoded_charproc_sha256": binding["decoded_charproc_sha256"],
+                                   "encoding_content_sha256": hashlib.sha256(source["verified_encoding_content"]).hexdigest(),
                                    "font_metadata_authority": False}
+                    matched = True
+                result.binding_counts["matched" if matched else "unmatched"] += 1
     return result

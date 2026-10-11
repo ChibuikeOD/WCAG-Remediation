@@ -204,7 +204,9 @@ class PDFStructureBuilder:
                     se_dict["/A"] = attr_dict
 
                 if tag == "Figure":
-                    se_dict["/Alt"] = pikepdf.String("[Image requires alt text]")
+                    result.warnings.append(
+                        f"Figure on page {page_num + 1} requires a source-supported alternative description."
+                    )
 
                 if text and tag in {"H1", "H2", "H3", "H4", "H5", "H6", "Caption"}:
                     se_dict["/T"] = pikepdf.String(text[:200])

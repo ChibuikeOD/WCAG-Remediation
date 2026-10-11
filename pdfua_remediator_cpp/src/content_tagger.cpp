@@ -37,6 +37,7 @@ public:
     std::vector<Rect> page_link_rects;
     std::vector<Rect> page_artifact_rects;
     std::set<std::string> artifact_xobject_names;
+    QPDFObjectHandle page_xobjects;
 
     MCIDTokenFilter() : mcid_counter(0), in_text_object(false), has_last_name(false),
                         marked_content_depth(0), in_path(false), inline_dict_depth(0),
@@ -45,7 +46,8 @@ public:
 
     MCIDTokenFilter(std::vector<QPDFObjectHandle> const& link_rects,
                     std::vector<Rect> const& artifact_rects,
-                    std::set<std::string> const& artifact_xobjects)
+                    std::set<std::string> const& artifact_xobjects,
+                    QPDFObjectHandle xobjects)
         : mcid_counter(0), in_text_object(false), has_last_name(false),
           marked_content_depth(0), in_path(false), inline_dict_depth(0),
           text_leading(0.0), geo_array_depth(0), geo_dict_depth(0),
@@ -62,6 +64,7 @@ public:
         }
         page_artifact_rects = artifact_rects;
         artifact_xobject_names = artifact_xobjects;
+        page_xobjects = xobjects;
     }
     virtual ~MCIDTokenFilter() = default;
 
@@ -205,6 +208,10 @@ public:
 
             if (type == QPDFTokenizer::tt_word && value == "Do") {
                 if (has_last_name) {
+                    std::string xobject_name = last_name_token.getValue();
+                    if (!xobject_name.empty() && xobject_name[0] != '/') {
+                        xobject_name = "/" + xobject_name;
+                    }
                     if (artifact_xobject_names.count(last_name_token.getValue()) > 0) {
                         writeToken(last_name_token);
                         for (auto const& s : spaces_after_name) {
@@ -245,30 +252,59 @@ public:
                     writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_word, "EMC"));
                     writeToken(QPDFTokenizer::Token(QPDFTokenizer::tt_space, " "));
 
-                    // Record that this MCID is an image so the structure builder
-                    // tags it (and only it) as a /Figure. The image is drawn into
-                    // the unit square transformed by the CTM, so use its centre and calculate its BBox.
+                    // Images occupy the unit square. Forms occupy their declared
+                    // BBox, transformed first by the Form Matrix, then the page
+                    // CTM. Using an image unit square for Forms creates phantom
+                    // sub-point Figure bounds for whole charts and schematics.
                     MCIDInfo info;
-                    info.x = ctm.a * 0.5 + ctm.c * 0.5 + ctm.e;
-                    info.y = ctm.b * 0.5 + ctm.d * 0.5 + ctm.f;
                     info.is_figure = true;
-
-                    // Calculate transformed corners of [0, 0, 1, 1] unit square
-                    double x1 = ctm.e;
-                    double y1 = ctm.f;
-                    double x2 = ctm.a + ctm.e;
-                    double y2 = ctm.b + ctm.f;
-                    double x3 = ctm.c + ctm.e;
-                    double y3 = ctm.d + ctm.f;
-                    double x4 = ctm.a + ctm.c + ctm.e;
-                    double y4 = ctm.b + ctm.d + ctm.f;
-
-                    info.bbox = {
-                        std::min({x1, x2, x3, x4}),
-                        std::min({y1, y2, y3, y4}),
-                        std::max({x1, x2, x3, x4}),
-                        std::max({y1, y2, y3, y4})
-                    };
+                    AffineMat placement = ctm;
+                    std::vector<double> bounds;
+                    auto xobject = page_xobjects.isDictionary() ? page_xobjects.getKey(xobject_name) : QPDFObjectHandle::newNull();
+                    if (xobject.isStream()) {
+                        auto dict = xobject.getDict();
+                        auto subtype = dict.getKey("/Subtype");
+                        if (subtype.isName() && subtype.getName() == "/Image") {
+                            bounds = {0, 0, 1, 1};
+                        } else if (subtype.isName() && subtype.getName() == "/Form") {
+                            auto bbox = dict.getKey("/BBox");
+                            if (bbox.isArray() && bbox.getArrayNItems() == 4) {
+                                for (int j = 0; j < 4; ++j) {
+                                    auto value = bbox.getArrayItem(j);
+                                    if (!value.isNumber() || !std::isfinite(value.getNumericValue())) { bounds.clear(); break; }
+                                    bounds.push_back(value.getNumericValue());
+                                }
+                            }
+                            auto matrix = dict.getKey("/Matrix");
+                            if (!matrix.isNull()) {
+                                bool valid = matrix.isArray() && matrix.getArrayNItems() == 6;
+                                std::vector<double> values;
+                                if (valid) for (int j = 0; j < 6; ++j) {
+                                    auto value = matrix.getArrayItem(j);
+                                    if (!value.isNumber() || !std::isfinite(value.getNumericValue())) { valid = false; break; }
+                                    values.push_back(value.getNumericValue());
+                                }
+                                if (valid) {
+                                    AffineMat form{values[0], values[1], values[2], values[3], values[4], values[5]};
+                                    placement = affine_mul(form, ctm);
+                                } else { bounds.clear(); }
+                            }
+                        }
+                    }
+                    if (bounds.size() == 4 && bounds[2] > bounds[0] && bounds[3] > bounds[1]) {
+                        std::vector<double> xs, ys;
+                        for (double x : {bounds[0], bounds[2]}) for (double y : {bounds[1], bounds[3]}) {
+                            xs.push_back(placement.a*x + placement.c*y + placement.e);
+                            ys.push_back(placement.b*x + placement.d*y + placement.f);
+                        }
+                        info.bbox = {*std::min_element(xs.begin(), xs.end()), *std::min_element(ys.begin(), ys.end()),
+                                     *std::max_element(xs.begin(), xs.end()), *std::max_element(ys.begin(), ys.end())};
+                        if (std::all_of(info.bbox.begin(), info.bbox.end(), [](double value) { return std::isfinite(value); }) &&
+                            info.bbox[2] > info.bbox[0] && info.bbox[3] > info.bbox[1]) {
+                            info.x = (info.bbox[0] + info.bbox[2]) / 2;
+                            info.y = (info.bbox[1] + info.bbox[3]) / 2;
+                        } else { info.bbox.clear(); }
+                    }
 
                     mcid_info[mcid_counter] = info;
 
@@ -837,7 +873,7 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
         }
 
         std::set<std::string> artifact_xobject_names;
-        QPDFObjectHandle resources = pages[i].getObjectHandle().getKey("/Resources");
+        QPDFObjectHandle resources = pages[i].getAttribute("/Resources", false);
         if (resources.isDictionary()) {
             QPDFObjectHandle xobjects = resources.getKey("/XObject");
             if (xobjects.isDictionary()) {
@@ -855,7 +891,8 @@ std::map<int, int> tag_pdf_content_streams(QPDF& pdf,
             }
         }
 
-        MCIDTokenFilter filter(link_rects, artifact_rects, artifact_xobject_names);
+        MCIDTokenFilter filter(link_rects, artifact_rects, artifact_xobject_names,
+                              resources.isDictionary() ? resources.getKey("/XObject") : QPDFObjectHandle::newNull());
         Pl_Buffer buf("filtered contents");
         pages[i].filterPageContents(&filter, &buf);
         buf.finish();

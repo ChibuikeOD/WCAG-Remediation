@@ -1047,10 +1047,10 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
     if not HAS_PYMUPDF:
         return _result("pdf-bookmarks", False, "PyMuPDF not available")
 
+    doc = None
     try:
         doc = fitz.open(str(pdf_path))
         if doc.get_toc():
-            doc.close()
             return _result("pdf-bookmarks", True, "Bookmarks already present")
 
         toc = []
@@ -1188,8 +1188,11 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
 
             # Find heading size threshold dynamically based on body size
             sizes = []
+            page_text = []
             for page in doc:
-                for block in page.get_text("dict").get("blocks", []):
+                text = page.get_text("dict", sort=True)
+                page_text.append(text)
+                for block in text.get("blocks", []):
                     if "lines" not in block:
                         continue
                     for line in block["lines"]:
@@ -1213,8 +1216,8 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
             compiled_patterns = [re.compile(p) for p in heading_patterns]
 
             # Collect candidate headings
-            for page_num, page in enumerate(doc):
-                blocks = page.get_text("dict", sort=True).get("blocks", [])
+            for page_num, text in enumerate(page_text):
+                blocks = text.get("blocks", [])
                 for block in blocks:
                     if "lines" not in block:
                         continue
@@ -1278,12 +1281,15 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
                         if is_heading:
                             toc.append([level, line_text, page_num + 1])
 
-        if toc and toc[0][0] > 1:
-            toc[0][0] = 1
+        # PDF outlines cannot begin below level 1 or jump over a parent.
+        # Normalize the outline only; retain the source heading tag semantics.
+        previous_level = 0
+        for row in toc:
+            row[0] = min(max(1, int(row[0])), previous_level + 1)
+            previous_level = row[0]
 
         doc.set_toc(toc)
         doc.save(str(pdf_path), incremental=True, encryption=0)
-        doc.close()
         return _result(
             "pdf-bookmarks", True,
             f"Added {len(toc)} bookmark(s) from document headings",
@@ -1292,6 +1298,11 @@ def fix_bookmarks(pdf_path: Path) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"fix_bookmarks: {e}", exc_info=True)
         return _result("pdf-bookmarks", False, str(e))
+    finally:
+        # Windows refuses the later pikepdf atomic replacement while a fitz
+        # reader remains open, including failures in set_toc or save.
+        if doc is not None:
+            doc.close()
 
 
 

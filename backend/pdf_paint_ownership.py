@@ -23,13 +23,21 @@ def _paint_value(value, active=None):
             active=active|{identity}
         if isinstance(value,pikepdf.Array):return tuple(_paint_value(v,active) for v in value)
         ignored=set()
-        if isinstance(value,pikepdf.Stream):ignored.update(('/Length','/Filter','/DecodeParms'))
+        payload=None;stream_kind='stream'
+        if isinstance(value,pikepdf.Stream):
+            ignored.add('/Length')
+            try:
+                payload=value.read_bytes();ignored.update(('/Filter','/DecodeParms'))
+            except pikepdf.PdfError as error:
+                if 'unfilterable stream' not in str(error):raise
+                # Preserve opaque codecs exactly, including Filter/DecodeParms and all painting metadata.
+                payload=value.read_raw_bytes();stream_kind='encoded-stream'
         if str(value.get('/Type'))=='/Font':ignored.add('/ToUnicode')
         if str(value.get('/Type'))=='/FontDescriptor':ignored.add('/CIDSet')
         if str(value.get('/Subtype')) in ('/Form','/Image'):
             ignored.update(('/StructParent','/StructParents'))
         fields=tuple((str(k),_paint_value(value[k],active)) for k in sorted(value.keys()) if str(k) not in ignored)
-        if isinstance(value,pikepdf.Stream):return ('stream',hashlib.sha256(value.read_bytes()).hexdigest(),fields)
+        if isinstance(value,pikepdf.Stream):return (stream_kind,hashlib.sha256(payload).hexdigest(),fields)
         return ('dictionary',fields)
     if isinstance(value,pikepdf.String):return ('string',bytes(value))
     if isinstance(value,pikepdf.Name):return ('name',str(value))

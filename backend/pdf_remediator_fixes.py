@@ -1356,139 +1356,75 @@ def fix_pdf_unicode_mappings(pdf_path: Path, *, reviewed_glyph_sidecar: Optional
     return result
 
 def fix_scanned_pages(pdf_path: Path) -> Dict[str, Any]:
-    """Run OCR on image-only pages to insert a searchable text layer."""
+    """Recognize confirmed raster-only pages; preserve all original painting."""
     from .config import settings
+    from .pdf_ocr_overlay import install_ocr_text_layers
     if settings.DISABLE_OCR:
         return _result("pdf-ocr", False, "OCR skipped (OCR disabled on this server)")
-
     if not HAS_PYMUPDF:
         return _result("pdf-ocr", False, "PyMuPDF not available")
-
-    tessdata = _resolve_tessdata()
-    if not tessdata:
-        return _result(
-            "pdf-ocr", False,
-            "OCR unavailable -- Tesseract language data (tessdata) not found. "
-            "Install Tesseract OCR and ensure TESSDATA_PREFIX points to the "
-            "'tessdata' folder for scanned-page remediation.",
-        )
-
+    layers = {}
+    protected = []
+    unresolved = []
     try:
-        doc = fitz.open(str(pdf_path))
-        scanned_pages = []
-
-        for page_num, page in enumerate(doc):
-            # Check for non-embedded fonts or fonts with missing Unicode mapping
-            try:
-                fonts = page.get_fonts(full=True)
-                has_bad_fonts = False
-                for f in fonts:
-                    # f is (xref, ext, type, name, username, encoding, is_embedded)
-                    if len(f) >= 7:
-                        f_xref = f[0]
-                        f_type = f[2]
-                        f_name = f[3]
-                        f_encoding = f[5]
-                        f_is_embedded = f[6]
-
-                        # 1. Flag if font is unnamed or bad
-                        if not f_name or f_name == "n/a" or f_name == "":
-                            has_bad_fonts = True
-                            break
-
-                        # 2. Flag if font is not embedded (PDF/UA violation) - REMOVED
-                        # Triggering OCR for non-embedded fonts on text-heavy pages is destructive.
-
-                        # 3. Flag if font is embedded but lacks ToUnicode map and uses non-standard encoding
-                        dict_str = doc.xref_object(f_xref)
-                        if "ToUnicode" not in dict_str:
-                            clean_encoding = f_encoding.replace("/", "") if isinstance(f_encoding, str) else ""
-                            standard_encodings = {"WinAnsiEncoding", "MacRomanEncoding", "MacExpertEncoding", "StandardEncoding", "PDFDocEncoding"}
-                            if f_type == "Type0" or clean_encoding in ("Identity-H", "Identity-V") or (clean_encoding and clean_encoding not in standard_encodings):
-                                has_bad_fonts = True
-                                break
-                if has_bad_fonts:
-                    # Only run OCR if the page lacks significant extractable text
-                    text = page.get_text("text").strip()
+        with fitz.open(str(pdf_path)) as doc:
+            eligible = []
+            for page_num, page in enumerate(doc):
+                text = page.get_text("text").strip()
+                # Missing Unicode, sparse mathematics and unnamed fonts are
+                # digital content, not evidence that a page is a scanned image.
+                if text or page.get_fonts(full=True):
                     if len(text) < 100:
-                        scanned_pages.append(page_num)
-                        continue
-            except Exception:
-                pass
-
-            text = page.get_text("text").strip()
-            images = page.get_images()
-            if len(images) > 0 and len(text) < 50:
-                for img in images:
-                    try:
-                        rects = page.get_image_rects(img[0])
-                        if rects:
-                            img_area = rects[0].width * rects[0].height
-                            page_area = page.rect.width * page.rect.height
-                            if img_area > page_area * 0.5:
-                                scanned_pages.append(page_num)
-                                break
-                    except Exception:
-                        pass
-
-        if not scanned_pages:
-            doc.close()
-            return _result("pdf-ocr", True, "No scanned pages detected")
-
-        # Reconstruct PDF to insert OCR text layer
-        new_doc = fitz.open()
-        ocr_done = 0
-        last_error: Optional[str] = None
-        for page_num in range(len(doc)):
-            if page_num in scanned_pages:
-                try:
-                    page = doc[page_num]
-                    # Render the scanned page to a high-quality image pixmap
-                    pix = page.get_pixmap(dpi=150)
-                    # Drop alpha channel if present, as OCR fails on transparent pixmaps
-                    if pix.alpha:
-                        pix = fitz.Pixmap(pix, 0)
-                    # Run OCR and generate page bytes with the text layer. Pass the
-                    # tessdata path explicitly so MuPDF locates the language data
-                    # regardless of the TESSDATA_PREFIX convention on this host.
-                    ocr_bytes = pix.pdfocr_tobytes(language="eng", tessdata=tessdata)
-                    # Open the OCR-ed page and insert into new document
-                    ocr_page_doc = fitz.open("pdf", ocr_bytes)
-                    new_doc.insert_pdf(ocr_page_doc)
-                    ocr_page_doc.close()
-                    ocr_done += 1
-                except Exception as e:
-                    last_error = str(e)
-                    logger.warning(f"OCR failed on page {page_num + 1}: {e}")
-                    new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
-            else:
-                new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
-
-        doc.close()
-
-        if ocr_done:
-            try:
-                new_doc.set_toc(doc.get_toc())
-            except Exception as e:
-                logger.warning(f"Failed to copy TOC during OCR step: {e}")
-            new_doc.save(str(pdf_path))
-            new_doc.close()
-            return _result(
-                "pdf-ocr", True,
-                f"Applied OCR to {ocr_done} scanned page(s)",
-                f"{ocr_done} pages OCR'd",
-            )
-        else:
-            new_doc.close()
-            detail = f" (last error: {last_error})" if last_error else ""
-            return _result(
-                "pdf-ocr", False,
-                f"OCR failed on all {len(scanned_pages)} scanned page(s) "
-                f"using tessdata at '{tessdata}'.{detail}",
-            )
-    except Exception as e:
-        logger.error(f"fix_scanned_pages: {e}", exc_info=True)
-        return _result("pdf-ocr", False, str(e))
+                        protected.append(page_num + 1)
+                    continue
+                if page.get_drawings():
+                    protected.append(page_num + 1)
+                    continue
+                page_area = page.rect.width * page.rect.height
+                image_area = max((r.width * r.height for image in page.get_images()
+                                  for r in page.get_image_rects(image[0])), default=0)
+                if page_area > 0 and image_area >= page_area * 0.9:
+                    eligible.append(page_num)
+                elif image_area:
+                    unresolved.append({"page": page_num + 1, "reason": "raster-region-is-not-a-confirmed-full-page-scan"})
+            if eligible:
+                tessdata = _resolve_tessdata()
+                if not tessdata:
+                    unresolved.extend({"page": p + 1, "reason": "local-OCR-language-data-unavailable"} for p in eligible)
+                else:
+                    for page_num in eligible:
+                        page = doc[page_num]
+                        try:
+                            pix = page.get_pixmap(dpi=150, alpha=False)
+                            ocr_bytes = pix.pdfocr_tobytes(language="eng", tessdata=tessdata)
+                            with fitz.open("pdf", ocr_bytes) as ocr:
+                                if len(ocr) != 1 or not ocr[0].get_text("text").strip():
+                                    raise ValueError("no OCR text detected; source remains unchanged")
+                                scale = fitz.Matrix(page.rect.width / ocr[0].rect.width,
+                                                    page.rect.height / ocr[0].rect.height)
+                                placement = (ocr[0].transformation_matrix * scale *
+                                             page.derotation_matrix * ~page.transformation_matrix)
+                                layers[page_num] = (ocr_bytes, tuple(placement))
+                        except Exception as exc:
+                            unresolved.append({"page": page_num + 1, "reason": str(exc)})
+        # All fitz readers are closed before atomic replacement on Windows.
+        details = install_ocr_text_layers(Path(pdf_path), layers) if layers else {
+            "pages_overlaid": 0, "source_raster_payloads_preserved": True,
+            "source_font_programs_preserved": True, "output_rasterized": False}
+        details["digital_pages_preserved"] = protected
+        details["unresolved_raster_pages"] = unresolved
+        result = _result("pdf-ocr", not unresolved,
+                         f"Added {len(layers)} invisible OCR text overlay(s); original page painting preserved. "
+                         f"{len(unresolved)} raster page(s) need review.",
+                         f"{len(layers)} OCR text overlay(s)")
+        result["details"] = details
+        return result
+    except Exception as exc:
+        logger.error("fix_scanned_pages: %s", exc, exc_info=True)
+        result = _result("pdf-ocr", False, str(exc))
+        result["details"] = {"pages_overlaid": 0, "digital_pages_preserved": protected,
+                             "unresolved_raster_pages": unresolved, "output_rasterized": False}
+        return result
 
 
 # ---------------------------------------------------------------------------

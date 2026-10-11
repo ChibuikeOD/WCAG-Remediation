@@ -479,7 +479,8 @@ class PDFRemediator:
     
     def __init__(self, file_path: Path, *, reviewed_glyph_sidecar: Optional[Path] = None, reviewed_glyph_original: Optional[Path] = None,
                  reviewed_figure_sidecars=None, reviewed_figure_original: Optional[Path] = None,
-                 reviewed_table_sidecars=None, reviewed_table_original: Optional[Path] = None):
+                 reviewed_table_sidecars=None, reviewed_table_original: Optional[Path] = None,
+                 reviewed_math_sidecar: Optional[Path] = None, reviewed_math_original: Optional[Path] = None):
         """Initialize with PDF file path and optional byte-bound review input."""
         self.reviewed_glyph_sidecar = reviewed_glyph_sidecar
         self.reviewed_glyph_original = reviewed_glyph_original
@@ -487,6 +488,8 @@ class PDFRemediator:
         self.reviewed_figure_original = reviewed_figure_original
         self.reviewed_table_sidecars = reviewed_table_sidecars
         self.reviewed_table_original = reviewed_table_original
+        self.reviewed_math_sidecar = reviewed_math_sidecar
+        self.reviewed_math_original = reviewed_math_original
         self.file_path = file_path
         self.changes: List[Dict[str, Any]] = []
     
@@ -658,6 +661,9 @@ class PDFRemediator:
             if self.reviewed_glyph_sidecar is not None:
                 glyph_options = {"reviewed_glyph_sidecar": self.reviewed_glyph_sidecar,
                                  "reviewed_glyph_original": self.reviewed_glyph_original}
+            if self.reviewed_math_sidecar is not None:
+                glyph_options.update(reviewed_math_sidecar=self.reviewed_math_sidecar,
+                                     reviewed_math_original=self.reviewed_math_original)
             r = fixes.fix_pdf_unicode_mappings(target, **glyph_options)
             results.append(RemediationResult(
                 issue_id=r["issue_id"],

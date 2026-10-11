@@ -1,0 +1,20 @@
+name: Writable PDF working copy regression
+on:
+  pull_request:
+    paths:
+      - 'backend/pdf_working_copy.py'
+      - 'backend/tests/test_pdf_working_copy.py'
+      - '.github/workflows/pdf-working-copy.yml'
+jobs:
+  working-copy-regression:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest==9.1.1
+      - run: python -m pytest backend/tests/test_pdf_working_copy.py -q

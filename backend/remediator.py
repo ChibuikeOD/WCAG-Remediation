@@ -603,7 +603,13 @@ class PDFRemediator:
         from . import pdf_remediator_fixes as fixes
 
         target = output_path or self.file_path
-        results: List[RemediationResult] = []
+        results: List[RemediationResult] = [RemediationResult(
+            issue_id="pdf-validation-target", success=True,
+            message="Validation target recorded; PDF/UA conformance remains unverified",
+            details={"validation_target": "PDF/UA-1", "validation_profile": "ua1",
+                     "conformance_state": "not-verified",
+                     "conformance_identifier_written": False},
+        )]
 
         # 1. Metadata (title + language) ----------------------------------
         pdf_title = ""
